@@ -757,3 +757,13 @@ class BossEdgeCaseTests(TestCase):
         )
         self.assertEqual(result.status, "stopped")
         self.assertEqual(result.reason_code, "user_stopped")
+
+
+def test_detail_script_reads_hr_card_and_online_tag():
+    """HR name and status live in .job-boss-info; .boss-info-attr only has company and title."""
+    from bosshunter.collection.platforms.boss import JS_EXTRACT_DETAIL
+
+    assert ".job-boss-info" in JS_EXTRACT_DETAIL
+    assert ".boss-online-tag" in JS_EXTRACT_DETAIL
+    assert "boss-active-time" in JS_EXTRACT_DETAIL
+    assert JS_EXTRACT_DETAIL.index("const bossCard") < JS_EXTRACT_DETAIL.index("const bossAttr")

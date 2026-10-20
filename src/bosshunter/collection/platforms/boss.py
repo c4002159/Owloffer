@@ -223,13 +223,23 @@ JS_EXTRACT_DETAIL = """
         if (text.includes('人')) info.company_size = text;
         else if (!info.company_industry) info.company_industry = text;
     });
-    const bossSection = document.querySelector('.boss-info-attr') || document.querySelector('.job-boss-info');
-    info.hr_name = bossSection?.querySelector('.name')?.textContent?.trim() || '';
-    info.hr_title = bossSection?.querySelector('.title')?.textContent?.trim() || '';
-    info.hr_active = document.querySelector('.boss-active-time')?.textContent?.trim() || '';
+    // .job-boss-info holds the HR name and online tag; .boss-info-attr only holds "company · title".
+    const bossCard = document.querySelector('.job-boss-info');
+    const bossAttr = document.querySelector('.boss-info-attr');
+    const cardLines = (bossCard?.innerText || '').split('\\n').map(line => line.trim()).filter(Boolean);
+    const attrText = (bossAttr?.innerText || '').replace(/\\s+/g, ' ').trim();
+    // Status tags (online / active time) can sit inside the name node; keep only the person's name.
+    const nameNode = bossCard?.querySelector('.name') || bossAttr?.querySelector('.name');
+    const nameText = nameNode ? (nameNode.firstChild?.nodeType === 3 ? nameNode.firstChild.textContent : nameNode.textContent) : '';
+    info.hr_name = (nameText || (cardLines[0] || '').split(/\\s+/)[0] || '').trim()
+        .replace(/在线|刚刚活跃|今日活跃|本周活跃|本月活跃|\\d+(?:日|周|月)内活跃|半年前活跃/g, '').trim();
+    info.hr_title = bossCard?.querySelector('.title')?.textContent?.trim()
+        || bossAttr?.querySelector('.title')?.textContent?.trim()
+        || (attrText.includes('·') ? attrText.split('·').pop().trim() : '');
+    info.hr_active = document.querySelector('.boss-active-time')?.textContent?.trim()
+        || document.querySelector('.boss-online-tag')?.textContent?.trim() || '';
     if (!info.hr_active) {
-        // An online HR has no .boss-active-time node; the status sits in the boss card text.
-        const bossText = bossSection?.innerText || '';
+        const bossText = `${bossCard?.innerText || ''} ${attrText}`;
         const activeMatch = bossText.match(/在线|刚刚活跃|今日活跃|本周活跃|本月活跃|\\d+日内活跃|\\d+周内活跃|\\d+月内活跃|半年前活跃/);
         info.hr_active = activeMatch ? activeMatch[0] : '';
     }
