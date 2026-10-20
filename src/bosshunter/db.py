@@ -1192,6 +1192,8 @@ def _migrate_dual_score(conn: sqlite3.Connection) -> None:
         "recruit_score": "INTEGER NULL",
         "recruit_detail": "TEXT NULL",
         "category": "TEXT NULL",
+        "zombie_at": "TIMESTAMP NULL",
+        "hr_checked_at": "TIMESTAMP NULL",
     }
     for name, definition in additions.items():
         if name not in cols:

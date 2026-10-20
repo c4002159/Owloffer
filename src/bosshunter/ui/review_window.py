@@ -10,6 +10,7 @@ from bosshunter.company_suggestions import block_companies
 from bosshunter.config import save_config
 from bosshunter.db import add_history, get_db
 from bosshunter.fill import fill_review_list
+from bosshunter.zombie import apply_zombie_filter
 from bosshunter.review_queue import (
     UNCATEGORIZED,
     approve_all,
@@ -132,6 +133,7 @@ class ReviewWindow:
         try:
             if self.plan:
                 assign_categories(db, self.plan)
+            apply_zombie_filter(db, self.config)
             apply_company_dedup(db, self.config)
             apply_match_gate(db, self.config)
             refresh_recruit_scores(db, self.config)

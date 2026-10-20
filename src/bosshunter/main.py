@@ -229,6 +229,32 @@ def fill(ctx: click.Context, per_keyword: int, rounds: int) -> None:
 
 
 @cli.command()
+@click.option("--no-refresh", is_flag=True, help="不重新打开页面复查 HR 活跃度，只按已有数据判断")
+@click.pass_context
+def zombies(ctx: click.Context, no_refresh: bool) -> None:
+    """识别僵尸岗位（连续在招多天且 HR 不活跃），移出审查列表并推荐拉黑其公司"""
+    from bosshunter.company_suggestions import company_suggestions
+    from bosshunter.db import get_db
+    from bosshunter.zombie import apply_zombie_filter, refresh_long_listed
+
+    config = ctx.obj["config"]
+    if not no_refresh:
+        refresh_long_listed(config, console.print)
+    db = get_db()
+    try:
+        filtered = apply_zombie_filter(db, config)
+        blocked = (config.get("profile") or {}).get("blocked_companies") or []
+        picks = [s for s in company_suggestions(db, blocked) if any(r.startswith("僵尸岗位") for r in s["reasons"])]
+    finally:
+        db.close()
+    console.print(f"[green]本次移出审查列表 {filtered} 个僵尸岗位[/green]")
+    for item in picks:
+        console.print(f"  推荐拉黑：{item['company']}（{'、'.join(item['reasons'])}）")
+    if picks:
+        console.print("[dim]在配置页「屏蔽公司 → 批量推荐 / 管理」里勾选后加入黑名单。[/dim]")
+
+
+@cli.command()
 @click.pass_context
 def review(ctx: click.Context) -> None:
     """打开置顶审查窗口：通过/跳过岗位、确认回复草稿、一键投递"""

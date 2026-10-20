@@ -3,6 +3,7 @@
 from threading import Event
 
 from bosshunter.db import get_db
+from bosshunter.zombie import apply_zombie_filter, refresh_long_listed
 from bosshunter.review_queue import (
     apply_company_dedup,
     apply_match_gate,
@@ -32,6 +33,7 @@ def waiting_count(config: dict) -> int:
 def _tidy(config: dict) -> None:
     db = get_db()
     try:
+        apply_zombie_filter(db, config)
         apply_company_dedup(db, config)
         apply_match_gate(db, config)
     finally:
@@ -92,6 +94,13 @@ def fill_review_list(
 
     def stopped() -> bool:
         return stop_event is not None and stop_event.is_set()
+
+    # Long-listed jobs: re-read the HR status so zombies are judged on current data, then drop them.
+    refreshed = refresh_long_listed(config, report, stop_event=stop_event)
+    if refreshed["stopped"] and "风险" in refreshed["stopped"]:
+        summary["stopped"] = refreshed["stopped"]
+        return summary
+    _tidy(config)
 
     def full(kind: str) -> bool:
         return counts_by_kind(config)[kind] >= quotas[kind]

@@ -161,6 +161,8 @@ DEFAULTS: dict[str, Any] = {
         "review_min_score": 60,
         # A company approved or sent within this many days (1 = today only) is not shown again.
         "company_cooldown_days": 1,
+        # A posting listed this many days in a row while its HR is inactive counts as a zombie.
+        "zombie_days": 7,
     },
     "scoring": {
         "threshold": 71,

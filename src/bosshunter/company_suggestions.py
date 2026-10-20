@@ -16,8 +16,8 @@ def _norm(text: object) -> str:
 def company_suggestions(conn: sqlite3.Connection, blocked: list[str] | None = None) -> list[dict]:
     """Companies with reasons to block, strongest first; already-blocked ones are left out.
 
-    Reasons: 外包(确认/疑似) from the outsourcing rules, 同公司N岗, 重复发布×N and
-    连续在招N天 (a posting listed for 3+ days in a row).
+    Reasons: 外包(确认/疑似) from the outsourcing rules, 僵尸岗位×N (listed for days with an
+    inactive HR), 同公司N岗, 重复发布×N and 连续在招N天 (a posting listed for 3+ days in a row).
     """
     blocked = blocked or []
     rows = conn.execute(
@@ -25,6 +25,15 @@ def company_suggestions(conn: sqlite3.Connection, blocked: list[str] | None = No
         "WHERE deleted_at IS NULL AND status NOT IN (?, ?, ?)",
         LIVE_STATUSES_EXCLUDED,
     ).fetchall()
+    # Zombie postings are filtered out of the review list, but their company is still recommended.
+    zombie_counts: dict[str, int] = {}
+    zombie_names: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT company FROM jobs WHERE deleted_at IS NULL AND zombie_at IS NOT NULL"
+    ).fetchall():
+        key = _norm(row["company"])
+        zombie_counts[key] = zombie_counts.get(key, 0) + 1
+        zombie_names.setdefault(key, str(row["company"]).strip())
 
     companies: dict[str, dict] = {}
     for row in rows:
@@ -43,10 +52,21 @@ def company_suggestions(conn: sqlite3.Connection, blocked: list[str] | None = No
             entry["outsourcing"].add(level)
         entry["max_streak"] = max(entry["max_streak"], sighting_streak(conn, row["id"]))
 
+    for key, count in zombie_counts.items():
+        name = zombie_names[key]
+        if matching_blocked_company(name, blocked):
+            continue
+        companies.setdefault(
+            key, {"company": name, "jobs": 0, "titles": {}, "outsourcing": set(), "max_streak": 0}
+        )["zombies"] = count
+
     suggestions = []
     for entry in companies.values():
         reasons: list[str] = []
         weight = 0
+        if entry.get("zombies"):
+            reasons.append(f"僵尸岗位×{entry['zombies']}")
+            weight += 90 + 5 * entry["zombies"]
         if "confirmed" in entry["outsourcing"]:
             reasons.append("外包(确认)")
             weight += 100
@@ -56,7 +76,7 @@ def company_suggestions(conn: sqlite3.Connection, blocked: list[str] | None = No
         if entry["jobs"] >= COMPANY_REPEAT_MIN:
             reasons.append(f"同公司{entry['jobs']}岗")
             weight += 10 * entry["jobs"]
-        duplicate = max(entry["titles"].values())
+        duplicate = max(entry["titles"].values(), default=0)
         if duplicate >= 2:
             reasons.append(f"重复发布×{duplicate}")
             weight += 15 * duplicate
