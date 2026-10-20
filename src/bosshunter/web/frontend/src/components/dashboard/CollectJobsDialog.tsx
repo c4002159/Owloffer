@@ -12,6 +12,7 @@ type PlatformId = 'boss' | 'zhilian' | '51job' | 'liepin'
 interface PlatformDraft {
   enabled: boolean
   keywords: string
+  internKeywords: string
   cities: string
   cityCodes: string
   maxPages: string
@@ -43,10 +44,10 @@ interface CollectJobsDialogProps {
 }
 
 const initialDrafts: Record<PlatformId, PlatformDraft> = {
-  boss: { enabled: true, keywords: '', cities: '', cityCodes: '', maxPages: '3', sort: 'default' },
-  zhilian: { enabled: false, keywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
-  '51job': { enabled: false, keywords: '', cities: '上海', cityCodes: '上海=020000', maxPages: '1', sort: 'default' },
-  liepin: { enabled: false, keywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
+  boss: { enabled: true, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '3', sort: 'default' },
+  zhilian: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
+  '51job': { enabled: false, keywords: '', internKeywords: '', cities: '上海', cityCodes: '上海=020000', maxPages: '1', sort: 'default' },
+  liepin: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
 }
 
 function splitValues(value: string) {
@@ -92,6 +93,7 @@ function draftFromConfig(config: Record<string, any> | null, platform: PlatformI
   return {
     enabled: config?.platforms?.[platform]?.enabled ?? platform === 'boss',
     keywords: Array.isArray(configured.keywords) ? configured.keywords.join(', ') : '',
+    internKeywords: platform === 'boss' && Array.isArray(config?.search?.intern_keywords) ? config.search.intern_keywords.join(', ') : '',
     cities: cities.join(', '),
     cityCodes: configured.city_codes && typeof configured.city_codes === 'object'
       ? Object.entries(configured.city_codes).map(([city, code]) => `${city}=${code}`).join(', ')
@@ -105,6 +107,8 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
   const [drafts, setDrafts] = useState(initialDrafts)
   const [order, setOrder] = useState<PlatformId[]>(['boss'])
   const [autoScore, setAutoScore] = useState(false)
+  const [fulltimeQuota, setFulltimeQuota] = useState('120')
+  const [internQuota, setInternQuota] = useState('30')
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
   const [resumableRuns, setResumableRuns] = useState<ResumableRun[]>([])
@@ -155,6 +159,10 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         setDrafts({ boss: nextBoss, zhilian: nextZhilian, '51job': nextJob51, liepin: nextLiepin })
         setOrder(mode === 'full' ? ['boss'] : (nextOrder.length ? nextOrder : ['boss']))
         setAutoScore(mode === 'full' || config?.collection?.auto_score_default === true)
+        const cap = Number(config?.automation?.review_cap) || 150
+        const interns = Math.min(Number(config?.automation?.internship_quota) || 0, cap)
+        setFulltimeQuota(String(cap - interns))
+        setInternQuota(String(interns))
       })
       .catch(() => {
         if (!cancelled) setError('读取采集默认配置失败，可直接填写后启动。')
@@ -253,9 +261,11 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         city_codes: cityCodes,
         max_pages: Number(draft.maxPages),
         sort: draft.sort,
+        ...(platform === 'boss' ? { intern_keywords: splitValues(draft.internKeywords) } : {}),
       }
     }
-    void submit({ platform_order: enabledOrder, auto_score: mode === 'full' ? true : autoScore, platforms })
+    const quotas = { fulltime: Number(fulltimeQuota) || 0, internship: Number(internQuota) || 0 }
+    void submit({ platform_order: enabledOrder, auto_score: mode === 'full' ? true : autoScore, platforms, quotas })
   }
 
   const submit = async (options: Record<string, unknown>) => {
@@ -333,6 +343,14 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
                 </div>
                 {draft.enabled && <div className="mt-4 space-y-3">
                   <label className="block text-xs font-bold text-muted">关键词（逗号或换行分隔）<Input value={draft.keywords} onChange={event => updateDraft(platform, 'keywords', event.target.value)} placeholder="AI 产品经理, 产品运营" /></label>
+                  {platform === 'boss' && <>
+                    <label className="block text-xs font-bold text-muted">实习关键词（逗号或换行分隔，开发 / 产品都可以）<Input value={draft.internKeywords} onChange={event => updateDraft(platform, 'internKeywords', event.target.value)} placeholder="AI开发实习生, 产品实习生" /></label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs font-bold text-muted">全职名额<Input type="number" min={0} max={1000} value={fulltimeQuota} onChange={event => setFulltimeQuota(event.target.value)} /></label>
+                      <label className="text-xs font-bold text-muted">实习名额<Input type="number" min={0} max={1000} value={internQuota} onChange={event => setInternQuota(event.target.value)} /></label>
+                    </div>
+                    <p className="text-xs text-muted">先用上面的关键词搜全职，再用实习关键词单独搜实习岗位；实习名额为 0 或实习关键词为空时不搜实习。</p>
+                  </>}
                   <label className="block text-xs font-bold text-muted">城市（逗号或换行分隔）<Input list={platform !== 'boss' ? `${platform}-city-options` : undefined} value={draft.cities} onChange={event => updateDraft(platform, 'cities', event.target.value)} placeholder={platform === '51job' ? '上海' : '北京'} /></label>
                   {platform !== 'boss' ? <>
                     <datalist id={`${platform}-city-options`}>{platformCities.map(city => <option key={city.code} value={city.name} />)}</datalist>
@@ -347,7 +365,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
                     </div>
                   </> : <p className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs text-muted">BOSS 城市编码由系统内置匹配，无需填写。</p>}
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="text-xs font-bold text-muted">最大页数<Input type="number" min={1} max={10} value={draft.maxPages} onChange={event => updateDraft(platform, 'maxPages', event.target.value)} /></label>
+                    <label className="text-xs font-bold text-muted">最大页数<Input type="number" min={1} max={30} value={draft.maxPages} onChange={event => updateDraft(platform, 'maxPages', event.target.value)} /></label>
                     <label className="text-xs font-bold text-muted">排序<Select value={draft.sort} onChange={event => updateDraft(platform, 'sort', event.target.value)}><option value="default">默认</option>{platform !== '51job' && <option value="newest">最新</option>}</Select></label>
                   </div>
                 </div>}

@@ -352,7 +352,7 @@ def _sanitize_config_for_write(data):
 def _preflight_messages(mode: str, config: dict, options: dict | None = None) -> list[str]:
 	"""Return user-actionable blockers before starting a dashboard task."""
 	messages: list[str] = []
-	if mode not in {"full", "collect", "rescore", "monitor"}:
+	if mode not in {"full", "collect", "rescore", "monitor", "fill"}:
 		messages.append(f"不支持的任务模式：{mode}")
 	if mode == "collect":
 		try:
@@ -370,7 +370,7 @@ def _preflight_messages(mode: str, config: dict, options: dict | None = None) ->
 
 	profile = config.get("profile", {})
 	resume_path = profile.get("resume_path", "")
-	if mode in {"full", "rescore"} and (not resume_path or not Path(str(resume_path)).exists()):
+	if mode in {"full", "rescore", "fill"} and (not resume_path or not Path(str(resume_path)).exists()):
 		messages.append("请先在配置页上传 .md、.docx 或 .pdf 简历。")
 
 	if mode == "full":
@@ -386,7 +386,7 @@ def _preflight_messages(mode: str, config: dict, options: dict | None = None) ->
 		from bosshunter.ai.greeter import greeting_config_error
 		if error := greeting_config_error(config):
 			messages.append(error)
-	if mode in {"full", "rescore"} and not get_ai_api_key(config):
+	if mode in {"full", "rescore", "fill"} and not get_ai_api_key(config):
 		messages.append("请先在配置页填写当前 AI 服务的 API Key，或设置对应的标准环境变量。")
 
 	return messages
@@ -1047,7 +1047,38 @@ def _execute_greet(task: WorkbenchTask, config: dict) -> None:
 			raise RuntimeError(f"招呼语生成已安全暂停：{pause_reason}")
 
 
+def _execute_fill(task: WorkbenchTask, config: dict) -> None:
+	"""Collect, score, filter and repeat until the full-time and internship review slots are filled."""
+	from bosshunter.fill import counts_by_kind, fill_review_list
+	from bosshunter.review_queue import kind_quotas
+
+	fill_config = dict(config)
+	fill_config["_workbench_stop_event"] = task.stop_requested
+	fill_config["_workbench_log"] = lambda message: _log(task, message)
+	quotas = kind_quotas(fill_config)
+
+	def report(message: str) -> None:
+		_log(task, message)
+		counts = counts_by_kind(fill_config)
+		task.metrics.update({
+			"fill_fulltime": counts["fulltime"],
+			"fill_internship": counts["internship"],
+			"fill_fulltime_quota": quotas["fulltime"],
+			"fill_internship_quota": quotas["internship"],
+		})
+		task.progress = {"message": message, "by_kind": counts, "quotas": quotas}
+
+	_log(task, f"开始补满审查列表：全职 {quotas['fulltime']} 个 + 实习 {quotas['internship']} 个")
+	summary = fill_review_list(fill_config, report, stop_event=task.stop_requested)
+	_log(task, f"补充结束：全职 {summary['by_kind']['fulltime']}/{quotas['fulltime']}，实习 {summary['by_kind']['internship']}/{quotas['internship']}，本次新采集 {summary['collected']} 个")
+	if summary["stopped"]:
+		_log(task, summary["stopped"])
+		if summary["stopped"].startswith("采集已安全停止") or "风险" in summary["stopped"]:
+			raise RuntimeError(summary["stopped"])
+
+
 task_runner._executors.update({
+	"fill": _execute_fill,
 	"full": _execute_full,
 	"collect": _execute_collect,
 	"rescore": _execute_rescore,
@@ -1785,6 +1816,19 @@ def api_workbench_task_start():
 				if platform not in selected_platforms and isinstance(platform_configs.get(platform), dict):
 					platform_configs[platform]["enabled"] = False
 			base_config["platforms"] = platform_configs
+			boss_value = collection_options["platforms"].get("boss")
+			if boss_value is not None:
+				base_config["search"] = {
+					**(base_config.get("search") if isinstance(base_config.get("search"), dict) else {}),
+					"intern_keywords": list(boss_value.get("intern_keywords") or []),
+				}
+			quotas = collection_options.get("quotas")
+			if quotas:
+				base_config["automation"] = {
+					**(base_config.get("automation") if isinstance(base_config.get("automation"), dict) else {}),
+					"review_cap": max(quotas["fulltime"] + quotas["internship"], 1),
+					"internship_quota": quotas["internship"],
+				}
 			before_start = lambda: _write_config(base_config)
 		with job_mutation_lock:
 			task = task_runner.start(mode, {**base_config, **extra, "_workbench_live_greeting_settings": True}, before_start=before_start)

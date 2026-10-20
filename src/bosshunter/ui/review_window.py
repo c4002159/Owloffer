@@ -10,6 +10,7 @@ from bosshunter.company_suggestions import block_companies
 from bosshunter.config import save_config
 from bosshunter.db import add_history, get_db
 from bosshunter.fill import fill_review_list
+from bosshunter.ui import server_client
 from bosshunter.zombie import apply_zombie_filter
 from bosshunter.review_queue import (
     UNCATEGORIZED,
@@ -56,6 +57,7 @@ class ReviewWindow:
         self.messages: "queue.Queue[str]" = queue.Queue()
         self.dispatching = False
         self.filling = False
+        self.server_task_id: str | None = None
         self.stop_event = threading.Event()
         config["_workbench_stop_event"] = self.stop_event
 
@@ -218,13 +220,52 @@ class ReviewWindow:
 
     def toggle_fill(self) -> None:
         if self.filling:
+            if self.server_task_id:
+                server_client.stop_task(self.server_task_id)
             self.stop_event.set()
             self.log.set("正在停止，当前这一步完成后结束…")
+            return
+        # Prefer the dashboard server: the task then shows up on the dashboard (running, logs, stop).
+        started, payload = server_client.start_task("fill")
+        if started:
+            self.server_task_id = str(payload["id"])
+            self.filling = True
+            self.fill_button.config(text="停止补充")
+            self.log.set("已在面板里启动“补满审查列表”，仪表盘可看到进度")
+            self.root.after(2500, self._poll_server_fill)
+            return
+        if payload != "面板服务未运行":
+            messagebox.showwarning("无法补满", str(payload), parent=self.root)
             return
         self.stop_event.clear()
         self.filling = True
         self.fill_button.config(text="停止补充")
+        self.log.set("面板服务未运行，改在本窗口内补充（仪表盘看不到进度；运行 bosshunter web 后可在面板看到）")
         threading.Thread(target=self._fill_worker, daemon=True).start()
+
+    def _poll_server_fill(self) -> None:
+        if not (self.filling and self.server_task_id):
+            return
+        active, last = server_client.workbench_tasks()
+        task = active if active and active.get("id") == self.server_task_id else (
+            last if last and last.get("id") == self.server_task_id else None
+        )
+        if task and task.get("logs"):
+            self.log.set(str(task["logs"][-1]))
+        if task is None or task.get("status") not in {"running", "stopping"}:
+            status = (task or {}).get("status", "unknown")
+            error = (task or {}).get("error")
+            self.filling = False
+            self.server_task_id = None
+            self.fill_button.config(text=f"补满到 {self.settings['review_cap']} 个")
+            if error:
+                self.log.set(f"补充中断：{error}")
+            elif status == "stopped":
+                self.log.set("补充已停止")
+            self.refresh()
+            return
+        self.refresh()
+        self.root.after(3000, self._poll_server_fill)
 
     def _fill_worker(self) -> None:
         try:

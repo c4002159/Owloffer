@@ -62,7 +62,7 @@ interface TopCompany {
 
 export interface WorkbenchTask {
   id: string
-  mode: 'full' | 'collect' | 'rescore' | 'greet' | 'monitor' | 'deliver'
+  mode: 'full' | 'collect' | 'rescore' | 'greet' | 'monitor' | 'deliver' | 'fill'
   label: string
   status: string
   logs: string[]
@@ -231,7 +231,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     await fetchAll()
   }, [fetchAll])
 
-  const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'greet' | 'monitor' | 'deliver', options?: Record<string, unknown>) => {
+  const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'greet' | 'monitor' | 'deliver' | 'fill', options?: Record<string, unknown>) => {
     const res = await fetch('/api/workbench/task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

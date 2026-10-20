@@ -12,6 +12,7 @@ import time
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from bosshunter.ai.prefilter import freshness_filter_result
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
 from bosshunter.cancellation import get_stop_event
 from bosshunter.collection.base import CollectorHooks
@@ -57,7 +58,7 @@ def _legacy_request(config: dict, keywords: list[str]) -> PlatformCollectionRequ
         keywords=[str(keyword).strip() for keyword in keywords if str(keyword).strip()],
         cities=[str(city).strip() for city in cities if str(city).strip()],
         city_codes={str(city): str(code) for city, code in custom_codes.items()},
-        max_pages=min(_positive_int(search_config.get("max_pages", 3), 3), 10),
+        max_pages=min(_positive_int(search_config.get("max_pages", 3), 3), 30),
         sort=str(search_config.get("sort") or "default"),
         filters=search_config.get("filters") if isinstance(search_config.get("filters"), dict) else {},
     )
@@ -118,6 +119,10 @@ def _scrape_jobs_impl(
 
     def save(candidate: JobCandidate) -> bool:
         if matching_deal_breaker(candidate.jd, profile.get("jd_deal_breakers", [])):
+            counts["filtered"] += 1
+            emit()
+            return True
+        if freshness_filter_result({"hr_active": candidate.hr_active}, profile)[0] <= 0:
             counts["filtered"] += 1
             emit()
             return True

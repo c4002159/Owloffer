@@ -47,7 +47,7 @@ import {
   XCircle,
 } from 'lucide-react'
 
-type WorkbenchMode = 'full' | 'collect' | 'rescore' | 'monitor'
+type WorkbenchMode = 'full' | 'collect' | 'rescore' | 'monitor' | 'fill'
 type DashboardView = 'workbench' | 'jobs' | 'monitor'
 type StatsScope = 'today' | 'total'
 
@@ -180,6 +180,11 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
     description: '按平台和条件搜索岗位',
   },
   {
+    mode: 'fill',
+    title: '补满审查列表',
+    description: '按全职/实习名额循环采集评分，凑够后交给你审查',
+  },
+  {
     mode: 'monitor',
     title: '单独监测',
     description: '跟进已投递岗位的 HR 回复',
@@ -213,6 +218,8 @@ const taskMetricItems = [
   { key: 'greet_preserved', label: '保留现有' },
   { key: 'greet_failed', label: '生成失败' },
   { key: 'greet_paused', label: '提前暂停' },
+  { key: 'fill_fulltime', label: '全职待审' },
+  { key: 'fill_internship', label: '实习待审' },
 ]
 
 const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'stopped']
@@ -875,7 +882,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {modes.map(item => {
             const isActive = activeTask?.mode === item.mode
             const disabled = Boolean(activeTask && !isActive)
@@ -964,7 +971,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 <p className="min-w-0 flex-[1_1_12rem] truncate leading-5 text-foreground" title={currentTaskStage(visibleTask)}>{currentTaskStage(visibleTask).split('\n')[0]}</p>
                 {visibleTask.metrics && (
                   <div className="flex max-w-full flex-wrap items-center gap-x-4 gap-y-1" aria-label="任务关键统计">
-                    {taskMetricItems.filter(item => ['ai_passed', 'send_success', 'greet_generated'].includes(item.key) && item.key in visibleTask.metrics!).map(item => (
+                    {taskMetricItems.filter(item => ['ai_passed', 'send_success', 'greet_generated', 'fill_fulltime', 'fill_internship'].includes(item.key) && item.key in visibleTask.metrics!).map(item => (
                       <span key={item.key} className="whitespace-nowrap text-muted">{item.label} <strong className="font-semibold tabular-nums text-foreground">{visibleTask.metrics?.[item.key]}</strong></span>
                     ))}
                     {taskMetricItems.filter(item => !item.key.startsWith('collect_') && item.key.endsWith('_failed') && Number(visibleTask.metrics?.[item.key]) > 0).map(item => (

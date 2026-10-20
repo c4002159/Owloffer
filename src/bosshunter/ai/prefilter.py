@@ -69,6 +69,15 @@ def _internship_quota(config: dict) -> int:
         return 0
 
 
+_CN_DIGITS = {"零": "0", "一": "1", "二": "2", "两": "2", "三": "3", "四": "4", "五": "5",
+              "六": "6", "七": "7", "八": "8", "九": "9", "十": "10"}
+
+
+def _normalize_numerals(text: str) -> str:
+    """Turn 两月内 / 三日内 style Chinese numerals before 日/天/周/月 into digits."""
+    return re.sub(r"[零一二两三四五六七八九十](?=\s*(?:日|天|周|个月|月)内?\s*活跃)", lambda m: _CN_DIGITS[m.group(0)], text)
+
+
 def hr_active_level(hr_active: str) -> int | None:
     """Rank an HR activity label: 3 = online/just now, 2 = within ~3 days, 1 = within a month, 0 = stale.
 
@@ -81,12 +90,13 @@ def hr_active_level(hr_active: str) -> int | None:
         return 3
     if "今日" in text or "今天" in text:
         return 3
-    match = re.search(r"(\d+)\s*(日|天)内", text)
+    text = _normalize_numerals(text)
+    match = re.search(r"(\d+)\s*(日|天)内?活跃", text)
     if match:
         return 2 if int(match.group(1)) <= 3 else 1
-    if "本周" in text or re.search(r"\d+\s*周内", text):
+    if "本周" in text or re.search(r"\d+\s*周内?活跃", text):
         return 1
-    if "本月" in text or re.search(r"\d+\s*(月|个月)内", text):
+    if "本月" in text or re.search(r"\d+\s*(月|个月)内?活跃", text):
         return 1
     if "半年" in text or "很久" in text or "月前" in text or "年前" in text:
         return 0

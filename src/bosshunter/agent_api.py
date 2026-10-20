@@ -288,9 +288,9 @@ def _validated_max_pages(value: Any, target_platforms: list[str]) -> dict[str, i
         for platform in target_platforms:
             if platform not in value:
                 raise AgentRequestError(f"max_pages 缺少 {platform}")
-            result[platform] = _validated_number(f"max_pages.{platform}", value[platform], 1, 10)
+            result[platform] = _validated_number(f"max_pages.{platform}", value[platform], 1, 30)
         return result
-    page_count = _validated_number("max_pages", value, 1, 10)
+    page_count = _validated_number("max_pages", value, 1, 30)
     return {platform: page_count for platform in target_platforms}
 
 

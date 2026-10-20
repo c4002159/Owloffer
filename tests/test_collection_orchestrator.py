@@ -424,12 +424,37 @@ class ValidateCollectionOptionsTests(TestCase):
                 "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 0}},
             })
 
-    def test_rejects_max_pages_over_10(self):
+    def test_rejects_max_pages_over_30(self):
         with self.assertRaises(ValueError, msg="范围"):
             normalize_collection_options({}, {
                 "platform_order": ["boss"],
-                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 11}},
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["北京"], "max_pages": 31}},
             })
+
+    def test_accepts_up_to_30_pages_and_carries_intern_keywords_and_quotas(self):
+        options = normalize_collection_options(
+            {"automation": {"review_cap": 150, "internship_quota": 30}, "search": {"intern_keywords": ["AI实习生"]}},
+            {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["上海"], "max_pages": 30}},
+            },
+        )
+        boss = options["platforms"]["boss"]
+        self.assertEqual(boss["max_pages"], 30)
+        self.assertEqual(boss["intern_keywords"], ["AI实习生"])
+        self.assertEqual(options["quotas"], {"fulltime": 120, "internship": 30})
+
+    def test_dialog_values_override_saved_intern_keywords_and_quotas(self):
+        options = normalize_collection_options(
+            {"automation": {"review_cap": 150, "internship_quota": 30}, "search": {"intern_keywords": ["旧词"]}},
+            {
+                "platform_order": ["boss"],
+                "platforms": {"boss": {"keywords": ["AI"], "cities": ["上海"], "intern_keywords": ["产品实习生"]}},
+                "quotas": {"fulltime": 100, "internship": 20},
+            },
+        )
+        self.assertEqual(options["platforms"]["boss"]["intern_keywords"], ["产品实习生"])
+        self.assertEqual(options["quotas"], {"fulltime": 100, "internship": 20})
 
     def test_rejects_invalid_sort(self):
         with self.assertRaises(ValueError, msg="排序"):

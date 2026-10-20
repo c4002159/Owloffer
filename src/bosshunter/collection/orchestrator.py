@@ -24,6 +24,8 @@ from bosshunter.collection_run_store import (
     boss_combo_key, boss_resume_options, claim_boss_resume, create_collection_run,
     save_boss_checkpoint, update_collection_run,
 )
+from bosshunter.ai.prefilter import freshness_filter_result
+from bosshunter.employment import internship_search_config
 from bosshunter.db import (
     find_job_id, get_db, insert_job_if_new, job_identity_exists, record_sighting, recompute_outsourcing,
 )
@@ -103,6 +105,10 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
             "sort": str(base.get("sort") or ("newest" if platform == "boss" else "default")),
             "filters": normalize_boss_search_filters(base.get("filters")) if platform == "boss" else {},
         }
+        if platform == "boss":
+            # Internship words: the dialog's own value wins, otherwise the saved config search.intern_keywords.
+            intern_source = search.get("intern_keywords") if "intern_keywords" in search else legacy_search.get("intern_keywords")
+            platforms[platform]["intern_keywords"] = _clean_strings(intern_source)
 
     order = supplied.get("platform_order")
     if order is None:
@@ -121,10 +127,21 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
     if supplied and selected_platforms is not None:
         selected = {str(key).strip() for key in selected_platforms if str(key).strip()}
         order = [platform for platform in order if platform in selected]
+    automation = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+    try:
+        configured_intern = max(int(automation.get("internship_quota", 0) or 0), 0)
+        configured_total = max(int(automation.get("review_cap", 150) or 150), 1)
+    except (TypeError, ValueError):
+        configured_intern, configured_total = 0, 150
+    quota_source = supplied.get("quotas") if isinstance(supplied.get("quotas"), dict) else {}
     options = {
         "platform_order": order,
         "auto_score": supplied.get("auto_score", False) is True,
         "platforms": {platform: platforms[platform] for platform in order if platform in platforms},
+        "quotas": {
+            "fulltime": quota_source.get("fulltime", max(configured_total - configured_intern, 0)),
+            "internship": quota_source.get("internship", configured_intern),
+        },
     }
     if supplied.get("resume_run_id"):
         options["resume_run_id"] = supplied["resume_run_id"]
@@ -208,8 +225,8 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             max_pages = int(value.get("max_pages", 3))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{platform} 最大页数必须是整数") from exc
-        if not 1 <= max_pages <= 10:
-            raise ValueError(f"{platform} 最大页数范围为 1-10")
+        if not 1 <= max_pages <= MAX_PAGES_LIMIT:
+            raise ValueError(f"{platform} 最大页数范围为 1-{MAX_PAGES_LIMIT}")
         sort = str(value.get("sort") or "default").strip()
         if sort not in SORT_OPTIONS[platform]:
             raise ValueError(f"{platform} 排序方式无效")
@@ -221,7 +238,23 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             "sort": sort,
             "filters": normalize_boss_search_filters(value.get("filters")) if platform == "boss" else {},
         }
+        if platform == "boss":
+            normalized["platforms"][platform]["intern_keywords"] = _clean_strings(value.get("intern_keywords"))
+    quotas = options.get("quotas") if isinstance(options.get("quotas"), dict) else {}
+    parsed_quotas = {}
+    for kind in ("fulltime", "internship"):
+        try:
+            amount = int(quotas.get(kind, 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("全职和实习名额必须是整数") from exc
+        if not 0 <= amount <= 1000:
+            raise ValueError("全职和实习名额范围为 0-1000")
+        parsed_quotas[kind] = amount
+    normalized["quotas"] = parsed_quotas
     return normalized
+
+
+MAX_PAGES_LIMIT = 30
 
 
 class _SharedProcessor:
@@ -316,6 +349,10 @@ class _SharedProcessor:
         if matched := matching_deal_breaker(candidate.jd, profile.get("jd_deal_breakers") or []):
             self.event(message=f"JD 命中排除词：{matched}", increment_filtered=True, filtered_candidate=candidate)
             return True
+        fresh_score, fresh_reason = freshness_filter_result({"hr_active": candidate.hr_active}, profile)
+        if fresh_score <= 0:
+            self.event(message=fresh_reason, increment_filtered=True, filtered_candidate=candidate)
+            return True
         try:
             inserted = insert_job_if_new(self.conn, candidate.as_job_record(), rules=self.outsourcing_rules)
         except Exception as exc:
@@ -397,7 +434,8 @@ class CollectionOrchestrator:
                     states[platform]["status"] = "stopped"
                     states[platform]["reason_code"] = "user_stopped"
                     break
-                raw = options["platforms"][platform]
+                raw = dict(options["platforms"][platform])
+                intern_words = list(raw.pop("intern_keywords", []) or [])
                 request = PlatformCollectionRequest(platform=platform, **raw)
                 states[platform]["status"] = "running"
                 self._persist(states, all_new_ids, platform, status="running")
@@ -445,6 +483,20 @@ class CollectionOrchestrator:
                         else self.registry.get(platform)
                     )
                     result = collector.collect(request, hooks)
+                    ok_statuses = {"completed", "completed_with_shortage"}
+                    quotas = options.get("quotas") or {}
+                    if (
+                        platform == "boss" and intern_words and int(quotas.get("internship", 0) or 0) > 0
+                        and result.status in ok_statuses
+                        and not (self.stop_event is not None and self.stop_event.is_set())
+                    ):
+                        intern_result = self._collect_internships(
+                            request, raw, intern_words, quotas, processor, hooks, conn
+                        )
+                        if intern_result.status not in ok_statuses:
+                            result = intern_result
+                        else:
+                            result.message += f"；实习采集：{intern_result.message}"
                 except CollectionError as exc:
                     result = PlatformCollectionResult(platform, "blocked", exc.code, exc.message, error=str(exc))
                 except Exception as exc:
@@ -517,6 +569,40 @@ class CollectionOrchestrator:
             "collected_job_ids": unique_new_ids,
             "results": [result.__dict__ for result in platform_results],
         }
+
+    def _collect_internships(self, request, raw, intern_words, quotas, processor, hooks, conn):
+        """Second BOSS pass: internship-only filter and the internship keywords, capped near the quota."""
+        intern_config = internship_search_config(self.config)
+        intern_request = PlatformCollectionRequest(
+            platform="boss", **{**raw, "keywords": intern_words, "filters": {"job_type": ["实习"]}}
+        )
+        # About half of the collected jobs survive scoring, so collect roughly twice the quota.
+        target = int(quotas.get("internship", 0)) * 2
+        before = len(processor.new_job_ids)
+        processor.event(phase="loading_list", message="开始采集实习岗位")
+
+        def limited_save(candidate):
+            keep = processor.save(candidate)
+            return keep and (target <= 0 or len(processor.new_job_ids) - before < target)
+
+        intern_hooks = CollectorHooks(
+            stop_event=self.stop_event,
+            on_list_candidate=processor.inspect,
+            on_candidate=limited_save,
+            on_parse_failed=hooks.on_parse_failed,
+            on_event=hooks.on_event,
+        )
+        collector = (
+            BossCollector(config=intern_config, safety_conn=conn)
+            if self._uses_default_registry
+            else self.registry.get("boss")
+        )
+        try:
+            return collector.collect(intern_request, intern_hooks)
+        except CollectionError as exc:
+            return PlatformCollectionResult("boss", "blocked", exc.code, exc.message, error=str(exc))
+        except Exception as exc:
+            return PlatformCollectionResult("boss", "failed", "network_error", "BOSS 实习采集失败", error=str(exc)[:500])
 
     @staticmethod
     def _counts(progress: CollectionProgress) -> dict[str, int]:

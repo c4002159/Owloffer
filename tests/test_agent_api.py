@@ -52,7 +52,7 @@ class AgentPreferencesTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentRequestError, "salary.min"):
             apply_preferences(load_config(), {"salary": {"min": 40, "max": 20}})
         with self.assertRaisesRegex(AgentRequestError, "max_pages"):
-            apply_preferences(load_config(), {"max_pages": 11})
+            apply_preferences(load_config(), {"max_pages": 31})
 
 
 if __name__ == "__main__":

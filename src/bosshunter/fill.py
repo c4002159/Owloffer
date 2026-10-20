@@ -3,6 +3,7 @@
 from threading import Event
 
 from bosshunter.db import get_db
+from bosshunter.employment import internship_search_config
 from bosshunter.zombie import apply_zombie_filter, refresh_long_listed
 from bosshunter.review_queue import (
     apply_company_dedup,
@@ -38,18 +39,6 @@ def _tidy(config: dict) -> None:
         apply_match_gate(db, config)
     finally:
         db.close()
-
-
-def _internship_config(config: dict) -> dict:
-    """Config copy that searches BOSS for internships only (both the legacy and the platform filter)."""
-    filters = {"job_type": ["实习"]}
-    search = {**(config.get("search") or {}), "filters": filters}
-    platforms = dict(config.get("platforms") or {})
-    boss = dict(platforms.get("boss") or {})
-    boss["search"] = {**(boss.get("search") or {}), "filters": filters}
-    platforms["boss"] = boss
-    profile = {**(config.get("profile") or {}), "allow_internship": True}
-    return {**config, "search": search, "platforms": platforms, "profile": profile}
 
 
 def _keywords(value) -> list[str]:
@@ -121,7 +110,7 @@ def fill_review_list(
                 # Roughly half the collected jobs survive scoring, so ask for about twice the gap.
                 want = min(per_keyword, max((quotas[kind] - counts[kind]) * 2, 4))
                 report(f"第 {round_number} 轮 · {label} · 采集「{keyword}」（最多 {want} 个）…")
-                run_config = _internship_config(config) if kind == "internship" else config
+                run_config = internship_search_config(config) if kind == "internship" else config
                 new_count = scrape_jobs(run_config, [keyword], limit=want)
                 stop_reason = (run_config.get("_workbench_collect_report") or {}).get("stop_reason")
                 summary["collected"] += new_count

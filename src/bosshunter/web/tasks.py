@@ -19,6 +19,7 @@ MODE_LABELS = {
     "greet": "生成招呼语",
     "monitor": "单独监测",
     "deliver": "确认投递",
+    "fill": "补满审查列表",
 }
 
 TERMINAL_STATUSES = {"completed", "failed", "stopped"}

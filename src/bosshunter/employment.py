@@ -70,3 +70,15 @@ def internship_rejection(job: Mapping[str, Any], config: Mapping[str, Any]) -> s
     if kind in {"full_time", "part_time"}:
         return "仅实习：非实习岗位"
     return "仅实习：职位类型待核实，禁止自动投递"
+
+
+def internship_search_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Config copy that searches BOSS for internships only (legacy and platform filter) and accepts them."""
+    filters = {"job_type": ["实习"]}
+    search = {**_mapping(config.get("search")), "filters": filters}
+    platforms = dict(_mapping(config.get("platforms")))
+    boss = dict(_mapping(platforms.get("boss")))
+    boss["search"] = {**_mapping(boss.get("search")), "filters": filters}
+    platforms["boss"] = boss
+    profile = {**_mapping(config.get("profile")), "allow_internship": True}
+    return {**config, "search": search, "platforms": platforms, "profile": profile}
