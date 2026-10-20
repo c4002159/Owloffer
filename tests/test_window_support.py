@@ -69,7 +69,7 @@ def test_window_builds_with_all_tabs_and_lists_approved_jobs(db):
         assert window.approved_tree.exists("approved1")
         assert "已通过待发 1" in window.status.get()
         values = window.approved_tree.item("approved1", "values")
-        assert values[5] == "已确认·待投递" and values[4] == "全职"
+        assert values[6] == "已确认·待投递" and values[5] == "全职" and values[1] == "BOSS"
         assert window.approved_tree.heading("match")["text"] == "匹配度"
         assert window.approved_tree.heading("activity")["text"] == "活跃度"
     finally:

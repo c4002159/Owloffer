@@ -4,11 +4,12 @@ import json
 import queue
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox, ttk
 
 from bosshunter.company_suggestions import block_companies
 from bosshunter.config import save_config
-from bosshunter.db import add_history, get_db
+from bosshunter.db import EXTERNAL_MANUAL_SEND_PLATFORMS, add_history, get_db, mark_external_jobs_sent
 from bosshunter.fill import fill_review_list
 from bosshunter.ui import server_client
 from bosshunter.rejected_companies import apply_rejected_companies, mark_jobs_company_rejected
@@ -36,6 +37,27 @@ from bosshunter.review_queue import (
 )
 
 REFRESH_MS = 10_000
+
+
+PLATFORM_SHORT = {"boss": "BOSS", "zhilian": "智联", "51job": "前程", "liepin": "猎聘"}
+
+
+def platform_label(job: dict) -> str:
+    return PLATFORM_SHORT.get(str(job.get("source_platform") or "boss"), str(job.get("source_platform")))
+
+
+def is_external(job: dict) -> bool:
+    """Collection-only platforms: no automatic delivery, the user applies by hand."""
+    return str(job.get("source_platform") or "boss") in EXTERNAL_MANUAL_SEND_PLATFORMS
+
+
+def job_link(job: dict) -> str:
+    url = str(job.get("url") or "").strip()
+    if not url:
+        return ""
+    if url.startswith("http"):
+        return url
+    return f"https://www.zhipin.com{url}" if str(job.get("source_platform") or "boss") == "boss" else ""
 
 
 def group_by_category(jobs: list[dict]) -> dict[str, list[dict]]:
@@ -89,12 +111,12 @@ class ReviewWindow:
     def _build_jobs_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
         notebook.add(frame, text="待审查岗位")
-        columns = ("company", "salary", "match", "activity", "hr", "flags")
+        columns = ("company", "platform", "salary", "match", "activity", "hr", "flags")
         self.jobs_tree = ttk.Treeview(frame, columns=columns, selectmode="extended", height=14)
         self.jobs_tree.tag_configure("flagged", background="#fff3c4")
         self.jobs_tree.heading("#0", text="分类 / 职位")
         for key, title, width in (
-            ("company", "公司", 140), ("salary", "薪资", 70), ("match", "匹配度", 55),
+            ("company", "公司", 130), ("platform", "平台", 50), ("salary", "薪资", 65), ("match", "匹配度", 55),
             ("activity", "活跃度", 55), ("hr", "HR活跃", 80), ("flags", "标记", 150),
         ):
             self.jobs_tree.heading(key, text=title)
@@ -117,12 +139,12 @@ class ReviewWindow:
         """Approved jobs stay visible here with their state, ready for one-click delivery."""
         frame = ttk.Frame(notebook)
         notebook.add(frame, text="已通过待投递")
-        columns = ("company", "salary", "match", "activity", "kind", "state")
+        columns = ("company", "platform", "salary", "match", "activity", "kind", "state")
         self.approved_tree = ttk.Treeview(frame, columns=columns, selectmode="extended", height=14)
         self.approved_tree.heading("#0", text="职位")
         for key, title, width in (
-            ("company", "公司", 150), ("salary", "薪资", 70), ("match", "匹配度", 55), ("activity", "活跃度", 55),
-            ("kind", "类型", 50), ("state", "状态", 120),
+            ("company", "公司", 130), ("platform", "平台", 50), ("salary", "薪资", 65), ("match", "匹配度", 55),
+            ("activity", "活跃度", 55), ("kind", "类型", 45), ("state", "状态", 130),
         ):
             self.approved_tree.heading(key, text=title)
             self.approved_tree.column(key, width=width, anchor="w")
@@ -135,6 +157,8 @@ class ReviewWindow:
             bar, text="标记公司已拒绝…", command=lambda: self.mark_rejected(list(self.approved_tree.selection()))
         ).pack(side="left", padx=6)
         ttk.Button(bar, text="一键投递已通过岗位", command=self.start_dispatch).pack(side="right")
+        ttk.Button(bar, text="标记已发送（其他平台）", command=self.mark_external_sent).pack(side="right", padx=6)
+        ttk.Button(bar, text="打开所选链接", command=self.open_selected_links).pack(side="right")
 
     def _build_replies_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
@@ -184,7 +208,7 @@ class ReviewWindow:
                 labels = flags.get(str(job["id"]), [])
                 self.jobs_tree.insert(
                     parent, "end", iid=str(job["id"]), text=job["title"],
-                    values=(job["company"], job.get("salary") or "-", _fmt(job.get("score")),
+                    values=(job["company"], platform_label(job), job.get("salary") or "-", _fmt(job.get("score")),
                             _fmt(job.get("recruit_score")),
                             job.get("hr_active") or "-", " ".join(labels)),
                     tags=("flagged",) if labels else (),
@@ -197,12 +221,13 @@ class ReviewWindow:
         self.approved_tree.delete(*self.approved_tree.get_children())
         for job in approved:
             has_greeting = bool(str(job.get("greeting") or "").strip())
+            external = is_external(job)
             self.approved_tree.insert(
                 "", "end", iid=str(job["id"]), text=job["title"],
-                values=(job["company"], job.get("salary") or "-", _fmt(job.get("score")),
+                values=(job["company"], platform_label(job), job.get("salary") or "-", _fmt(job.get("score")),
                         _fmt(job.get("recruit_score")),
                         "实习" if job_kind(job) == "internship" else "全职",
-                        "已确认·招呼语已备" if has_greeting else "已确认·待投递"),
+                        ("已确认·需手动投递" if external else "已确认·招呼语已备" if has_greeting else "已确认·待投递")),
             )
         for iid in selected_approved:
             if self.approved_tree.exists(iid):
@@ -238,6 +263,55 @@ class ReviewWindow:
         return [iid for iid in self.jobs_tree.selection() if not iid.startswith("cat:")]
 
     # ---- job actions --------------------------------------------------
+    def open_selected_links(self) -> None:
+        """Open the selected jobs' pages (at most 5 at once) to apply by hand on collection-only platforms."""
+        ids = list(self.approved_tree.selection())[:5]
+        if not ids:
+            return
+        db = get_db()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            rows = db.execute(f"SELECT url, source_platform FROM jobs WHERE id IN ({placeholders})", ids).fetchall()
+        finally:
+            db.close()
+        opened = 0
+        for row in rows:
+            link = job_link(dict(row))
+            if link:
+                webbrowser.open(link)
+                opened += 1
+        self.log.set(f"已打开 {opened} 个岗位链接" if opened else "所选岗位没有可用链接")
+
+    def mark_external_sent(self) -> None:
+        """After applying by hand on 智联/前程无忧/猎聘, record the jobs as sent so they leave the queue."""
+        ids = list(self.approved_tree.selection())
+        db = get_db()
+        try:
+            external_ids = [
+                job_id for job_id in ids
+                if (row := db.execute("SELECT source_platform FROM jobs WHERE id = ?", (job_id,)).fetchone())
+                and str(row["source_platform"] or "boss") in EXTERNAL_MANUAL_SEND_PLATFORMS
+            ]
+            if not external_ids:
+                messagebox.showinfo("BossHunter", "请先选中智联、前程无忧或猎聘的岗位（BOSS 岗位走一键投递）。", parent=self.root)
+                return
+            if not messagebox.askyesno(
+                "标记已发送",
+                f"确认你已经在平台上手动投递了所选的 {len(external_ids)} 个岗位？\n"
+                "确认后它们会记为“已发送”并移出这个列表。",
+                parent=self.root,
+            ):
+                return
+            try:
+                result = mark_external_jobs_sent(db, external_ids, confirmed=True)
+            except ValueError as exc:
+                messagebox.showwarning("无法标记", str(exc), parent=self.root)
+                return
+        finally:
+            db.close()
+        self.log.set(f"已将 {result.get('affected_count', len(external_ids))} 个岗位标记为已发送")
+        self.refresh()
+
     def unapprove_selected(self) -> None:
         ids = list(self.approved_tree.selection())
         if not ids:

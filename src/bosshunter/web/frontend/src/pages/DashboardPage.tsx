@@ -159,7 +159,7 @@ function describeSkipped(result: { skipped_count?: number; skipped_by_status?: R
   if (!result?.skipped_count) return ''
   const labels: Record<string, string> = {
     filtered: '已过滤', skipped: '已跳过', rejected: '已拒绝', sent: '已投递', pending: '未评分',
-    greeting_review: '招呼语待选择', no_greeting: '缺招呼语',
+    greeting_review: '招呼语待选择', no_greeting: '缺招呼语', external_platform: '其他平台需手动投递',
   }
   const detail = Object.entries(result.skipped_by_status || {}).map(([key, value]) => `${labels[key] || key} ${value}`).join('，')
   return `（已忽略 ${result.skipped_count} 个不可投递的岗位${detail ? `：${detail}` : ''}）`

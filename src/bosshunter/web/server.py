@@ -1974,19 +1974,24 @@ def api_workbench_deliver():
 		body = request.json or {}
 		job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
 		scope_approved = body.get("scope") == "approved"
+		scope_external = 0
 		if scope_approved:
 			# Deliver every job the user already approved (review window or dashboard), no ticking needed.
 			scope_db = _get_web_db()
 			try:
-				job_ids = [
-					str(row["id"]) for row in scope_db.execute(
-						"SELECT id FROM jobs WHERE deleted_at IS NULL AND status = 'approved' ORDER BY score DESC"
-					).fetchall()
-				]
+				approved_rows = scope_db.execute(
+					"SELECT id, COALESCE(source_platform, 'boss') AS platform FROM jobs "
+					"WHERE deleted_at IS NULL AND status = 'approved' ORDER BY score DESC"
+				).fetchall()
+				job_ids = [str(row["id"]) for row in approved_rows if platform_supports(str(row["platform"]), "deliver")]
+				scope_external = len(approved_rows) - len(job_ids)
 			finally:
 				scope_db.close()
 			if not job_ids:
-				return _json_response({"error": "没有已通过、待投递的岗位"}, 400)
+				message = "没有已通过、待投递的岗位"
+				if scope_external:
+					message = f"已通过的 {scope_external} 个岗位都在智联/前程无忧/猎聘：这些平台只采集和评分，请打开岗位链接手动投递，再标记“已发送”"
+				return _json_response({"error": message, "external_platform_count": scope_external}, 400)
 		if not job_ids:
 			return _json_response({"error": "请选择要投递的岗位"}, 400)
 		skip_invalid = bool(body.get("skip_invalid")) or scope_approved
@@ -2020,7 +2025,7 @@ def api_workbench_deliver():
 				for row in platform_rows
 				if not platform_supports(str(row["source_platform"] or "boss"), "deliver")
 			]
-			if unsupported:
+			if unsupported and not skip_invalid:
 				return _json_response({
 					"error": "所选岗位的平台暂不支持投递动作",
 					"unsupported_platform": "unknown",
@@ -2034,7 +2039,9 @@ def api_workbench_deliver():
 				for row in platform_rows:
 					status_text = str(row["status"] or "")
 					reason = None
-					if status_text not in allowed_now:
+					if not platform_supports(str(row["source_platform"] or "boss"), "deliver"):
+						reason = "external_platform"
+					elif status_text not in allowed_now:
 						reason = status_text or "unknown"
 					elif str(row["greeting_selection"] or "") == "pending":
 						reason = "greeting_review"
@@ -2053,6 +2060,11 @@ def api_workbench_deliver():
 					"skipped_count": len(platform_rows) - len(keep_ids),
 					"skipped_by_status": skipped_by_status,
 				}
+				if scope_external:
+					skipped_info["skipped_count"] += scope_external
+					skipped_info["skipped_by_status"]["external_platform"] = (
+						skipped_info["skipped_by_status"].get("external_platform", 0) + scope_external
+					)
 				keep_set = set(keep_ids)
 				job_ids = keep_ids
 				platform_rows = [row for row in platform_rows if str(row["id"]) in keep_set]

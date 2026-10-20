@@ -65,7 +65,7 @@ def approved_within(conn: sqlite3.Connection, days: int = 1) -> list[dict]:
         """
         SELECT h.job_id AS id, j.company AS company, h.created_at AS created_at
         FROM history h JOIN jobs j ON j.id = h.job_id
-        WHERE h.action IN ('approved', 'sent') AND j.deleted_at IS NULL
+        WHERE h.action IN ('approved', 'sent', 'manual_sent') AND j.deleted_at IS NULL
           AND h.created_at >= datetime('now', ?)
         """,
         (f"-{days + 1} day",),

@@ -19,6 +19,10 @@ from bosshunter.review_queue import (
 # Collector stop reasons that just mean "this keyword is done"; anything else is a safety stop.
 BENIGN_STOP_REASONS = {None, "", "callback_stopped", "search_exhausted"}
 KIND_LABELS = {"fulltime": "全职", "internship": "实习"}
+EXTERNAL_PLATFORMS = ("zhilian", "51job", "liepin")
+PLATFORM_NAMES = {"zhilian": "智联招聘", "51job": "前程无忧", "liepin": "猎聘"}
+# External platforms: "login_required" only closes that platform for this run; other stops are safety stops.
+EXTERNAL_BENIGN_REASONS = BENIGN_STOP_REASONS | {"no_new_jobs"}
 
 
 def counts_by_kind(config: dict) -> dict[str, int]:
@@ -45,6 +49,34 @@ def _tidy(config: dict) -> None:
         apply_match_gate(db, config)
     finally:
         db.close()
+
+
+def external_plan(config: dict) -> list[tuple[str, list[str]]]:
+    """Enabled collection-only platforms with the keywords to search (their own, else the BOSS ones)."""
+    platforms = config.get("platforms") or {}
+    fallback = _keywords((config.get("search") or {}).get("keywords"))
+    plan = []
+    for name in EXTERNAL_PLATFORMS:
+        entry = platforms.get(name) or {}
+        if entry.get("enabled") is not True:
+            continue
+        words = _keywords((entry.get("search") or {}).get("keywords")) or fallback
+        if words:
+            plan.append((name, words))
+    return plan
+
+
+def collect_external(config: dict, platform: str, keyword: str, stop_event: Event | None) -> tuple[int, str]:
+    """Collect one keyword on a collection-only platform. Returns (new jobs, stop reason)."""
+    from bosshunter import db as db_module
+    from bosshunter.collection.orchestrator import CollectionOrchestrator
+
+    run_config = dict(config)
+    run_config["_workbench_stop_event"] = stop_event
+    options = {"platform_order": [platform], "platforms": {platform: {"keywords": [keyword]}}, "auto_score": False}
+    result = CollectionOrchestrator(run_config, db_path=db_module.DB_PATH).run(options)
+    state = (result.get("platforms") or {}).get(platform, {})
+    return int(state.get("new") or 0), str(state.get("reason_code") or "")
 
 
 def _keywords(value) -> list[str]:
@@ -74,16 +106,19 @@ def fill_review_list(
     if quotas["internship"] > 0:
         phases.append(("internship", _keywords(search.get("intern_keywords"))))
     phases = [(kind, words) for kind, words in phases if words and quotas[kind] > 0]
+    externals = external_plan(config) if quotas["fulltime"] > 0 else []
+    closed_platforms: set[str] = set()
 
     summary = {
         "collected": 0, "cap": settings["review_cap"], "stopped": "",
         "waiting": waiting_count(config), "by_kind": counts_by_kind(config), "quotas": quotas,
     }
-    if not phases:
+    if not phases and not externals:
         summary["stopped"] = "没有搜索关键词，请先在配置页添加或运行 bosshunter keywords --apply"
         return summary
 
-    if all(summary["by_kind"][kind] >= quotas[kind] for kind, _ in phases):
+    open_kinds = {kind for kind, _ in phases} | ({"fulltime"} if externals else set())
+    if all(summary["by_kind"][kind] >= quotas[kind] for kind in open_kinds):
         summary["stopped"] = "待审查岗位已达上限"
         return summary
 
@@ -132,11 +167,45 @@ def fill_review_list(
                 if stop_reason not in BENIGN_STOP_REASONS:
                     summary.update(by_kind=now, waiting=sum(now.values()), stopped=f"采集已安全停止：{stop_reason}")
                     return summary
+        for platform, words in externals:
+            if platform in closed_platforms:
+                continue
+            for keyword in words:
+                if stopped():
+                    summary["stopped"] = "已手动停止"
+                    return summary
+                if counts_by_kind(config)["fulltime"] >= quotas["fulltime"]:
+                    break
+                open_phases += 1
+                report(f"第 {round_number} 轮 · {PLATFORM_NAMES[platform]} · 采集「{keyword}」…")
+                try:
+                    new_count, stop_reason = collect_external(config, platform, keyword, stop_event)
+                except ValueError as exc:
+                    report(f"  {PLATFORM_NAMES[platform]} 无法采集：{exc}")
+                    closed_platforms.add(platform)
+                    break
+                summary["collected"] += new_count
+                if new_count:
+                    progressed = True
+                    report(f"  新增 {new_count} 个，评分中…")
+                    score_jobs(config)
+                    _tidy(config)
+                now = counts_by_kind(config)
+                report(
+                    f"  全职 {now['fulltime']}/{quotas['fulltime']} · 实习 {now['internship']}/{quotas['internship']}"
+                )
+                if stop_reason == "login_required":
+                    report(f"  {PLATFORM_NAMES[platform]} 需要先登录，本次跳过该平台")
+                    closed_platforms.add(platform)
+                    break
+                if stop_reason not in EXTERNAL_BENIGN_REASONS:
+                    summary.update(by_kind=now, waiting=sum(now.values()), stopped=f"{PLATFORM_NAMES[platform]}采集已安全停止：{stop_reason}")
+                    return summary
         if not open_phases or not progressed:
             break
 
     now = counts_by_kind(config)
     summary.update(by_kind=now, waiting=sum(now.values()))
-    if any(now[kind] < quotas[kind] for kind, _ in phases) and not summary["stopped"]:
+    if any(now[kind] < quotas[kind] for kind in open_kinds) and not summary["stopped"]:
         summary["stopped"] = "关键词已采完，没有更多新岗位"
     return summary
