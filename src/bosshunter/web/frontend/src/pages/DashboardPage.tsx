@@ -25,7 +25,7 @@ import {
   useDebouncedValue,
   type JobFilters,
 } from '@/lib/jobFilters'
-import { getActionLabel, getStatusLabel } from '@/lib/status'
+import { getActionLabel, getStatusLabel, POOL_VIEW_LABELS, POOL_VIEW_STATUSES, type PoolView } from '@/lib/status'
 import { describeGreetTaskOutcome, greetPauseReasonLabel } from '@/lib/greetTask'
 import { cn } from '@/lib/utils'
 import {
@@ -1766,6 +1766,8 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [page, setPage] = useState(0)
   const [filters, setFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
   const [hideHandled, setHideHandled] = useState(true)
+  const [poolView, setPoolView] = useState<PoolView>('pending')
+  const [viewCounts, setViewCounts] = useState<Record<PoolView, number | null>>({ pending: null, history: null })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [blockedCompanies, setBlockedCompanies] = useState<string[]>([])
@@ -1781,11 +1783,29 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [recycleLoading, setRecycleLoading] = useState(false)
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
-  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled)
+  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled && poolView === 'pending', POOL_VIEW_STATUSES[poolView])
   const { workbench: deliveryWorkbench } = useDashboard('workbench')
   const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
     ? deliveryWorkbench.task
     : deliveryWorkbench.last_task?.mode === 'deliver' ? deliveryWorkbench.last_task : null
+
+  useEffect(() => {
+    // 两个视图各自的岗位数，显示在切换按钮上（不受下面的筛选条件影响）。
+    const controller = new AbortController()
+    const count = async (view: PoolView) => {
+      const params = new URLSearchParams({ limit: '1', offset: '0' })
+      POOL_VIEW_STATUSES[view].forEach(value => params.append('status', value))
+      if (view === 'pending' && hideHandled) params.set('hide_handled', '1')
+      const res = await fetch(`/api/jobs/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+      if (!res.ok) return null
+      const data = await res.json()
+      return typeof data.total === 'number' ? data.total : null
+    }
+    Promise.all([count('pending'), count('history')])
+      .then(([pending, history]) => { if (!controller.signal.aborted) setViewCounts({ pending, history }) })
+      .catch(() => { /* 计数失败只是不显示数字。 */ })
+    return () => controller.abort()
+  }, [items, total, hideHandled])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -2189,6 +2209,29 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
           <BriefcaseBusiness className="h-6 w-6 text-primary" />
         </div>
       </div>
+      <div className="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="岗位池视图">
+        {(['pending', 'history'] as PoolView[]).map(view => (
+          <button
+            key={view}
+            type="button"
+            role="tab"
+            aria-selected={poolView === view}
+            onClick={() => {
+              if (poolView === view) return
+              setPoolView(view)
+              setFilters(previous => ({ ...previous, status: [] }))
+              setSelectedIds([])
+              setPage(0)
+            }}
+            className={`rounded-full px-4 py-2 text-sm font-black transition-colors ${poolView === view ? 'bg-primary text-primary-foreground shadow-sm' : 'border border-card-border bg-card text-muted hover:text-primary'}`}
+          >
+            {POOL_VIEW_LABELS[view]}{viewCounts[view] != null ? `（${viewCounts[view]}）` : ''}
+          </button>
+        ))}
+        <span className="text-xs text-muted">
+          {poolView === 'pending' ? '还需要你处理的岗位：待评分、待确认、已确认待投递、发送失败。' : '已有结果的岗位：已投递、已回复、已拒绝、已过滤、已跳过。'}
+        </span>
+      </div>
       <JobFilterBar
         filters={filters}
         onChange={setFilters}
@@ -2197,26 +2240,29 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         totalCount={allTotal}
         invalidSalary={hasInvalidSalaryRange(filters)}
         showStatus
+        statusOptions={POOL_VIEW_STATUSES[poolView]}
         showSource
         cityOptions={cityOptions}
       />
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
-        <label className="flex cursor-pointer items-center gap-1.5 rounded-full border border-card-border bg-card px-3 py-2 font-bold text-foreground" title="同一家公司只要有岗位已通过、已投递或已拒绝，它的其他岗位就先隐藏（这家公司已处理的岗位本身仍显示）">
+        {poolView === 'pending' && <label className="flex cursor-pointer items-center gap-1.5 rounded-full border border-card-border bg-card px-3 py-2 font-bold text-foreground" title="同一家公司只要有岗位已通过、已投递或已拒绝，它的其他岗位就先隐藏（这家公司已处理的岗位本身仍显示）">
           <input type="checkbox" className="accent-primary" checked={hideHandled} onChange={event => { setHideHandled(event.target.checked); setPage(0) }} />
           隐藏已处理公司的其他岗位
-        </label>
+        </label>}
         <Button variant="secondary" size="sm" disabled={!items.length} onClick={toggleCurrentPage}>
           {allPageSelected ? '取消选择本页' : '选择本页'}
         </Button>
         <span className="rounded-full bg-secondary px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
         <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
-        <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
-          <Send className="mr-1 h-4 w-4" />BOSS 一键投递已选
-        </Button>
-        <Button size="sm" onClick={() => void deliverAllApproved()}>
-          <Send className="mr-1 h-4 w-4" />投递全部已通过
-        </Button>
+        {poolView === 'pending' && <>
+          <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
+            <Send className="mr-1 h-4 w-4" />BOSS 一键投递已选
+          </Button>
+          <Button size="sm" onClick={() => void deliverAllApproved()}>
+            <Send className="mr-1 h-4 w-4" />投递全部已通过
+          </Button>
+        </>}
         <Button variant="secondary" size="sm" disabled={!selectedIds.length} onClick={() => void markCompaniesRejected()}>
           标记公司已拒绝
         </Button>

@@ -21,6 +21,7 @@ export function useJobSearch(
   sortBy: JobSortKey = 'created_at',
   sortOrder: JobSortOrder = 'desc',
   hideHandled = false,
+  viewStatuses: string[] | null = null,
 ) {
   const debouncedQuery = useDebouncedValue(filters.query, 250)
   const [items, setItems] = useState<Job[]>([])
@@ -50,7 +51,7 @@ export function useJobSearch(
     if (filters.minScore) params.set('min_score', filters.minScore)
     if (filters.salaryMin) params.set('salary_min', filters.salaryMin)
     if (filters.salaryMax) params.set('salary_max', filters.salaryMax)
-    filters.status.forEach(value => params.append('status', value))
+    ;(filters.status.length ? filters.status : (viewStatuses ?? [])).forEach(value => params.append('status', value))
     if (filters.createdWithin) params.set('created_within', filters.createdWithin)
     filters.sourcePlatform.forEach(value => params.append('source_platform', value))
     filters.city.forEach(value => params.append('city', value))
@@ -84,7 +85,7 @@ export function useJobSearch(
       })
 
     return () => controller.abort()
-  }, [debouncedQuery, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, revision])
+  }, [debouncedQuery, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, viewStatuses, revision])
 
   return { items, total, allTotal, cityOptions, loading, error, refresh }
 }

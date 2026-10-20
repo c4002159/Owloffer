@@ -15,6 +15,7 @@ interface JobFilterBarProps {
   totalCount: number
   invalidSalary?: boolean
   showStatus?: boolean
+  statusOptions?: string[]
   showSource?: boolean
   cityOptions?: string[]
   compact?: boolean
@@ -28,6 +29,7 @@ export function JobFilterBar({
   totalCount,
   invalidSalary = false,
   showStatus = false,
+  statusOptions,
   showSource = false,
   cityOptions = [],
   compact = false,
@@ -82,7 +84,7 @@ export function JobFilterBar({
           aria-label="最高薪资 K"
         />
         {showStatus && (
-          <MultiSelect className={controlClass} compact={compact} value={filters.status} onChange={value => updateMulti('status', value)} placeholder="全部状态" options={Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))} />
+          <MultiSelect className={controlClass} compact={compact} value={filters.status} onChange={value => updateMulti('status', value)} placeholder="全部状态" options={Object.entries(STATUS_LABELS).filter(([value]) => !statusOptions || statusOptions.includes(value)).map(([value, label]) => ({ value, label }))} />
         )}
         {showSource && (
           <MultiSelect className={controlClass} compact={compact} value={filters.sourcePlatform} onChange={value => updateMulti('sourcePlatform', value)} placeholder="来源平台：全部" options={[

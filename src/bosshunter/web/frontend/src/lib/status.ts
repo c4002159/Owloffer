@@ -47,3 +47,18 @@ export function getActionLabel(action: string | null | undefined): string {
   if (!action) return '未知'
   return ACTION_LABELS[action] ?? action
 }
+
+/** 岗位池分成两个视图：还要处理的，和已经有结果的历史记录。 */
+export type PoolView = 'pending' | 'history'
+
+export const POOL_VIEW_STATUSES: Record<PoolView, string[]> = {
+  // 待评分、已评分、待确认、已确认（待投递）、发送失败（需要你重试）
+  pending: ['pending', 'scored', 'ready', 'approved', 'error'],
+  // 已投递、已回复、简历已发、待手动发简历、已跟进、已拒绝、已过滤、已跳过
+  history: ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent', 'rejected', 'filtered', 'skipped'],
+}
+
+export const POOL_VIEW_LABELS: Record<PoolView, string> = {
+  pending: '待确认',
+  history: '历史投递记录',
+}
