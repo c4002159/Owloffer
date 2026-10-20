@@ -956,7 +956,7 @@ class Job51FilterRegressionTests(TestCase):
                 patch("bosshunter.collection.platforms.job51._wait_or_stop", return_value=False),
                 patch.object(_ApiRateLimiter, "wait_before_request", return_value=True),
             ):
-                result = CollectionOrchestrator({"profile": profile}, db_path=db_path).run({
+                result = CollectionOrchestrator({"profile": profile, "automation": {"collect_company_dedup": False}}, db_path=db_path).run({
                     "platform_order": ["51job"], "auto_score": False,
                     "platforms": {"51job": {"keywords": ["IT运维"], "cities": ["上海"],
                                               "city_codes": {"上海": "020000"}, "max_pages": 1, "sort": "default"}},
@@ -969,3 +969,11 @@ class Job51FilterRegressionTests(TestCase):
             conn = get_db(db_path)
             self.assertEqual(conn.execute("select count(*) from jobs").fetchone()[0], 5)
             conn.close()
+
+
+def test_51job_sort_options_map_to_the_sites_own_sort_types():
+    from bosshunter.collection.orchestrator import SORT_OPTIONS
+    from bosshunter.collection.platforms.job51 import SORT_TYPES
+
+    assert SORT_OPTIONS["51job"] == {"default", "newest", "active"}
+    assert SORT_TYPES == {"default": "0", "newest": "1", "active": "5"}

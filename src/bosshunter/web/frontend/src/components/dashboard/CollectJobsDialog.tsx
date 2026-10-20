@@ -46,7 +46,7 @@ interface CollectJobsDialogProps {
 const initialDrafts: Record<PlatformId, PlatformDraft> = {
   boss: { enabled: true, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '3', sort: 'default' },
   zhilian: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
-  '51job': { enabled: false, keywords: '', internKeywords: '', cities: '上海', cityCodes: '上海=020000', maxPages: '1', sort: 'default' },
+  '51job': { enabled: false, keywords: '', internKeywords: '', cities: '上海', cityCodes: '上海=020000', maxPages: '1', sort: 'active' },
   liepin: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
 }
 
@@ -68,13 +68,18 @@ function normalizeCityName(value: string) {
   return city.replace(/市$/, '')
 }
 
+// Platforms whose jobs BossHunter can deliver on its own (mirrors collection/capabilities.py).
+const DELIVER_PLATFORMS: PlatformId[] = ['boss', '51job', 'liepin']
+
 function findPlatformCity(city: string, options: PlatformCityOption[]) {
   const target = normalizeCityName(city)
   return options.find(option => normalizeCityName(option.name) === target)
 }
 
 function draftFromConfig(config: Record<string, any> | null, platform: PlatformId): PlatformDraft {
-  const legacy = platform === 'boss' && config?.search && typeof config.search === 'object' ? config.search : {}
+  const shared = config?.search && typeof config.search === 'object' ? config.search : {}
+  // BOSS-specific fields (city codes, page cap, sort) stay BOSS-only; keywords are shared by every platform.
+  const legacy = platform === 'boss' ? shared : { keywords: shared.keywords, intern_keywords: shared.intern_keywords }
   const specific = config?.platforms?.[platform]?.search && typeof config.platforms[platform].search === 'object'
     ? config.platforms[platform].search
     : {}
@@ -89,17 +94,17 @@ function draftFromConfig(config: Record<string, any> | null, platform: PlatformI
   }
   const cities = Array.isArray(configured.cities) && configured.cities.length
     ? configured.cities
-    : platform === 'boss' ? (config?.profile?.target_cities || []) : []
+    : (config?.profile?.target_cities || [])
   return {
     enabled: config?.platforms?.[platform]?.enabled ?? platform === 'boss',
     keywords: Array.isArray(configured.keywords) ? configured.keywords.join(', ') : '',
-    internKeywords: platform === 'boss' && Array.isArray(config?.search?.intern_keywords) ? config.search.intern_keywords.join(', ') : '',
+    internKeywords: Array.isArray(shared.intern_keywords) ? shared.intern_keywords.join(', ') : '',
     cities: cities.join(', '),
     cityCodes: configured.city_codes && typeof configured.city_codes === 'object'
       ? Object.entries(configured.city_codes).map(([city, code]) => `${city}=${code}`).join(', ')
       : '',
     maxPages: String(configured.max_pages || (platform === 'boss' ? 3 : 1)),
-    sort: configured.sort || (platform === 'boss' ? 'default' : 'default'),
+    sort: configured.sort || (platform === '51job' ? 'active' : 'default'),
   }
 }
 
@@ -261,7 +266,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         city_codes: cityCodes,
         max_pages: Number(draft.maxPages),
         sort: draft.sort,
-        ...(platform === 'boss' ? { intern_keywords: splitValues(draft.internKeywords) } : {}),
+        intern_keywords: splitValues(draft.internKeywords),
       }
     }
     const quotas = { fulltime: Number(fulltimeQuota) || 0, internship: Number(internQuota) || 0 }
@@ -338,13 +343,13 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
             return (
               <section key={platform} className={`rounded-2xl border p-4 ${draft.enabled ? 'border-primary/30 bg-surface' : 'border-card-border bg-card opacity-70'}`}>
                 <div className="flex items-center justify-between gap-3">
-                  <label className="flex items-center gap-2 text-lg font-black"><input type="checkbox" checked={draft.enabled} disabled={mode === 'full' && platform !== 'boss'} onChange={event => togglePlatform(platform, event.target.checked)} className="h-4 w-4 accent-primary" />{label}</label>
+                  <label className="flex items-center gap-2 text-lg font-black"><input type="checkbox" checked={draft.enabled} disabled={mode === 'full' && !DELIVER_PLATFORMS.includes(platform)} onChange={event => togglePlatform(platform, event.target.checked)} className="h-4 w-4 accent-primary" />{label}</label>
                   {draft.enabled && <div className="text-xs font-bold text-primary">队列 {enabledOrder.indexOf(platform) + 1}</div>}
                 </div>
                 {draft.enabled && <div className="mt-4 space-y-3">
                   <label className="block text-xs font-bold text-muted">关键词（逗号或换行分隔）<Input value={draft.keywords} onChange={event => updateDraft(platform, 'keywords', event.target.value)} placeholder="AI 产品经理, 产品运营" /></label>
+                  <label className="block text-xs font-bold text-muted">实习关键词（逗号或换行分隔，开发 / 产品都可以）<Input value={draft.internKeywords} onChange={event => updateDraft(platform, 'internKeywords', event.target.value)} placeholder="AI开发实习生, 产品实习生" /></label>
                   {platform === 'boss' && <>
-                    <label className="block text-xs font-bold text-muted">实习关键词（逗号或换行分隔，开发 / 产品都可以）<Input value={draft.internKeywords} onChange={event => updateDraft(platform, 'internKeywords', event.target.value)} placeholder="AI开发实习生, 产品实习生" /></label>
                     <div className="grid grid-cols-2 gap-2">
                       <label className="text-xs font-bold text-muted">全职名额<Input type="number" min={0} max={1000} value={fulltimeQuota} onChange={event => setFulltimeQuota(event.target.value)} /></label>
                       <label className="text-xs font-bold text-muted">实习名额<Input type="number" min={0} max={1000} value={internQuota} onChange={event => setInternQuota(event.target.value)} /></label>
@@ -366,17 +371,17 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
                   </> : <p className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs text-muted">BOSS 城市编码由系统内置匹配，无需填写。</p>}
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-xs font-bold text-muted">最大页数<Input type="number" min={1} max={30} value={draft.maxPages} onChange={event => updateDraft(platform, 'maxPages', event.target.value)} /></label>
-                    <label className="text-xs font-bold text-muted">排序<Select value={draft.sort} onChange={event => updateDraft(platform, 'sort', event.target.value)}><option value="default">默认</option>{platform !== '51job' && <option value="newest">最新</option>}</Select></label>
+                    <label className="text-xs font-bold text-muted">排序<Select value={draft.sort} onChange={event => updateDraft(platform, 'sort', event.target.value)}><option value="default">默认</option>{platform === '51job' && <option value="active">活跃职位优先</option>}<option value="newest">最新</option></Select></label>
                   </div>
                 </div>}
-                {!draft.enabled && mode === 'full' && platform !== 'boss' && <p className="mt-3 text-xs text-muted">当前只支持“岗位采集”，不进入发送全流程。</p>}
+                {!draft.enabled && mode === 'full' && !DELIVER_PLATFORMS.includes(platform) && <p className="mt-3 text-xs text-muted">当前只支持“岗位采集”，不进入发送全流程。</p>}
               </section>
             )
           })}
         </div>
 
         <div className="mt-4 rounded-2xl border border-card-border bg-surface p-4">
-          <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black">执行顺序</div><p className="mt-1 text-xs text-muted">平台串行采集；智联、前程无忧和猎聘暂不执行发送或监听。</p></div><div className="flex gap-2">{enabledOrder.map((platform, index) => <div key={platform} className="flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs font-black text-primary"><span>{index + 1}. {PLATFORM_SHORT_LABELS[platform]}</span><button type="button" onClick={() => move(platform, -1)} disabled={index === 0} aria-label="上移"><ArrowUp className="h-3 w-3" /></button><button type="button" onClick={() => move(platform, 1)} disabled={index === enabledOrder.length - 1} aria-label="下移"><ArrowDown className="h-3 w-3" /></button></div>)}</div></div>
+          <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black">执行顺序</div><p className="mt-1 text-xs text-muted">平台串行采集；BOSS、前程无忧和猎聘可自动投递，智联暂只采集；监听只对 BOSS 生效。</p></div><div className="flex gap-2">{enabledOrder.map((platform, index) => <div key={platform} className="flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs font-black text-primary"><span>{index + 1}. {PLATFORM_SHORT_LABELS[platform]}</span><button type="button" onClick={() => move(platform, -1)} disabled={index === 0} aria-label="上移"><ArrowUp className="h-3 w-3" /></button><button type="button" onClick={() => move(platform, 1)} disabled={index === enabledOrder.length - 1} aria-label="下移"><ArrowDown className="h-3 w-3" /></button></div>)}</div></div>
         </div>
 
         <label className="mt-4 flex items-center justify-between rounded-2xl border border-card-border bg-card p-4"><div><div className="text-sm font-black">{mode === 'full' ? '全流程自动评分' : '采集后自动评分'}</div><p className="mt-1 text-xs leading-5 text-muted">{mode === 'full' ? '全流程必须先评分；评分后进入人工确认，再按平台适配器执行招呼和监测。' : '默认关闭；开启后只评分本轮新增岗位，评分结束即停止，不发送消息、不投递、不监测。'}</p></div><Switch checked={mode === 'full' || autoScore} onChange={mode === 'full' ? () => undefined : setAutoScore} disabled={mode === 'full'} /></label>

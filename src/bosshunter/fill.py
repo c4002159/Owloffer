@@ -2,6 +2,7 @@
 
 from threading import Event
 
+from bosshunter import keyword_strategy as strategy
 from bosshunter.db import get_db
 from bosshunter.employment import internship_search_config
 from bosshunter.rejected_companies import apply_rejected_companies
@@ -73,10 +74,56 @@ def collect_external(config: dict, platform: str, keyword: str, stop_event: Even
 
     run_config = dict(config)
     run_config["_workbench_stop_event"] = stop_event
-    options = {"platform_order": [platform], "platforms": {platform: {"keywords": [keyword]}}, "auto_score": False}
+    # No internship second pass inside one keyword: fill() schedules internship keywords itself.
+    options = {
+        "platform_order": [platform], "auto_score": False,
+        "platforms": {platform: {"keywords": [keyword], "intern_keywords": []}},
+    }
     result = CollectionOrchestrator(run_config, db_path=db_module.DB_PATH).run(options)
     state = (result.get("platforms") or {}).get(platform, {})
+    kind = "internship" if (config.get("profile") or {}).get("allow_internship") else "fulltime"
+    db = get_db()
+    try:
+        strategy.record_run(
+            db, platform, keyword, kind, seen=int(state.get("seen") or 0),
+            new=int(state.get("new") or 0), filtered=int(state.get("filtered") or 0),
+        )
+    finally:
+        db.close()
     return int(state.get("new") or 0), str(state.get("reason_code") or "")
+
+
+def _load_plan() -> dict | None:
+    from bosshunter import db as db_module
+    from bosshunter.ai.keywords import load_plan
+
+    return load_plan(db_module.DB_PATH.parent.parent)
+
+
+def keyword_schedule(kind: str, words: list[str], round_number: int, gap: int, plan: dict | None, per_keyword: int) -> list[tuple[str, int]]:
+    """(keyword, cap) in the order to search. Pass 1 covers every keyword by tier; later passes favour the best ones."""
+    db = get_db()
+    try:
+        tiers = (
+            {"core": list(words), "expand": [], "explore": [], "paused": []}   # internship words are one flat group
+            if kind == "internship" else strategy.current_tiers(db, words, plan)
+        )
+        raw = max(gap * 2, 0)                                                  # about half survive scoring
+        if round_number == 1:
+            caps = strategy.first_pass_caps(tiers, raw)
+            return [(word, caps[word]) for tier in strategy.TIERS for word in tiers[tier]]
+        scores = strategy.keyword_scores(db)
+        return [(word, per_keyword) for word in strategy.ordered_for_next_pass(tiers, scores)]
+    finally:
+        db.close()
+
+
+def _record_run(platform: str, keyword: str, kind: str, new: int) -> None:
+    db = get_db()
+    try:
+        strategy.record_run(db, platform, keyword, kind, seen=0, new=new, filtered=0)
+    finally:
+        db.close()
 
 
 def _keywords(value) -> list[str]:
@@ -135,26 +182,43 @@ def fill_review_list(
     def full(kind: str) -> bool:
         return counts_by_kind(config)[kind] >= quotas[kind]
 
+    plan = _load_plan()
+    platform_count = 1 + len(externals)
+    taken: dict[tuple[str, str], int] = {}      # new jobs per (platform, kind) in this run, for the even platform split
+
+    def share_left(platform: str, kind: str, round_number: int) -> int | None:
+        """Budget the platform may still use in the coverage pass (None = no limit in later passes)."""
+        if round_number > 1:
+            return None
+        return strategy.platform_share(quotas[kind] * 2, platform_count) - taken.get((platform, kind), 0)
+
     for round_number in range(1, max_rounds + 1):
         progressed = False
         open_phases = 0
         for kind, words in phases:
             label = KIND_LABELS[kind]
-            for keyword in words:
+            schedule = keyword_schedule(kind, words, round_number, quotas[kind] - counts_by_kind(config)[kind], plan, per_keyword)
+            for keyword, cap in schedule:
                 if stopped():
                     summary["stopped"] = "已手动停止"
                     return summary
                 counts = counts_by_kind(config)
                 if counts[kind] >= quotas[kind]:
                     break
+                gap = quotas[kind] - counts[kind]
+                left = share_left("boss", kind, round_number)
+                if left is not None and left <= 0:
+                    break
                 open_phases += 1
                 # Roughly half the collected jobs survive scoring, so ask for about twice the gap.
-                want = min(per_keyword, max((quotas[kind] - counts[kind]) * 2, 4))
+                want = min(cap, max(gap * 2, 4), left if left is not None else cap)
                 report(f"第 {round_number} 轮 · {label} · 采集「{keyword}」（最多 {want} 个）…")
                 run_config = internship_search_config(config) if kind == "internship" else config
                 new_count = scrape_jobs(run_config, [keyword], limit=want)
                 stop_reason = (run_config.get("_workbench_collect_report") or {}).get("stop_reason")
                 summary["collected"] += new_count
+                taken[("boss", kind)] = taken.get(("boss", kind), 0) + new_count
+                _record_run("boss", keyword, kind, new_count)
                 if new_count:
                     progressed = True
                     report(f"  新增 {new_count} 个，评分中…")
@@ -170,21 +234,36 @@ def fill_review_list(
         for platform, words in externals:
             if platform in closed_platforms:
                 continue
-            for keyword in words:
+            jobs = [("fulltime", word, cap) for word, cap in keyword_schedule(
+                "fulltime", words, round_number, quotas["fulltime"] - counts_by_kind(config)["fulltime"], plan, per_keyword)]
+            if quotas["internship"] > 0:
+                jobs += [("internship", word, cap) for word, cap in keyword_schedule(
+                    "internship", _keywords(search.get("intern_keywords")), round_number,
+                    quotas["internship"] - counts_by_kind(config)["internship"], plan, per_keyword)]
+            for kind, keyword, cap in jobs:
                 if stopped():
                     summary["stopped"] = "已手动停止"
                     return summary
-                if counts_by_kind(config)["fulltime"] >= quotas["fulltime"]:
-                    break
+                counts = counts_by_kind(config)
+                if counts[kind] >= quotas[kind]:
+                    continue
+                left = share_left(platform, kind, round_number)
+                if left is not None and left <= 0:
+                    continue
                 open_phases += 1
-                report(f"第 {round_number} 轮 · {PLATFORM_NAMES[platform]} · 采集「{keyword}」…")
+                want = min(cap, max((quotas[kind] - counts[kind]) * 2, 4), left if left is not None else cap)
+                report(f"第 {round_number} 轮 · {PLATFORM_NAMES[platform]} · {KIND_LABELS[kind]} · 采集「{keyword}」（最多 {want} 个）…")
+                run_config = {**config, "_keyword_limit": want}
+                if kind == "internship":
+                    run_config["profile"] = {**(config.get("profile") or {}), "allow_internship": True}
                 try:
-                    new_count, stop_reason = collect_external(config, platform, keyword, stop_event)
+                    new_count, stop_reason = collect_external(run_config, platform, keyword, stop_event)
                 except ValueError as exc:
                     report(f"  {PLATFORM_NAMES[platform]} 无法采集：{exc}")
                     closed_platforms.add(platform)
                     break
                 summary["collected"] += new_count
+                taken[(platform, kind)] = taken.get((platform, kind), 0) + new_count
                 if new_count:
                     progressed = True
                     report(f"  新增 {new_count} 个，评分中…")
@@ -204,6 +283,13 @@ def fill_review_list(
         if not open_phases or not progressed:
             break
 
+    db = get_db()
+    try:
+        all_words = list(dict.fromkeys(_keywords(search.get("keywords")) + [w for _, words in externals for w in words]))
+        for move in strategy.adjust_tiers(db, all_words, plan):
+            report(f"关键词梯队调整：「{move['keyword']}」{move['from']} → {move['to']}（{move['reason']}）")
+    finally:
+        db.close()
     now = counts_by_kind(config)
     summary.update(by_kind=now, waiting=sum(now.values()))
     if any(now[kind] < quotas[kind] for kind in open_kinds) and not summary["stopped"]:

@@ -1954,3 +1954,33 @@ def prune_page_progress(conn: sqlite3.Connection, source: str, keep_keywords: se
     )
     conn.commit()
     return int(cursor.rowcount or 0)
+
+
+def record_external_application(
+    conn: sqlite3.Connection,
+    *,
+    platform: str,
+    source_job_id: str,
+    title: str,
+    company: str,
+    url: str = "",
+    salary: str = "",
+    city: str = "",
+    detail: str = "已投递（队列外）",
+) -> str:
+    """Record a verified application made outside the delivery queue so the pool, counts and company cooldown see it.
+
+    Creates the job row when it is not in the pool yet, then marks it sent with a history entry. Returns its id.
+    """
+    job_id = f"{platform}:{source_job_id}" if platform != "boss" else str(source_job_id)
+    insert_job_if_new(conn, {
+        "id": job_id, "title": title, "company": company, "salary": salary, "city": city, "url": url,
+        "source_platform": platform, "source_job_id": str(source_job_id),
+    })
+    already = conn.execute(
+        "SELECT 1 FROM history WHERE job_id = ? AND action IN ('sent', 'manual_sent')", (job_id,)
+    ).fetchone()
+    update_job_status(conn, job_id, "sent")
+    if not already:
+        add_history(conn, job_id, "sent", detail)
+    return job_id

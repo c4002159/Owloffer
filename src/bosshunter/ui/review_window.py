@@ -9,6 +9,7 @@ from tkinter import messagebox, ttk
 
 from bosshunter.company_suggestions import block_companies
 from bosshunter.config import save_config
+from bosshunter.collection.capabilities import platform_supports
 from bosshunter.db import EXTERNAL_MANUAL_SEND_PLATFORMS, add_history, get_db, mark_external_jobs_sent
 from bosshunter.fill import fill_review_list
 from bosshunter.ui import server_client
@@ -48,7 +49,7 @@ def platform_label(job: dict) -> str:
 
 def is_external(job: dict) -> bool:
     """Collection-only platforms: no automatic delivery, the user applies by hand."""
-    return str(job.get("source_platform") or "boss") in EXTERNAL_MANUAL_SEND_PLATFORMS
+    return not platform_supports(str(job.get("source_platform") or "boss"), "deliver")
 
 
 def job_link(job: dict) -> str:

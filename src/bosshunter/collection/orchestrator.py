@@ -26,6 +26,7 @@ from bosshunter.collection_run_store import (
 )
 from bosshunter.ai.prefilter import freshness_filter_result
 from bosshunter.employment import internship_search_config
+from bosshunter.company_dedup import approved_within, cooldown_days, matching_company, pool_companies
 from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.db import (
     find_job_id, get_db, insert_job_if_new, job_identity_exists, record_sighting, recompute_outsourcing,
@@ -39,7 +40,7 @@ SUPPORTED_PLATFORMS = {"boss", "zhilian", "51job", "liepin"}
 SORT_OPTIONS = {
     "boss": {"default", "newest"},
     "zhilian": {"default", "newest"},
-    "51job": {"default"},
+    "51job": {"default", "newest", "active"},
     "liepin": {"default", "newest"},
 }
 
@@ -103,13 +104,12 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
                 if str(key).strip() and str(value).strip()
             } if isinstance(base.get("city_codes"), dict) else {},
             "max_pages": base.get("max_pages", 3 if platform == "boss" else 1),
-            "sort": str(base.get("sort") or ("newest" if platform == "boss" else "default")),
+            "sort": str(base.get("sort") or ("newest" if platform == "boss" else "active" if platform == "51job" else "default")),
             "filters": normalize_boss_search_filters(base.get("filters")) if platform == "boss" else {},
         }
-        if platform == "boss":
-            # Internship words: the dialog's own value wins, otherwise the saved config search.intern_keywords.
-            intern_source = search.get("intern_keywords") if "intern_keywords" in search else legacy_search.get("intern_keywords")
-            platforms[platform]["intern_keywords"] = _clean_strings(intern_source)
+        # Internship words: the dialog's own value wins, otherwise the saved config search.intern_keywords.
+        intern_source = search.get("intern_keywords") if "intern_keywords" in search else legacy_search.get("intern_keywords")
+        platforms[platform]["intern_keywords"] = _clean_strings(intern_source)
 
     order = supplied.get("platform_order")
     if order is None:
@@ -239,8 +239,7 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             "sort": sort,
             "filters": normalize_boss_search_filters(value.get("filters")) if platform == "boss" else {},
         }
-        if platform == "boss":
-            normalized["platforms"][platform]["intern_keywords"] = _clean_strings(value.get("intern_keywords"))
+        normalized["platforms"][platform]["intern_keywords"] = _clean_strings(value.get("intern_keywords"))
     quotas = options.get("quotas") if isinstance(options.get("quotas"), dict) else {}
     parsed_quotas = {}
     for kind in ("fulltime", "internship"):
@@ -282,6 +281,18 @@ class _SharedProcessor:
         self.outsourcing_rules = load_rules(config)
         recompute_outsourcing(conn, self.outsourcing_rules)
         self.rejected_companies = rejected_names(conn)
+        try:
+            self.keyword_limit = int(config.get("_keyword_limit") or 0)
+        except (TypeError, ValueError):
+            self.keyword_limit = 0
+        # Cross-platform dedup: a company with a job already in the pool, or applied to within the
+        # cooldown window on ANY platform, is not collected again.
+        automation = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+        self.company_dedup = automation.get("collect_company_dedup", True) is not False
+        self.pool_companies = pool_companies(conn) if self.company_dedup else []
+        self.recent_companies = (
+            [item["company"] for item in approved_within(conn, cooldown_days(config))] if self.company_dedup else []
+        )
         self.progress = CollectionProgress(
             run_id=run_id, platform=request.platform, platform_index=platform_index,
             platform_total=platform_total, phase="queued", target=None,
@@ -337,6 +348,9 @@ class _SharedProcessor:
             self.event()
             return False
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
+        if reason := self._city_mismatch(candidate):
+            self.event(message=reason, increment_filtered=True, filtered_candidate=candidate)
+            return False
         if matched := matching_deal_breaker(candidate.title, profile.get("deal_breakers") or []):
             self.event(message=f"职位名命中排除词：{matched}", increment_filtered=True, filtered_candidate=candidate)
             return False
@@ -346,15 +360,36 @@ class _SharedProcessor:
         if matched := is_rejected_company(candidate.company, self.rejected_companies):
             self.event(message=f"公司已拒绝过：{matched}", increment_filtered=True, filtered_candidate=candidate)
             return False
+        if self.company_dedup and (matched := matching_company(candidate.company, self.recent_companies)):
+            self.event(message=f"公司近期已投递过（任一平台）：{matched}", increment_filtered=True, filtered_candidate=candidate)
+            return False
+        if self.company_dedup and (matched := matching_company(candidate.company, self.pool_companies)):
+            self.event(message=f"公司已有岗位在岗位池中：{matched}", increment_filtered=True, filtered_candidate=candidate)
+            return False
         self.event()
         return True
+
+    def _city_mismatch(self, candidate: JobCandidate) -> str:
+        """Reason when a non-BOSS posting is located outside the searched cities ('' = fine or unknown)."""
+        wanted = [str(c).strip().removesuffix("市") for c in self.request.cities if str(c).strip()]
+        where = str(candidate.city or "").strip()
+        if candidate.platform == "boss" or not wanted or not where:
+            return ""
+        if any(city in where for city in wanted):
+            return ""
+        return f"工作地点不在目标城市：{where}（目标：{'、'.join(wanted)}）"
 
     def save(self, candidate: JobCandidate) -> bool:
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         if matched := matching_deal_breaker(candidate.jd, profile.get("jd_deal_breakers") or []):
             self.event(message=f"JD 命中排除词：{matched}", increment_filtered=True, filtered_candidate=candidate)
             return True
-        fresh_score, fresh_reason = freshness_filter_result({"hr_active": candidate.hr_active}, profile)
+        if reason := self._city_mismatch(candidate):
+            self.event(message=reason, increment_filtered=True, filtered_candidate=candidate)
+            return True
+        fresh_score, fresh_reason = freshness_filter_result(
+            {"hr_active": candidate.hr_active, "updated_days": candidate.updated_days}, profile
+        )
         if fresh_score <= 0:
             self.event(message=fresh_reason, increment_filtered=True, filtered_candidate=candidate)
             return True
@@ -368,11 +403,14 @@ class _SharedProcessor:
             return True
         if inserted:
             self.new_job_ids.append(candidate.storage_id)
+            self.pool_companies.append(candidate.company)
             record_sighting(self.conn, candidate.storage_id)
         else:
             self.progress.duplicate += 1
         self.event(phase="saving")
         if self.stop_event is not None and self.stop_event.is_set():
+            return False
+        if self.keyword_limit and len(self.new_job_ids) >= self.keyword_limit:
             return False
         return self.stop_event is None or not self.stop_event.is_set()
 
@@ -491,7 +529,7 @@ class CollectionOrchestrator:
                     ok_statuses = {"completed", "completed_with_shortage"}
                     quotas = options.get("quotas") or {}
                     if (
-                        platform == "boss" and intern_words and int(quotas.get("internship", 0) or 0) > 0
+                        intern_words and int(quotas.get("internship", 0) or 0) > 0
                         and result.status in ok_statuses
                         and not (self.stop_event is not None and self.stop_event.is_set())
                     ):
@@ -576,11 +614,20 @@ class CollectionOrchestrator:
         }
 
     def _collect_internships(self, request, raw, intern_words, quotas, processor, hooks, conn):
-        """Second BOSS pass: internship-only filter and the internship keywords, capped near the quota."""
-        intern_config = internship_search_config(self.config)
-        intern_request = PlatformCollectionRequest(
-            platform="boss", **{**raw, "keywords": intern_words, "filters": {"job_type": ["实习"]}}
-        )
+        """Second pass of one platform: the internship keywords with internships accepted, capped near the quota.
+
+        BOSS also switches to its internship-only job-type filter; the other platforms search the keywords as typed.
+        """
+        platform = request.platform
+        if platform == "boss":
+            intern_config = internship_search_config(self.config)
+            intern_request = PlatformCollectionRequest(
+                platform="boss", **{**raw, "keywords": intern_words, "filters": {"job_type": ["实习"]}}
+            )
+        else:
+            profile = {**(self.config.get("profile") or {}), "allow_internship": True}
+            intern_config = {**self.config, "profile": profile}
+            intern_request = PlatformCollectionRequest(platform=platform, **{**raw, "keywords": intern_words})
         # About half of the collected jobs survive scoring, so collect roughly twice the quota.
         target = int(quotas.get("internship", 0)) * 2
         before = len(processor.new_job_ids)
@@ -597,17 +644,18 @@ class CollectionOrchestrator:
             on_parse_failed=hooks.on_parse_failed,
             on_event=hooks.on_event,
         )
+        classes = {"boss": BossCollector, "51job": Job51Collector, "zhilian": ZhilianCollector, "liepin": LiepinCollector}
         collector = (
-            BossCollector(config=intern_config, safety_conn=conn)
+            classes[platform](config=intern_config, safety_conn=conn)
             if self._uses_default_registry
-            else self.registry.get("boss")
+            else self.registry.get(platform)
         )
         try:
             return collector.collect(intern_request, intern_hooks)
         except CollectionError as exc:
-            return PlatformCollectionResult("boss", "blocked", exc.code, exc.message, error=str(exc))
+            return PlatformCollectionResult(platform, "blocked", exc.code, exc.message, error=str(exc))
         except Exception as exc:
-            return PlatformCollectionResult("boss", "failed", "network_error", "BOSS 实习采集失败", error=str(exc)[:500])
+            return PlatformCollectionResult(platform, "failed", "network_error", f"{platform} 实习采集失败", error=str(exc)[:500])
 
     @staticmethod
     def _counts(progress: CollectionProgress) -> dict[str, int]:

@@ -75,7 +75,7 @@ _CN_DIGITS = {"零": "0", "一": "1", "二": "2", "两": "2", "三": "3", "四":
 
 def _normalize_numerals(text: str) -> str:
     """Turn 两月内 / 三日内 style Chinese numerals before 日/天/周/月 into digits."""
-    return re.sub(r"[零一二两三四五六七八九十](?=\s*(?:日|天|周|个月|月)内?\s*活跃)", lambda m: _CN_DIGITS[m.group(0)], text)
+    return re.sub(r"[零一二两三四五六七八九十](?=\s*(?:日|天|周|个月|月)[内前]?\s*(?:活跃|在线))", lambda m: _CN_DIGITS[m.group(0)], text)
 
 
 def hr_active_level(hr_active: str) -> int | None:
@@ -86,11 +86,24 @@ def hr_active_level(hr_active: str) -> int | None:
     text = str(hr_active or "").strip()
     if not text:
         return None
+    text = _normalize_numerals(text)
+    # "X前在线" / "X前活跃": the age is what matters, not the word 在线.
+    ago = re.search(r"(\d+)\s*(分钟|小时|天|日|周|个月|月|年)\s*前", text)
+    if ("在线" in text or "活跃" in text) and "半年前" in text:
+        return 0
+    if ago and ("在线" in text or "活跃" in text):
+        number, unit = int(ago.group(1)), ago.group(2)
+        if unit in ("分钟", "小时"):
+            return 3
+        if unit in ("天", "日"):
+            return 3 if number <= 1 else 2 if number <= 3 else 1
+        if unit == "周" or (unit in ("月", "个月") and number <= 1):
+            return 1
+        return 0
     if "在线" in text or "刚刚" in text or "分钟" in text or "小时" in text:
         return 3
     if "今日" in text or "今天" in text:
         return 3
-    text = _normalize_numerals(text)
     match = re.search(r"(\d+)\s*(日|天)内?活跃", text)
     if match:
         return 2 if int(match.group(1)) <= 3 else 1
@@ -101,6 +114,20 @@ def hr_active_level(hr_active: str) -> int | None:
     if "半年" in text or "很久" in text or "月前" in text or "年前" in text:
         return 0
     return None
+
+
+def update_label_days(label: str) -> float | None:
+    """Days encoded in a '90天前更新' / '3小时前更新' / '今天更新' label; None when not recognised."""
+    text = str(label or "")
+    if "刚刚" in text or "今天" in text or "今日" in text:
+        return 0.0
+    if "昨天" in text:
+        return 1.0
+    match = re.search(r"(\d+)\s*(分钟|小时|天|日|周|个月|月|年)\s*前", text)
+    if not match:
+        return None
+    number, unit = int(match.group(1)), match.group(2)
+    return number * {"分钟": 1 / 1440, "小时": 1 / 24, "天": 1, "日": 1, "周": 7, "个月": 30, "月": 30, "年": 365}[unit]
 
 
 def job_age_days(job: dict, now: datetime | None = None) -> float | None:
@@ -123,6 +150,11 @@ def freshness_filter_result(job: dict, profile: dict, now: datetime | None = Non
         age = job_age_days(job, now)
         if age is not None and age > max_age_days:
             return 0, f"岗位首次采集已超过 {max_age_days:g} 天"
+
+    max_update_days = _as_number(profile.get("max_job_update_days", 30))
+    updated_days = job.get("updated_days")
+    if max_update_days > 0 and isinstance(updated_days, (int, float)) and updated_days > max_update_days:
+        return 0, f"岗位已 {updated_days:g} 天未更新（上限 {max_update_days:g} 天）"
 
     min_level = int(_as_number(profile.get("hr_active_min_level", 0)))
     if min_level > 0:

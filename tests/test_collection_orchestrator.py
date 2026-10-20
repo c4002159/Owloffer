@@ -215,7 +215,7 @@ class CollectionOrchestratorTests(TestCase):
                 insert_job(db, {**_candidate("boss", "duplicate").as_job_record()})
             finally:
                 db.close()
-            config = {"profile": {"deal_breakers": ["黑名单词"]}}
+            config = {"profile": {"deal_breakers": ["黑名单词"]}, "automation": {"collect_company_dedup": False}}
             real_insert = __import__("bosshunter.db", fromlist=["insert_job_if_new"]).insert_job_if_new
 
             def insert(record_conn, record, **kwargs):
@@ -667,3 +667,108 @@ class OrchestrationFlowTests(TestCase):
                 )
         self.assertEqual(result["status"], "completed_with_errors")
         self.assertEqual(result["collected_job_ids"], ["new-1"])
+
+
+class CrossPlatformCompanyDedupTests(TestCase):
+    def _run(self, config, candidates, seed=None):
+        registry = CollectorRegistry({"liepin": lambda: _FakeCollector("liepin", [], candidates)})
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "collection.db"
+            db = get_db(db_path)
+            try:
+                for record in seed or []:
+                    insert_job(db, record)
+                    if record.get("_sent"):
+                        db.execute("UPDATE jobs SET status='sent' WHERE id=?", (record["id"],))
+                        db.execute("INSERT INTO history (job_id, action) VALUES (?, 'sent')", (record["id"],))
+                        db.commit()
+            finally:
+                db.close()
+            result = CollectionOrchestrator(config, db_path=db_path, registry=registry).run(_options(order=["liepin"]))
+            return result["platforms"]["liepin"]
+
+    def _candidate(self, source_id, company):
+        return JobCandidate(**{**_candidate("liepin", source_id, f"岗位{source_id}").__dict__, "company": company})
+
+    def test_company_applied_on_boss_is_not_collected_again_from_liepin(self):
+        boss = {**_candidate("boss", "b1").as_job_record(), "company": "商泰汽车", "_sent": True}
+        state = self._run({}, [self._candidate("l1", "上海商泰汽车信息系统有限公司")], seed=[boss])
+        self.assertEqual(state["new"], 0)
+
+    def test_second_posting_of_one_company_in_the_same_run_is_skipped(self):
+        state = self._run({}, [self._candidate("l1", "云从科技"), self._candidate("l2", "云从科技有限公司"), self._candidate("l3", "别家")])
+        self.assertEqual(state["new"], 2)
+
+    def test_dedup_can_be_switched_off(self):
+        state = self._run({"automation": {"collect_company_dedup": False}},
+                          [self._candidate("l1", "云从科技"), self._candidate("l2", "云从科技")])
+        self.assertEqual(state["new"], 2)
+
+
+class LocationAndUpdateAgeTests(TestCase):
+    def _run(self, candidates, cities=("上海",), config=None):
+        registry = CollectorRegistry({"liepin": lambda: _FakeCollector("liepin", [], candidates)})
+        options = _options(order=["liepin"])
+        options["platforms"]["liepin"]["cities"] = list(cities)
+        with tempfile.TemporaryDirectory() as tmp:
+            return CollectionOrchestrator(config or {}, db_path=Path(tmp) / "c.db", registry=registry).run(options)["platforms"]["liepin"]
+
+    def _cand(self, source_id, city, updated_days=None):
+        base = _candidate("liepin", source_id, f"岗位{source_id}").__dict__
+        return JobCandidate(**{**base, "company": f"公司{source_id}乙", "city": city, "updated_days": updated_days})
+
+    def test_postings_outside_the_searched_city_are_dropped_before_saving(self):
+        state = self._run([self._cand("a", "上海-浦东新区"), self._cand("b", "苏州"), self._cand("c", "")])
+        self.assertEqual(state["new"], 2)  # the city-less one is unknown, not wrong
+
+    def test_stale_postings_are_dropped_by_update_age(self):
+        state = self._run([self._cand("a", "上海", 3), self._cand("b", "上海", 90)])
+        self.assertEqual(state["new"], 1)
+        state = self._run([self._cand("a", "上海", 90)], config={"profile": {"max_job_update_days": 0}})
+        self.assertEqual(state["new"], 1)
+
+
+def test_update_label_days_and_51job_update_time():
+    from bosshunter.ai.prefilter import update_label_days
+    from bosshunter.collection.platforms.job51 import _updated_days
+
+    assert update_label_days("90天前更新") == 90 and update_label_days("3小时前更新") == 3 / 24
+    assert update_label_days("今天更新") == 0 and update_label_days("2周前更新") == 14 and update_label_days("x") is None
+    assert _updated_days({"updateDateTime": "2000-01-01 00:00:00"}) > 9000 and _updated_days({}) is None
+
+
+class InternPassOnOtherPlatformsTests(TestCase):
+    def test_non_boss_platform_gets_a_second_pass_with_intern_keywords_and_internships_allowed(self):
+        seen = []
+
+        class Recorder:
+            platform = "liepin"
+
+            def __init__(self, config):
+                self.config = config
+
+            def collect(self, request, hooks):
+                seen.append((list(request.keywords), bool((self.config.get("profile") or {}).get("allow_internship"))))
+                return PlatformCollectionResult("liepin", "completed", "search_exhausted", "ok")
+
+        config = {"profile": {}}
+        registry = CollectorRegistry({"liepin": lambda: Recorder(config)})
+        options = _options(order=["liepin"])
+        options["platforms"]["liepin"]["cities"] = ["上海"]
+        options["platforms"]["liepin"]["intern_keywords"] = ["AI开发实习生"]
+        options["quotas"] = {"fulltime": 120, "internship": 30}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(config, db_path=Path(tmp) / "c.db", registry=registry).run(options)
+        self.assertEqual([keywords for keywords, _ in seen], [["AI"], ["AI开发实习生"]])
+        self.assertIn("实习采集", result["platforms"]["liepin"]["message"])
+
+
+class KeywordLimitTests(TestCase):
+    def test_keyword_limit_stops_the_collector_after_that_many_new_jobs(self):
+        candidates = [JobCandidate(**{**_candidate("liepin", f"k{i}", f"岗位{i}").__dict__, "company": f"独立公司{i}号"}) for i in range(6)]
+        registry = CollectorRegistry({"liepin": lambda: _FakeCollector("liepin", [], candidates)})
+        options = _options(order=["liepin"])
+        options["platforms"]["liepin"]["cities"] = ["北京"]
+        with tempfile.TemporaryDirectory() as tmp:
+            state = CollectionOrchestrator({"_keyword_limit": 2}, db_path=Path(tmp) / "c.db", registry=registry).run(options)["platforms"]["liepin"]
+        self.assertEqual(state["new"], 2)

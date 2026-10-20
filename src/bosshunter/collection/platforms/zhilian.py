@@ -290,7 +290,9 @@ JS_EXTRACT_DETAIL = """
   );
   const cityText = cityNode ? cityNode.textContent.trim() : '';
   const city = expectedCity && cityText.includes(expectedCity) ? expectedCity : cityText;
+  const activeMatch = (document.body ? document.body.innerText : '').match(/当前在线|刚刚在线|\\S{1,6}前在线|今日在线|本周在线|\\d+日内活跃/);
   return JSON.stringify({
+    hr_active: activeMatch ? activeMatch[0] : '',
     // Normal logged-in pages can contain incidental login copy in headers,
     // footers or ads. A readable JD always wins; otherwise require structural
     // login evidence (login URL/dialog) or a page with no job identity at all.
@@ -1273,7 +1275,7 @@ class ZhilianCollector:
             return PlatformCollectionResult(self.platform, "failed", "no_valid_city", "智联城市编码未配置")
 
         throttle_cfg = self.config.get("throttle", {}) if isinstance(self.config.get("throttle"), dict) else {}
-        send_windows = throttle_cfg.get("send_windows", ["09:00-16:00"])
+        send_windows = throttle_cfg.get("collect_windows", ["08:00-23:00"])
         if not SendWindowChecker(send_windows).is_active():
             return PlatformCollectionResult(self.platform, "completed", "outside_window",
                                             f"当前不在采集时间窗口内（{send_windows}）")
@@ -1542,6 +1544,6 @@ class ZhilianCollector:
             title=str(detail.get("title") or base.title).strip(), company=str(detail.get("company") or base.company).strip(),
             salary=str(detail.get("salary") or base.salary).strip(), city=str(detail.get("city") or base.city).strip(),
             experience=str(detail.get("experience") or "").strip(), education=str(detail.get("education") or "").strip(),
-            jd=str(detail.get("jd") or "").strip(), url=detail_url,
+            jd=str(detail.get("jd") or "").strip(), hr_active=str(detail.get("hr_active") or "").strip(), url=detail_url,
             source_keyword=base.source_keyword,
         )

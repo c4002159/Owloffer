@@ -131,7 +131,7 @@ def mixed(monkeypatch):
         conn = get_db(base / "data" / "bosshunter.db")
         _job(conn, "b1", "boss")
         _job(conn, "z1", "zhilian")
-        _job(conn, "l1", "liepin")
+        _job(conn, "z2", "zhilian")
         conn.close()
         server.set_base_dir(base)
         started = []
@@ -156,7 +156,7 @@ def test_deliver_all_approved_only_sends_boss_jobs_and_reports_the_rest(mixed):
 def test_mixed_selection_with_skip_invalid_ignores_collection_only_platforms(mixed):
     _, started = mixed
     status, payload = _request(
-        "/api/workbench/deliver", "POST", {"job_ids": ["b1", "z1", "l1"], "skip_invalid": True}
+        "/api/workbench/deliver", "POST", {"job_ids": ["b1", "z1", "z2"], "skip_invalid": True}
     )
     assert status.startswith("200") and started == [["b1"]]
     assert payload["skipped_by_status"] == {"external_platform": 2}
@@ -190,7 +190,34 @@ def test_window_helpers_label_platforms_and_build_links():
     from bosshunter.ui.review_window import is_external, job_link, platform_label
 
     assert platform_label({"source_platform": "zhilian"}) == "智联" and platform_label({}) == "BOSS"
-    assert is_external({"source_platform": "liepin"}) and not is_external({"source_platform": "boss"})
+    assert is_external({"source_platform": "zhilian"}) and not is_external({"source_platform": "boss"})
+    assert not is_external({"source_platform": "51job"}) and not is_external({"source_platform": "liepin"})   # delivered by BossHunter itself
     assert job_link({"source_platform": "boss", "url": "/job_detail/x.html"}) == "https://www.zhipin.com/job_detail/x.html"
     assert job_link({"source_platform": "51job", "url": "https://jobs.51job.com/x"}) == "https://jobs.51job.com/x"
     assert job_link({"source_platform": "51job", "url": "/relative"}) == ""
+
+
+def test_preflight_accepts_the_fill_mode():
+    from bosshunter.web.preflight import VALID_MODES, _configuration_checks
+
+    assert "fill" in VALID_MODES
+    checks = _configuration_checks("fill", {"profile": {}})
+    assert all(check["id"] != "task_mode" for check in checks)
+
+
+def test_fill_collects_internship_keywords_on_external_platforms_with_internships_allowed(db, monkeypatch):
+    calls = []
+
+    def fake_collect(cfg, platform, keyword, stop_event):
+        calls.append((platform, keyword, bool((cfg.get("profile") or {}).get("allow_internship"))))
+        return 0, "search_exhausted"
+
+    _quiet_fill(monkeypatch, fake_collect)
+    monkeypatch.setattr("bosshunter.ai.scorer.score_jobs", lambda cfg, **_: None)
+    config = {
+        "search": {"keywords": ["Agent工程师"], "intern_keywords": ["AI开发实习生"]},
+        "platforms": {"51job": {"enabled": True, "search": {"keywords": []}}},
+        "automation": {"review_cap": 6, "internship_quota": 2},
+    }
+    fill_module.fill_review_list(config, lambda _m: None, max_rounds=1)
+    assert ("51job", "Agent工程师", False) in calls and ("51job", "AI开发实习生", True) in calls

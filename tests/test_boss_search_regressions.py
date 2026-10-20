@@ -229,12 +229,12 @@ class BossSearchRegressionTests(TestCase):
             options = {"platform_order": ["boss"], "platforms": {"boss": {
                 "keywords": ["AI"], "cities": ["北京"], "max_pages": 2,
             }}}
-            first = CollectionOrchestrator({}, db_path=path, registry=registry).run(options)
+            first = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=path, registry=registry).run(options)
             saved = get_collection_run(path, first["run_id"])
             self.assertTrue(saved["can_resume"])
             self.assertEqual(saved["boss_checkpoint"]["pages"], {boss_combo_key("北京", "AI"): 1})
             browser = SearchBrowser([[card("a")], [card("a"), card("b")]])
-            resumed = CollectionOrchestrator({}, db_path=path, registry=registry).run({"resume_run_id": first["run_id"]})
+            resumed = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=path, registry=registry).run({"resume_run_id": first["run_id"]})
             self.assertEqual(resumed["collected_job_ids"], ["a", "b"])
             self.assertEqual(resumed["platforms"]["boss"]["seen"], 2)
             self.assertFalse(get_collection_run(path, first["run_id"])["can_resume"])

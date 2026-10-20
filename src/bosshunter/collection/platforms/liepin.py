@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from bosshunter.ai.prefilter import salary_filter_result
+from bosshunter.ai.prefilter import salary_filter_result, update_label_days
 from bosshunter.browser import close_tab, evaluate, navigate as browser_navigate, new_tab, scroll, wait_for_load
 from bosshunter.collection.base import CollectionError, CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
@@ -54,8 +54,21 @@ DETAIL_DELAY_MIN_SECONDS = 10.0
 DETAIL_DELAY_MAX_SECONDS = 18.0
 PAGE_DELAY_MIN_SECONDS = 20.0
 PAGE_DELAY_MAX_SECONDS = 35.0
+# hr_active_min_level (3 online, 2 within 3 days, 1 within a month) -> Liepin's pubTime filter in days.
+PUB_TIME_BY_LEVEL = {3: 1, 2: 3, 1: 30}
+
+
+def _hr_floor(config: dict) -> int:
+    profile = config.get("profile") if isinstance(config.get("profile"), dict) else {}
+    try:
+        return int(profile.get("hr_active_min_level", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
+HR_RENDER_POLLS = 6
 
 _INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
 
@@ -187,8 +200,14 @@ JS_EXTRACT_DETAIL = r"""
     var salaryNode = document.querySelector('.job-salary');
     var cityNode = document.querySelector('.job-dq-box .ellipsis-1');
     var companyNode = document.querySelector('.company-info-container .ellipsis-1') || document.querySelector("div[data-nick='job-detail-company-info'] .ellipsis-1");
+    var updatedMatch = body.match(/(?:\d+\s*(?:分钟|小时|天|周|个月|月|年)前|刚刚|今天|昨天)更新/);
+    var addressMatch = body.match(/职位地址[:：]\s*([^\n]+)/);
+    var activeMatch = body.match(/(?:\S{1,6}前在线|刚刚在线|当前在线|今日在线|本周在线)/);
     return JSON.stringify({
         status: jd ? 'ready' : 'selector_changed',
+        hr_active: activeMatch ? activeMatch[0] : '',
+        updated: updatedMatch ? updatedMatch[0] : '',
+        address: addressMatch ? addressMatch[1].trim() : '',
         title: titleNode ? String(titleNode.innerText || '').trim() : '',
         salary: salaryNode ? String(salaryNode.innerText || '').replace(/\s+/g, '').trim() : '',
         company: companyNode ? String(companyNode.innerText || '').trim() : '',
@@ -258,6 +277,9 @@ class LiepinCollector:
         if request.sort == "newest":
             # Liepin's "最新" ordering. Harmless if the param is ignored.
             url += "&sortType=2"
+        pub_time = (request.filters or {}).get("pub_time")
+        if pub_time:
+            url += f"&pubTime={int(pub_time)}"       # the page's 招聘者活跃 filter
         return url
 
     def _wait(self, hooks: CollectorHooks, seconds: float) -> bool:
@@ -322,6 +344,12 @@ class LiepinCollector:
             return 24
 
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        # Liepin filters by recruiter activity on the search page itself (招聘者活跃: 1/3/7/30 days), so ask it
+        # for only the jobs that pass the configured HR-activity floor instead of discarding them afterwards.
+        if "pub_time" not in request.filters:
+            days = PUB_TIME_BY_LEVEL.get(_hr_floor(self.config))
+            if days:
+                request.filters["pub_time"] = days      # the request is frozen, its filters dict is not
         for city in request.cities:
             if not request.city_codes.get(city):
                 return PlatformCollectionResult(self.platform, "failed", "no_valid_city", f"猎聘城市编码未配置：{city}")
@@ -337,7 +365,7 @@ class LiepinCollector:
             )
 
         throttle_cfg = self.config.get("throttle", {}) if isinstance(self.config.get("throttle"), dict) else {}
-        send_windows = throttle_cfg.get("send_windows", ["09:00-16:00"])
+        send_windows = throttle_cfg.get("collect_windows", ["08:00-23:00"])
         if not SendWindowChecker(send_windows).is_active():
             return PlatformCollectionResult(self.platform, "completed", "outside_window",
                                             f"当前不在采集时间窗口内（{send_windows}）")
@@ -446,7 +474,11 @@ class LiepinCollector:
                                 for attempt in range(RENDER_POLL_ATTEMPTS):
                                     detail = _payload(self.browser.evaluate(detail_target, JS_EXTRACT_DETAIL))
                                     detail_status = str(detail.get("status") or "selector_changed")
-                                    if detail_status in {"ready", "blocked", "offline", "login_required"}:
+                                    if detail_status in {"blocked", "offline", "login_required"}:
+                                        break
+                                    # The HR card renders after the JD; give it a few more polls before
+                                    # treating the HR activity as unknown.
+                                    if detail_status == "ready" and (detail.get("hr_active") or attempt >= HR_RENDER_POLLS):
                                         break
                                     if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
                                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -528,10 +560,12 @@ class LiepinCollector:
             title=base.title,
             company=base.company,
             salary=base.salary,
-            city=base.city,
+            city=str(detail.get("address") or "").strip() or base.city,
             experience=base.experience,
             education=base.education,
             jd=str(detail.get("jd") or base.jd or "").strip(),
+            updated_days=update_label_days(str(detail.get("updated") or "")),
+            hr_active=str(detail.get("hr_active") or "").strip(),
             url=base.url,
             source_keyword=base.source_keyword,
         )

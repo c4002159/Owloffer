@@ -91,3 +91,24 @@ def duplicate_of_approved_today(conn: sqlite3.Connection, job: dict, days: int =
         if item["id"] != job.get("id") and same_company(job.get("company"), item["company"]):
             return str(item["company"])
     return None
+
+
+_LIVE_POOL_STATUSES = ("pending", "scored", "ready", "approved")
+
+
+def pool_companies(conn: sqlite3.Connection) -> list[str]:
+    """Companies that already have a job waiting in the pool (collected, scored or approved, not yet sent)."""
+    placeholders = ",".join("?" for _ in _LIVE_POOL_STATUSES)
+    rows = conn.execute(
+        f"SELECT DISTINCT company FROM jobs WHERE deleted_at IS NULL AND status IN ({placeholders})",
+        _LIVE_POOL_STATUSES,
+    ).fetchall()
+    return [row["company"] for row in rows if row["company"]]
+
+
+def matching_company(company: object, known: list[str]) -> str | None:
+    """First entry of ``known`` that is the same employer as ``company``."""
+    for name in known:
+        if same_company(company, name):
+            return name
+    return None

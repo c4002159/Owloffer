@@ -96,6 +96,7 @@ class LiepinCollectorTests(TestCase):
         ]}, ensure_ascii=False)
         detail_payload = json.dumps({
             "status": "ready",
+            "hr_active": "3小时前在线",
             "title": "AI 产品",
             "company": "示例公司",
             "city": "上海",
@@ -176,7 +177,7 @@ class LiepinCollectorTests(TestCase):
                     "url": "https://www.liepin.com/job/2001.shtml",
                 }]})
             return json.dumps({
-                "status": "ready", "title": "AI 运营", "company": "示例公司",
+                "status": "ready", "hr_active": "3小时前在线", "title": "AI 运营", "company": "示例公司",
                 "city": "上海", "jd": "负责 AI 产品运营与数据分析。",
             })
 
@@ -230,7 +231,7 @@ class LiepinCollectorTests(TestCase):
                     "url": "https://www.liepin.com/job/3002.shtml",
                 }]})
             return json.dumps({
-                "status": "ready", "title": "AI 工程师", "company": "示例公司",
+                "status": "ready", "hr_active": "3小时前在线", "title": "AI 工程师", "company": "示例公司",
                 "city": "上海", "jd": "负责 AI 平台研发。",
             })
 
@@ -286,7 +287,7 @@ class LiepinCollectorTests(TestCase):
                     "url": f"https://www.liepin.com/job/{4000 + list_calls['n']}.shtml",
                 }]})
             return json.dumps({
-                "status": "ready", "title": "AI 工程师", "company": "示例公司",
+                "status": "ready", "hr_active": "3小时前在线", "title": "AI 工程师", "company": "示例公司",
                 "city": "上海", "jd": "负责 AI 研发。",
             })
 
@@ -915,3 +916,23 @@ class LiepinResumeCheckpointTests(TestCase):
         get_progress.assert_not_called()
         upsert.assert_not_called()
         mark.assert_not_called()
+
+
+def test_detail_candidate_carries_hr_activity_and_polls_for_a_late_hr_card():
+    from bosshunter.collection.models import JobCandidate
+    from bosshunter.collection.platforms.liepin import HR_RENDER_POLLS, LiepinCollector
+
+    base = JobCandidate(platform="liepin", source_job_id="1", title="t", company="c", url="https://www.liepin.com/job/1.shtml")
+    final = LiepinCollector._candidate_from_detail({"jd": "x", "hr_active": "一周前在线"}, base)
+    assert final.hr_active == "一周前在线" and HR_RENDER_POLLS < 10
+
+
+def test_hr_activity_floor_becomes_the_search_pages_recruiter_activity_filter():
+    from bosshunter.collection.models import PlatformCollectionRequest
+    from bosshunter.collection.platforms.liepin import PUB_TIME_BY_LEVEL, LiepinCollector
+
+    assert PUB_TIME_BY_LEVEL == {3: 1, 2: 3, 1: 30}
+    request = PlatformCollectionRequest(platform="liepin", keywords=["AI"], cities=["上海"], city_codes={"上海": "020"})
+    assert "pubTime" not in LiepinCollector.build_search_url(request, "上海", "AI")
+    request.filters["pub_time"] = 3
+    assert LiepinCollector.build_search_url(request, "上海", "AI").endswith("&pubTime=3")

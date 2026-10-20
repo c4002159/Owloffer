@@ -21,6 +21,7 @@ profile:
   jd_deal_breakers: []  # 示例：需要排除完整 JD 中的词时再填写
   blocked_companies: [] # 示例：不希望采集的公司名称或关键词
   max_job_age_days: 0 # 岗位首次被采集超过 N 天则过滤；0 = 关闭（网页版没有发布时间，用首次采集时间近似）
+  max_job_update_days: 30 # 平台上岗位超过 N 天未更新则过滤（51job/猎聘读取；读不到更新时间的不拦）；0 = 关闭
   hr_active_min_level: 0 # HR 活跃度下限：0 关闭，1 一个月内，2 三天内，3 在线/今日活跃
   hr_active_unknown_pass: true # 读不到 HR 活跃度时是否放行
   # 可选：个人亮点（用于招呼语生成）
@@ -96,6 +97,7 @@ scoring:
 automation:
   auto_send: false # 默认关闭：岗位先进审查窗口，由你确认后才发送
   review_cap: 150 # 待审查加已通过未发送的岗位达到该数量时，评分暂停
+  external_greeting_send: false # 猎聘投递成功后，在聊天里追发定制招呼语（会与猎聘账号的默认问候并存；先小范围验证再开启）
   review_min_score: 60 # 综合分达到该值才进入审查窗口
   company_cooldown_days: 1 # 同一公司通过/发送后几天内不再出现（1 = 仅当天，7 = 一周）
   zombie_days: 7 # 连续在招这么多天且 HR 不活跃/不在线，视为僵尸岗位：移出审查列表，其公司进入推荐拉黑
@@ -107,6 +109,8 @@ throttle:
   browse_before_greet: true
   browse_duration_min: 15
   browse_duration_max: 30
+  collect_windows:
+  - 08:00-23:00
   send_windows:
     - "09:00-17:00"
   day_off_probability: 0.05

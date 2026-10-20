@@ -10,6 +10,7 @@ import { ResumeUploadSection } from '@/components/config/ResumeUploadSection'
 import { ExtraResumesSection } from '@/components/config/ExtraResumesSection'
 import { BlockedCompaniesDialog } from '@/components/config/BlockedCompaniesDialog'
 import { KeywordRecommendations } from '@/components/config/KeywordRecommendations'
+import { KeywordPerformance } from '@/components/config/KeywordPerformance'
 import { SendWindowsInput, sendWindowsError } from '@/components/config/SendWindowsInput'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
@@ -438,7 +439,7 @@ export default function ConfigPage() {
         <SectionCard title="搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
             <p className="rounded-xl border border-card-border bg-surface px-3 py-2 text-xs leading-5 text-muted">
-              智联、前程无忧和猎聘只自动采集、评分和生成招呼语；岗位池会提供原平台链接，你完成投递后可手动标记“已发送”。BossHunter 不会替你在这些平台发送、回复或监听。
+              前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘可在投递后追发定制招呼语（automation.external_greeting_send，默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。BossHunter 只在 BOSS 上监听回复。
             </p>
             {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
               const search = platformSearch(platform)
@@ -467,6 +468,7 @@ export default function ConfigPage() {
                         internKeywords={Array.isArray(config.search?.intern_keywords) ? config.search.intern_keywords : []}
                         onInternChange={value => updateConfig('search.intern_keywords', value)}
                       />}
+                      {platform === 'boss' && <KeywordPerformance />}
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
                     </Field>
                     {platform === 'boss' && (

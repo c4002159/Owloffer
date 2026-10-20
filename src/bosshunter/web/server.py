@@ -1889,7 +1889,7 @@ def api_workbench_task_start():
 			]
 			if collection_only:
 				return _json_response({
-					"error": "智联和前程无忧当前只支持单独采集，不能进入发送全流程",
+					"error": "智联当前只支持单独采集，不能进入发送全流程",
 					"collection_only_platforms": collection_only,
 				}, 400)
 			collection_options["auto_score"] = True
@@ -2865,6 +2865,39 @@ def api_keywords_plan():
 	return _json_response({"plan": load_plan(BASE_DIR)})
 
 
+@app.route("/api/keywords/strategy")
+def api_keywords_strategy():
+	"""Tier, 14-day results and recent tier moves of the configured search keywords."""
+	from bosshunter import keyword_strategy
+	from bosshunter.ai.keywords import load_plan
+
+	config = load_config(CONFIG_PATH)
+	words = list(dict.fromkeys(str(word).strip() for word in (config.get("search") or {}).get("keywords") or [] if str(word).strip()))
+	db = _get_web_db()
+	try:
+		return _json_response(keyword_strategy.strategy_report(db, words, load_plan(BASE_DIR)))
+	finally:
+		db.close()
+
+
+@app.route("/api/keywords/pin", method="POST")
+def api_keywords_pin():
+	"""Pin a keyword to a tier (the automatic promotion/demotion leaves it alone) or release it."""
+	from bosshunter import keyword_strategy
+
+	body = request.json or {}
+	word = str(body.get("keyword") or "").strip()
+	tier = body.get("tier")
+	if not word or (tier is not None and tier not in keyword_strategy.TIERS):
+		return _json_response({"error": "关键词或梯队无效"}, 400)
+	db = _get_web_db()
+	try:
+		keyword_strategy.set_pinned(db, word, bool(body.get("pinned", True)), tier=tier)
+		return _json_response({"success": True})
+	finally:
+		db.close()
+
+
 @app.route("/api/keywords/generate", method="POST")
 def api_keywords_generate():
 	"""Ask the keyword model (resume + GitHub evidence + skill file) for a tiered plan."""
@@ -3265,7 +3298,7 @@ def api_agent_task_start():
 				]
 				if collection_only:
 					return _json_response({
-						"error": "智联、前程无忧和猎聘只能单独采集，不能进入投递全流程",
+						"error": "智联只能单独采集，不能进入投递全流程",
 						"collection_only_platforms": collection_only,
 					}, 400)
 				options["auto_score"] = True

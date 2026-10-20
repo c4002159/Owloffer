@@ -64,3 +64,30 @@ def test_each_component_scales_inside_its_own_maximum():
     assert online - short_jd == 8                        # JD completeness: 10 -> 2
     long_listed, detail = compute_recruit_score(base, streak=5)
     assert online - long_listed == 30 and "连续在招5天" in detail   # 50 * 0.4 left = 20
+
+
+def test_ago_style_hr_labels_from_other_platforms_are_ranked_by_age():
+    from bosshunter.ai.prefilter import hr_active_level
+
+    assert hr_active_level("一周前在线") == 1 and hr_active_level("3周前在线") == 1
+    assert hr_active_level("3小时前在线") == 3 and hr_active_level("当前在线") == 3
+    assert hr_active_level("2天前在线") == 2 and hr_active_level("三天前在线") == 2 and hr_active_level("5天前在线") == 1
+    assert hr_active_level("2个月前在线") == 0 and hr_active_level("半年前在线") == 0
+    assert hr_active_level("今日回复3次") == 3
+
+
+def test_51job_item_exposes_hr_activity():
+    from bosshunter.collection.platforms.job51 import _hr_active_label
+
+    assert _hr_active_label({"hrIsOnline": True}) == "在线"
+    assert _hr_active_label({"onlineHrLabelList": ["3天前活跃"]}) == "3天前活跃"
+    assert _hr_active_label({}) == ""
+
+
+def test_51job_activity_fields_map_to_levels():
+    from bosshunter.ai.prefilter import hr_active_level
+    from bosshunter.collection.platforms.job51 import _hr_active_label
+
+    assert hr_active_level(_hr_active_label({"hrActiveStatusGreen": "刚刚活跃", "hrLabels": ["今日查看简历1次"]})) == 3
+    assert hr_active_level(_hr_active_label({"hrLabels": ["本周查看简历29次"]})) == 1
+    assert _hr_active_label({"hrOnlineLabelStatus": 3}) == ""

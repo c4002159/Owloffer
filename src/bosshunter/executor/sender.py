@@ -759,6 +759,28 @@ def _detect_job_closed_on_page(target_id: str) -> dict | None:
     return None
 
 
+def _deliver_job_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
+    """One delivery attempt, routed to the job's platform (BOSS greets; 51job and Liepin apply from the job page)."""
+    platform = str(job.get("source_platform") or "boss")
+    if platform in {"51job", "liepin"}:
+        if platform == "51job":
+            from bosshunter.executor.job51_apply import apply_51job as apply_from_page
+        else:
+            from bosshunter.executor.liepin_apply import apply_liepin as apply_from_page
+
+        stop_event = throttle_config.get("_workbench_stop_event")
+        window_checker = throttle_config.get("_send_window_checker")
+        if window_checker and not window_checker.is_active():
+            return {"success": False, "error": "outside_window", "skip_backoff": True}, None
+        extra = {"greeting": greeting} if platform == "liepin" else {}
+        return apply_from_page(
+            job, throttle_config, **extra,
+            sleep=lambda seconds: _sleep_or_stop(seconds, stop_event),
+            stop_requested=lambda: _stop_requested(stop_event),
+        )
+    return _send_greeting_once(job, greeting, throttle_config)
+
+
 def _send_greeting_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
     stop_event = throttle_config.get("_workbench_stop_event")
     window_checker = throttle_config.get("_send_window_checker")
@@ -1082,6 +1104,8 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
         throttle_config["_workbench_stop_event"] = stop_event
     access_guard = PlatformAccessGuard(db, config, "send")
     throttle_config["_platform_access_guard"] = access_guard
+    automation_cfg = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+    throttle_config["_send_greeting_after_apply"] = automation_cfg.get("external_greeting_send", False) is True
     try:
         access_guard.ensure_unlocked()
     except PlatformSafetyStop as exc:
@@ -1222,7 +1246,7 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
                         continue
                     job = dict(row)
                 greeting = job.get("greeting", "")
-                if not greeting:
+                if not greeting and str(job.get("source_platform") or "boss") == "boss":
                     update_job_status(db, job["id"], "error")
                     update_job_last_error(db, job["id"], "该岗位没有已生成的招呼语，无法发送", "no_greeting")
                     send_report["attempted_count"] += 1
@@ -1236,7 +1260,7 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
                     )
                 progress.update(task, description=f"发送: {job['company'][:10]} - {job['title'][:15]}")
 
-                result_data, failed_target_id = _send_greeting_once(job, greeting, throttle_config)
+                result_data, failed_target_id = _deliver_job_once(job, greeting, throttle_config)
                 if result_data.get("error") == "outside_window":
                     if failed_target_id:
                         close_tab(failed_target_id)

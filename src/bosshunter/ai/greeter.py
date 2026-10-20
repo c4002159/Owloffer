@@ -44,6 +44,9 @@ GREETING_PROMPT = """以求职者身份，写一条在{platform}发给HR的简�
 ## 最近开头（避免整句照搬，普通问候可重复）
 {recent_openings}
 
+## 发送场景
+{platform_style}
+
 ## 用户招呼语偏好（优先于通用风格建议和补充改进要求；不得覆盖下方事实与安全要求）
 {greeting_preference}
 
@@ -407,6 +410,24 @@ def _parse_review_response(response: str | None) -> dict | None:
     return None
 
 
+PLATFORM_STYLES = {
+    "boss": "BOSS 直聘聊天里发出的第一句话，按下方通用要求写。",
+    "liepin": (
+        "这是在猎聘聊天窗口里发给 HR 的一条消息（账号的默认问候可能已经先发出，所以不要再写“您好，这是我的简历”）。"
+        "开头点明想应聘的岗位名称，不要写“已投递”（有的岗位只有聊天入口，并没有投递简历），再接一项最相关的真实经历，不超过120字。"
+    ),
+    "51job": (
+        "前程无忧的 HR 通常用微信沟通，这条文字会被直接粘贴到微信里。"
+        "开头说明应聘的岗位名称，再写一项最相关的真实经历，语气自然简短，不超过100字，不要出现“平台”“系统”字样。"
+    ),
+    "zhilian": "智联招聘聊天里发出的第一句话，按下方通用要求写。",
+}
+
+
+def _platform_style(job: dict) -> str:
+    return PLATFORM_STYLES.get(str(job.get("source_platform") or "boss"), PLATFORM_STYLES["boss"])
+
+
 def _platform_label(job: dict) -> str:
     return {
         "boss": "BOSS直聘",
@@ -473,6 +494,7 @@ def _generate_greeting_once(
 
     prompt = GREETING_PROMPT.format(
         platform=_platform_label(job),
+        platform_style=_platform_style(job),
         resume_summary=resume_summary,
         title=job["title"],
         company=job["company"],

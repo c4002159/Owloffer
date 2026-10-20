@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import random
 import time
 from dataclasses import dataclass
@@ -293,6 +294,40 @@ def _is_relevant_to_keyword(title: str, jd: str, kw: str) -> bool:
         elif core_l in re.sub(r"\s+", "", t):
             return True
     return False
+
+
+# 51job's own sort buttons: 综合 = 0, 最新优先 = 1, 活跃职位优先 = 5 (read from the site's own requests).
+SORT_TYPES = {"default": "0", "newest": "1", "active": "5"}
+
+
+def _hr_active_label(item: dict) -> str:
+    """HR activity text from a search item, from every field 51job exposes it in.
+
+    ``hrActiveStatusGreen`` ("刚刚活跃"), ``hrLabels`` ("今日查看简历1次" / "本周查看简历29次") and
+    ``onlineHrLabelList`` carry text; ``hrIsOnline`` means online right now. Empty = unknown.
+    """
+    parts: list[str] = []
+    if item.get("hrIsOnline") in (True, 1, "1", "true"):
+        parts.append("在线")
+    for key in ("hrActiveStatusGreen", "hrLabels", "onlineHrLabelList"):
+        value = item.get(key) or []
+        for entry in [value] if isinstance(value, str) else value:
+            text = str(entry.get("labelName") or entry.get("name") or "") if isinstance(entry, dict) else str(entry)
+            if text.strip():
+                parts.append(text.strip())
+    return " ".join(parts)
+
+
+def _updated_days(item: dict) -> float | None:
+    """Days since the posting was last refreshed (``updateDateTime``, else ``issueDateString``)."""
+    for key in ("updateDateTime", "issueDateString"):
+        raw = str(item.get(key) or "").strip()
+        if raw:
+            try:
+                return max((datetime.now() - datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")).total_seconds() / 86400, 0.0)
+            except ValueError:
+                continue
+    return None
 
 
 def _is_internship(title: str, experience: str) -> bool:
@@ -604,6 +639,8 @@ class Job51Collector:
             jd=(item.get("jobDescribe") or "").strip(),
             hr_name=(item.get("hrName") or "").strip(),
             hr_title=(item.get("hrPosition") or "").strip(),
+            hr_active=_hr_active_label(item),
+            updated_days=_updated_days(item),
             company_size=(item.get("companySizeString") or "").strip(),
             company_industry=(item.get("industryType1Str") or "").strip(),
             url=(item.get("jobHref") or "").strip(),
@@ -647,6 +684,7 @@ class Job51Collector:
     def _fetch_page(self, host_target: str, kw_encoded: str, area: str, page: int) -> dict:
         """在宿主页上下文发一次 API 请求并分析返回，返回 _analyze_api_response 结果。"""
         js = JS_FETCH_API_PAGE.replace("__KW__", kw_encoded).replace("__AREA__", area).replace("__PAGE__", str(page))
+        js = js.replace("sortType=0", f"sortType={getattr(self, '_sort_type', '0')}")
         raw = self.browser.evaluate(host_target, js, timeout=API_FETCH_TIMEOUT)
         if raw is None:
             return {"ok": False, "level": 3, "signal": "empty_result",
@@ -680,6 +718,7 @@ class Job51Collector:
     def collect(
         self, request: PlatformCollectionRequest, hooks: CollectorHooks
     ) -> PlatformCollectionResult:
+        self._sort_type = SORT_TYPES.get(str(request.sort), "0")
         # 城市编码前置校验（fail-closed，与官方一致）
         for city in request.cities:
             if not request.city_codes.get(city):
@@ -700,7 +739,7 @@ class Job51Collector:
 
         # 反检测前置：时间窗口 + 随机休息日（复用 BossHunter throttle 配置）
         throttle_cfg = self.config.get("throttle", {}) if isinstance(self.config.get("throttle"), dict) else {}
-        send_windows = throttle_cfg.get("send_windows", ["09:00-16:00"])
+        send_windows = throttle_cfg.get("collect_windows", ["08:00-23:00"])
         if not SendWindowChecker(send_windows).is_active():
             return PlatformCollectionResult(self.platform, "completed", "outside_window",
                                             f"当前不在采集时间窗口内（{send_windows}）")

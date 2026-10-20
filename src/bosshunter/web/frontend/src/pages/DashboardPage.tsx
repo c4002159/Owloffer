@@ -159,7 +159,7 @@ function describeSkipped(result: { skipped_count?: number; skipped_by_status?: R
   if (!result?.skipped_count) return ''
   const labels: Record<string, string> = {
     filtered: '已过滤', skipped: '已跳过', rejected: '已拒绝', sent: '已投递', pending: '未评分',
-    greeting_review: '招呼语待选择', no_greeting: '缺招呼语', external_platform: '其他平台需手动投递',
+    greeting_review: '招呼语待选择', no_greeting: '缺招呼语', external_platform: '智联需手动投递',
   }
   const detail = Object.entries(result.skipped_by_status || {}).map(([key, value]) => `${labels[key] || key} ${value}`).join('，')
   return `（已忽略 ${result.skipped_count} 个不可投递的岗位${detail ? `：${detail}` : ''}）`
@@ -2016,7 +2016,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const deliverSelectedJobs = async () => {
     if (!selectedIds.length) return
     const count = selectedIds.length
-    if (!window.confirm(`确认投递已选择的 ${count} 个岗位吗？仅 BOSS 岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。`)) return
+    if (!window.confirm(`确认投递已选择的 ${count} 个岗位吗？BOSS、前程无忧和猎聘岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。`)) return
     try {
       const result = await postJobAction('/api/workbench/deliver', { job_ids: selectedIds, skip_invalid: true })
       setSelectedIds([])
@@ -2035,7 +2035,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   }
 
   const deliverAllApproved = async () => {
-    if (!window.confirm('确认投递所有已通过的岗位吗？不用逐个勾选；仅 BOSS 岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。')) return
+    if (!window.confirm('确认投递所有已通过的岗位吗？不用逐个勾选；BOSS、前程无忧和猎聘岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。')) return
     try {
       const result = await postJobAction('/api/workbench/deliver', { scope: 'approved' })
       refreshJobs()

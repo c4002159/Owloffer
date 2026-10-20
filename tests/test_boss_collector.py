@@ -398,7 +398,7 @@ class BossFreshSearchTests(TestCase):
                 "keywords": ["AI", "产品"], "cities": ["北京"], "max_pages": 2, "sort": "newest",
             }}}
             with self.assertRaises(PowerLoss):
-                CollectionOrchestrator({}, db_path=db_path, registry=registry(), run_id="interrupted").run(options)
+                CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry(), run_id="interrupted").run(options)
             interrupted = get_collection_run(db_path, "interrupted")
             self.assertEqual(interrupted["boss_checkpoint"]["pages"], {boss_combo_key("北京", "AI"): 2})
             self.assertEqual(interrupted["collected_job_ids"], ["a", "b", "c"])
@@ -410,7 +410,7 @@ class BossFreshSearchTests(TestCase):
             searches.clear()
             # Neither a changed default nor edited request can replace the original search.
             resumed = CollectionOrchestrator(
-                {"search": {"keywords": ["changed"], "cities": ["上海"]}},
+                {"search": {"keywords": ["changed"], "cities": ["上海"]}, "automation": {"collect_company_dedup": False}},
                 db_path=db_path, registry=registry(), task_id="new-worker",
             ).run({"resume_run_id": "interrupted", "platforms": {"boss": {"keywords": ["ignored"]}}})
             self.assertEqual(searches, [("产品", 1), ("产品", 2)])
@@ -421,12 +421,12 @@ class BossFreshSearchTests(TestCase):
             self.assertFalse(saved["can_resume"])
             self.assertEqual(saved["options"]["platforms"]["boss"]["keywords"], ["AI", "产品"])
             with self.assertRaises(ValueError):
-                CollectionOrchestrator({}, db_path=db_path, registry=registry()).run({"resume_run_id": "interrupted"})
+                CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry()).run({"resume_run_id": "interrupted"})
 
             # A new task ignores even this freshly completed run's checkpoints.
             searches.clear()
             page_jobs[("AI", 1)].append("latest")
-            fresh = CollectionOrchestrator({}, db_path=db_path, registry=registry()).run(options)
+            fresh = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry()).run(options)
             self.assertEqual(searches, list(page_jobs))
             self.assertEqual(fresh["collected_job_ids"], ["latest"])
             conn = get_db(db_path)
@@ -468,15 +468,15 @@ class BossFreshSearchTests(TestCase):
                         return insert_job_if_new(*args)
                     with patch("bosshunter.collection.orchestrator.insert_job_if_new",
                                side_effect=save_after_failure):
-                        result = CollectionOrchestrator({}, db_path=db_path, registry=registry).run(options)
+                        result = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry).run(options)
                 else:
-                    result = CollectionOrchestrator({}, db_path=db_path, registry=registry).run(options)
+                    result = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry).run(options)
                 run = get_collection_run(db_path, result["run_id"])
                 self.assertEqual(run["boss_checkpoint"]["pages"], {})
                 self.assertTrue(run["can_resume"])
                 # Once the failure is fixed, the same task can advance checkpoints again.
                 browser.new_tab = lambda url, **_: remember_page(url) or "tab"
-                resumed = CollectionOrchestrator({}, db_path=db_path, registry=registry).run({"resume_run_id": result["run_id"]})
+                resumed = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry).run({"resume_run_id": result["run_id"]})
                 self.assertFalse(get_collection_run(db_path, resumed["run_id"])["can_resume"])
 
     def test_repeated_runs_find_new_jobs_despite_old_word_and_page_checkpoints(self):
@@ -500,9 +500,9 @@ class BossFreshSearchTests(TestCase):
             options = {"platform_order": ["boss"], "auto_score": False, "platforms": {"boss": {
                 "keywords": ["AI", "产品"], "cities": ["北京"], "max_pages": 1, "sort": "default",
             }}}
-            first = CollectionOrchestrator({}, db_path=db_path, registry=registry).run(options)
+            first = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry).run(options)
             jobs.append({**self._job(), "url": "/job_detail/new002.html"})
-            second = CollectionOrchestrator({}, db_path=db_path, registry=registry).run(options)
+            second = CollectionOrchestrator({"automation": {"collect_company_dedup": False}}, db_path=db_path, registry=registry).run(options)
             self.assertEqual(first["collected_job_ids"], ["test001"])
             self.assertEqual(second["collected_job_ids"], ["new002"])
             self.assertEqual(second["platforms"]["boss"]["seen"], 4)
