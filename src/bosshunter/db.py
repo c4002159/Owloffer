@@ -1199,6 +1199,10 @@ def _migrate_dual_score(conn: sqlite3.Connection) -> None:
         if name not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS rejected_companies ("
+        "key TEXT PRIMARY KEY, company TEXT NOT NULL, note TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+    )
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS job_sightings ("
         "job_id TEXT NOT NULL, seen_date TEXT NOT NULL, PRIMARY KEY (job_id, seen_date))"
     )

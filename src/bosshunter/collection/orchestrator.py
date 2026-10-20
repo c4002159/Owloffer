@@ -26,6 +26,7 @@ from bosshunter.collection_run_store import (
 )
 from bosshunter.ai.prefilter import freshness_filter_result
 from bosshunter.employment import internship_search_config
+from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.db import (
     find_job_id, get_db, insert_job_if_new, job_identity_exists, record_sighting, recompute_outsourcing,
 )
@@ -280,6 +281,7 @@ class _SharedProcessor:
         self.emit = emit
         self.outsourcing_rules = load_rules(config)
         recompute_outsourcing(conn, self.outsourcing_rules)
+        self.rejected_companies = rejected_names(conn)
         self.progress = CollectionProgress(
             run_id=run_id, platform=request.platform, platform_index=platform_index,
             platform_total=platform_total, phase="queued", target=None,
@@ -340,6 +342,9 @@ class _SharedProcessor:
             return False
         if matched := matching_blocked_company(candidate.company, profile.get("blocked_companies") or []):
             self.event(message=f"公司命中屏蔽规则：{matched}", increment_filtered=True, filtered_candidate=candidate)
+            return False
+        if matched := is_rejected_company(candidate.company, self.rejected_companies):
+            self.event(message=f"公司已拒绝过：{matched}", increment_filtered=True, filtered_candidate=candidate)
             return False
         self.event()
         return True

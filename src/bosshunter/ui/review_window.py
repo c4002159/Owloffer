@@ -11,6 +11,7 @@ from bosshunter.config import save_config
 from bosshunter.db import add_history, get_db
 from bosshunter.fill import fill_review_list
 from bosshunter.ui import server_client
+from bosshunter.rejected_companies import apply_rejected_companies, mark_jobs_company_rejected
 from bosshunter.zombie import apply_zombie_filter
 from bosshunter.review_queue import (
     UNCATEGORIZED,
@@ -27,6 +28,7 @@ from bosshunter.review_queue import (
     kind_quotas,
     pending_reply_drafts,
     refresh_recruit_scores,
+    revoke_approval,
     repeat_flags,
     review_pending,
     skip_jobs,
@@ -72,6 +74,7 @@ class ReviewWindow:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=8, pady=8)
         self._build_jobs_tab(notebook)
+        self._build_approved_tab(notebook)
         self._build_replies_tab(notebook)
 
         self.log = tk.StringVar(value="")
@@ -104,9 +107,32 @@ class ReviewWindow:
         ttk.Button(bar, text="通过所选", command=self.approve_selected).pack(side="left", padx=6)
         ttk.Button(bar, text="跳过所选", command=self.skip_selected).pack(side="left")
         ttk.Button(bar, text="拉黑所选公司…", command=self.block_selected_companies).pack(side="left", padx=6)
+        ttk.Button(bar, text="标记公司已拒绝…", command=lambda: self.mark_rejected(self._selected_job_ids())).pack(side="left")
         ttk.Button(bar, text="一键投递已通过岗位", command=self.start_dispatch).pack(side="right")
         self.fill_button = ttk.Button(bar, text=f"补满到 {self.settings['review_cap']} 个", command=self.toggle_fill)
         self.fill_button.pack(side="right", padx=6)
+
+    def _build_approved_tab(self, notebook: ttk.Notebook) -> None:
+        """Approved jobs stay visible here with their state, ready for one-click delivery."""
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="已通过待投递")
+        columns = ("company", "salary", "score", "kind", "state")
+        self.approved_tree = ttk.Treeview(frame, columns=columns, selectmode="extended", height=14)
+        self.approved_tree.heading("#0", text="职位")
+        for key, title, width in (
+            ("company", "公司", 160), ("salary", "薪资", 70), ("score", "综合", 50), ("kind", "类型", 60), ("state", "状态", 130),
+        ):
+            self.approved_tree.heading(key, text=title)
+            self.approved_tree.column(key, width=width, anchor="w")
+        self.approved_tree.column("#0", width=260)
+        self.approved_tree.pack(fill="both", expand=True)
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", pady=(6, 0))
+        ttk.Button(bar, text="撤销通过", command=self.unapprove_selected).pack(side="left")
+        ttk.Button(
+            bar, text="标记公司已拒绝…", command=lambda: self.mark_rejected(list(self.approved_tree.selection()))
+        ).pack(side="left", padx=6)
+        ttk.Button(bar, text="一键投递已通过岗位", command=self.start_dispatch).pack(side="right")
 
     def _build_replies_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
@@ -135,6 +161,7 @@ class ReviewWindow:
         try:
             if self.plan:
                 assign_categories(db, self.plan)
+            apply_rejected_companies(db)
             apply_zombie_filter(db, self.config)
             apply_company_dedup(db, self.config)
             apply_match_gate(db, self.config)
@@ -162,6 +189,20 @@ class ReviewWindow:
         for iid in selected:
             if self.jobs_tree.exists(iid):
                 self.jobs_tree.selection_add(iid)
+
+        selected_approved = set(self.approved_tree.selection())
+        self.approved_tree.delete(*self.approved_tree.get_children())
+        for job in approved:
+            has_greeting = bool(str(job.get("greeting") or "").strip())
+            self.approved_tree.insert(
+                "", "end", iid=str(job["id"]), text=job["title"],
+                values=(job["company"], job.get("salary") or "-", _fmt(job.get("score")),
+                        "实习" if job_kind(job) == "internship" else "全职",
+                        "已确认·招呼语已备" if has_greeting else "已确认·待投递"),
+            )
+        for iid in selected_approved:
+            if self.approved_tree.exists(iid):
+                self.approved_tree.selection_add(iid)
 
         self.drafts = {str(d["history_id"]): d for d in drafts}
         self.reply_tree.delete(*self.reply_tree.get_children())
@@ -193,6 +234,40 @@ class ReviewWindow:
         return [iid for iid in self.jobs_tree.selection() if not iid.startswith("cat:")]
 
     # ---- job actions --------------------------------------------------
+    def unapprove_selected(self) -> None:
+        ids = list(self.approved_tree.selection())
+        if not ids:
+            return
+        db = get_db()
+        try:
+            count = revoke_approval(db, ids)
+        finally:
+            db.close()
+        self.log.set(f"已撤销 {count} 个岗位的通过，回到待审查")
+        self.refresh()
+
+    def mark_rejected(self, job_ids: list[str]) -> None:
+        """These jobs' companies already turned the user down: remember them and never collect them again."""
+        job_ids = [job_id for job_id in job_ids if not str(job_id).startswith("cat:")]
+        if not job_ids:
+            return
+        if not messagebox.askyesno(
+            "标记公司已拒绝",
+            f"把所选 {len(job_ids)} 个岗位的公司标记为“已拒绝”？\n\n"
+            "这些公司会记入数据库：之后采集不再进入岗位池，同公司其他待投递岗位也会被过滤。",
+            parent=self.root,
+        ):
+            return
+        db = get_db()
+        try:
+            result = mark_jobs_company_rejected(db, job_ids)
+        finally:
+            db.close()
+        self.log.set(
+            f"已记录 {len(result['companies'])} 家公司为已拒绝，标记 {result['marked_jobs']} 个岗位，另过滤 {result['hidden_jobs']} 个同公司岗位"
+        )
+        self.refresh()
+
     def approve_everything(self) -> None:
         db = get_db()
         try:
@@ -348,8 +423,38 @@ class ReviewWindow:
             parent=self.root,
         ):
             return
+        # Prefer the dashboard server: the delivery queue then shows up on the dashboard like any other task.
+        started, payload = server_client.start_deliver_approved(tailor_resumes=True)
+        if started:
+            self.dispatching = True
+            self.server_task_id = str(payload.get("id") or "")
+            self.log.set("已在面板里启动投递队列（先定制简历，再按限速发送），仪表盘可看到进度")
+            self.root.after(3000, self._poll_server_delivery)
+            return
+        if payload != "面板服务未运行":
+            messagebox.showwarning("无法投递", str(payload), parent=self.root)
+            return
         self.dispatching = True
+        self.log.set("面板服务未运行，改在本窗口内投递（仪表盘看不到进度）")
         threading.Thread(target=self._dispatch_worker, daemon=True).start()
+
+    def _poll_server_delivery(self) -> None:
+        if not (self.dispatching and self.server_task_id):
+            return
+        active, last = server_client.workbench_tasks()
+        task = active if active and active.get("id") == self.server_task_id else (
+            last if last and last.get("id") == self.server_task_id else None
+        )
+        if task and task.get("logs"):
+            self.log.set(str(task["logs"][-1]))
+        if task is None or task.get("status") not in {"running", "stopping"}:
+            self.dispatching = False
+            self.server_task_id = None
+            if (task or {}).get("error"):
+                self.log.set(f"投递中断：{task['error']}")
+            self.refresh()
+            return
+        self.root.after(3000, self._poll_server_delivery)
 
     def _dispatch_worker(self) -> None:
         try:

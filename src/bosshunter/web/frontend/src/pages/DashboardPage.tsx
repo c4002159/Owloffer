@@ -155,6 +155,16 @@ function taskErrorFeedback(error: string) {
   }
 }
 
+function describeSkipped(result: { skipped_count?: number; skipped_by_status?: Record<string, number> }): string {
+  if (!result?.skipped_count) return ''
+  const labels: Record<string, string> = {
+    filtered: '已过滤', skipped: '已跳过', rejected: '已拒绝', sent: '已投递', pending: '未评分',
+    greeting_review: '招呼语待选择', no_greeting: '缺招呼语',
+  }
+  const detail = Object.entries(result.skipped_by_status || {}).map(([key, value]) => `${labels[key] || key} ${value}`).join('，')
+  return `（已忽略 ${result.skipped_count} 个不可投递的岗位${detail ? `：${detail}` : ''}）`
+}
+
 interface DashboardPageProps {
   view?: DashboardView
 }
@@ -196,6 +206,7 @@ const statItems = [
   { key: '初筛通过', todayLabel: '今日初筛通过', totalLabel: '累计初筛通过', highlight: true },
   { key: 'AI评分', todayLabel: '今日 AI 评分', totalLabel: '累计 AI 评分' },
   { key: 'pending', todayLabel: '当前待确认', totalLabel: '当前待确认', highlight: true, current: true },
+  { key: 'approved_unsent', todayLabel: '已确认待投递', totalLabel: '已确认待投递', highlight: true, current: true },
   { key: '发送', todayLabel: '今日已投递', totalLabel: '累计已投递', highlight: true },
 ]
 
@@ -1071,14 +1082,18 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
           {statItems.map(item => {
-            const currentValue = workbench.pending_confirmation.length
+            // 待确认只数还没通过的；已通过的单独显示在“已确认待投递”。
+            const approvedWaitingCount = workbench.pending_confirmation.filter(job => job.status === 'approved').length
+            const currentValue = item.key === 'approved_unsent'
+              ? (workbench.approved_unsent?.length ?? 0)
+              : workbench.pending_confirmation.length - approvedWaitingCount
             const selectedFunnel = statsScope === 'today' ? workbench.funnel_today : workbench.funnel
             const alternateFunnel = statsScope === 'today' ? workbench.funnel : workbench.funnel_today
             const value = item.current ? currentValue : (selectedFunnel[item.key] || 0)
             const supportingText = item.current
-              ? '实时待处理数量'
+              ? (item.key === 'approved_unsent' ? '已通过，可一键投递' : '实时待处理数量')
               : `${statsScope === 'today' ? '累计' : '今日'} ${alternateFunnel[item.key] || 0}`
             return (
               <div key={item.key} className="rounded-2xl border border-card-border bg-card p-4">
@@ -1727,6 +1742,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const pageSize = 15
   const [page, setPage] = useState(0)
   const [filters, setFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
+  const [hideHandled, setHideHandled] = useState(true)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [blockedCompanies, setBlockedCompanies] = useState<string[]>([])
@@ -1742,7 +1758,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [recycleLoading, setRecycleLoading] = useState(false)
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
-  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder)
+  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled)
   const { workbench: deliveryWorkbench } = useDashboard('workbench')
   const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
     ? deliveryWorkbench.task
@@ -1946,18 +1962,43 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     const count = selectedIds.length
     if (!window.confirm(`确认投递已选择的 ${count} 个岗位吗？仅 BOSS 岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。`)) return
     try {
-      const result = await postJobAction('/api/workbench/deliver', { job_ids: selectedIds })
+      const result = await postJobAction('/api/workbench/deliver', { job_ids: selectedIds, skip_invalid: true })
       setSelectedIds([])
       refreshJobs()
+      const skippedText = describeSkipped(result)
       setNotice(
-        result.already_queued_count === count
+        (result.already_queued_count === count
           ? `所选 ${count} 个岗位已在当前发送队列中。`
           : result.queued_count
             ? `已将 ${result.queued_count} 个岗位追加到当前发送队列。`
-            : `已确认投递 ${count} 个岗位，后端会按安全队列推进。`
+            : `已确认投递 ${count - (result.skipped_count || 0)} 个岗位，后端会按安全队列推进。`) + skippedText
       )
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : '一键投递失败')
+    }
+  }
+
+  const deliverAllApproved = async () => {
+    if (!window.confirm('确认投递所有已通过的岗位吗？不用逐个勾选；仅 BOSS 岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。')) return
+    try {
+      const result = await postJobAction('/api/workbench/deliver', { scope: 'approved' })
+      refreshJobs()
+      setNotice(`已开始投递已通过的岗位，后端会按安全队列推进。${describeSkipped(result)}`)
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '一键投递失败')
+    }
+  }
+
+  const markCompaniesRejected = async () => {
+    if (!selectedIds.length) return
+    if (!window.confirm(`确认把所选 ${selectedIds.length} 个岗位的公司标记为“已拒绝”吗？\n这些公司会记入数据库，之后采集时不再进入岗位池，同公司其他待投递岗位也会被过滤。`)) return
+    try {
+      const result = await postJobAction('/api/companies/rejected', { job_ids: selectedIds })
+      setSelectedIds([])
+      refreshJobs()
+      setNotice(`已记录 ${result.companies?.length || 0} 家公司为已拒绝，标记 ${result.marked_jobs || 0} 个岗位，另过滤 ${result.hidden_jobs || 0} 个同公司待投递岗位。`)
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '标记失败')
     }
   }
 
@@ -2137,6 +2178,10 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         cityOptions={cityOptions}
       />
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+        <label className="flex cursor-pointer items-center gap-1.5 rounded-full border border-card-border bg-card px-3 py-2 font-bold text-foreground" title="同一家公司只要有岗位已通过、已投递或已拒绝，它的其他岗位就先隐藏（这家公司已处理的岗位本身仍显示）">
+          <input type="checkbox" className="accent-primary" checked={hideHandled} onChange={event => { setHideHandled(event.target.checked); setPage(0) }} />
+          隐藏已处理公司的其他岗位
+        </label>
         <Button variant="secondary" size="sm" disabled={!items.length} onClick={toggleCurrentPage}>
           {allPageSelected ? '取消选择本页' : '选择本页'}
         </Button>
@@ -2145,6 +2190,12 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
         <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
           <Send className="mr-1 h-4 w-4" />BOSS 一键投递已选
+        </Button>
+        <Button size="sm" onClick={() => void deliverAllApproved()}>
+          <Send className="mr-1 h-4 w-4" />投递全部已通过
+        </Button>
+        <Button variant="secondary" size="sm" disabled={!selectedIds.length} onClick={() => void markCompaniesRejected()}>
+          标记公司已拒绝
         </Button>
         <Button size="sm" onClick={() => void startQuickScoring()} disabled={quickScoring || !total}>
           {quickScoring ? '启动评分中…' : '一键 AI 评分'}

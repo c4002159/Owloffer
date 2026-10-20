@@ -815,6 +815,8 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 
 	current_config = config
 	try:
+		if config.get("_workbench_tailor_resumes"):
+			_tailor_resumes_for_delivery(task, config)
 		while not task.stop_requested.is_set():
 			_execute_deliver_batch(task, current_config)
 			if task.stop_requested.is_set():
@@ -834,6 +836,45 @@ def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
 			task.context["delivering"] = False
 			task.context.pop("delivery_scheduled_ids", None)
 			task.context.pop("pending_deliveries", None)
+
+
+def _tailor_resumes_for_delivery(task: WorkbenchTask, config: dict) -> None:
+	"""Generate a job-specific resume for every job about to be delivered (skips jobs that already have one)."""
+	from bosshunter.ai.resume import generate_tailored_resume, get_last_resume_failure_reason
+
+	job_ids = [str(job_id) for job_id in config.get("_workbench_job_ids", []) if str(job_id)]
+	db = _get_web_db()
+	try:
+		placeholders = ",".join("?" for _ in job_ids) or "''"
+		done = {
+			str(row["id"]) for row in db.execute(
+				f"SELECT id FROM jobs WHERE id IN ({placeholders}) AND COALESCE(TRIM(resume_path), '') != ''", job_ids
+			).fetchall()
+		}
+	finally:
+		db.close()
+	todo = [job_id for job_id in job_ids if job_id not in done]
+	_log(task, f"定制简历：{len(todo)} 个岗位需要生成，{len(done)} 个已有")
+	made = failed = 0
+	for index, job_id in enumerate(todo, 1):
+		if task.stop_requested.is_set():
+			return
+		try:
+			path = generate_tailored_resume(job_id, config)
+		except Exception as exc:  # one failed resume must not block the delivery batch
+			path = None
+			_log(task, f"  简历生成异常：{type(exc).__name__}")
+		if path:
+			made += 1
+		else:
+			failed += 1
+			reason = get_last_resume_failure_reason(job_id)
+			if reason:
+				_log(task, f"  简历生成失败：{reason}")
+		if index % 5 == 0 or index == len(todo):
+			_log(task, f"  定制简历进度 {index}/{len(todo)}")
+	task.metrics.update({"resume_generated": made, "resume_failed": failed})
+	_log(task, f"定制简历完成：成功 {made}，失败 {failed}（失败的岗位仍会用默认简历继续投递流程）")
 
 
 def _stop_for_active_platform_lock(task: WorkbenchTask) -> bool:
@@ -1314,6 +1355,8 @@ def api_job_search():
 		rows = [dict(row) for row in db.execute(query, params).fetchall()]
 		if blocked_companies:
 			rows = [row for row in rows if matching_blocked_company(row.get("company", ""), blocked_companies) is None]
+		if request.params.get("hide_handled") in {"1", "true", "yes"}:
+			rows = _hide_handled_company_rows(db, rows)
 		if salary_min is not None or salary_max is not None:
 			filtered_rows = []
 			for row in rows:
@@ -1338,6 +1381,36 @@ def api_job_search():
 		})
 	finally:
 		db.close()
+
+
+HANDLED_STATUSES = {
+	"approved", "sent", "replied", "resume_sent", "needs_resume", "follow_up_sent", "rejected",
+}
+
+
+def _hide_handled_company_rows(db, rows: list[dict]) -> list[dict]:
+	"""Drop pool rows of a company that was already approved, delivered, rejected or marked as rejecting us.
+
+	A job that is itself in a handled state stays visible, so the pool still shows what was done.
+	"""
+	from bosshunter.company_dedup import same_company
+	from bosshunter.rejected_companies import rejected_names
+
+	placeholders = ",".join("?" for _ in HANDLED_STATUSES)
+	handled = [
+		str(row["company"]) for row in db.execute(
+			f"SELECT DISTINCT company FROM jobs WHERE deleted_at IS NULL AND status IN ({placeholders})",
+			tuple(HANDLED_STATUSES),
+		).fetchall()
+	]
+	handled += rejected_names(db)
+	if not handled:
+		return rows
+	return [
+		row for row in rows
+		if str(row.get("status") or "") in HANDLED_STATUSES
+		or not any(same_company(row.get("company"), name) for name in handled)
+	]
 
 
 @app.route("/api/top-companies")
@@ -1507,6 +1580,12 @@ def api_workbench():
 				_serialize_job(job) for job in get_jobs_pending_confirmation(db)
 				if int(job.get("score") or 0) >= threshold
 				and platform_supports(str(job.get("source_platform") or "boss"), "deliver")
+			],
+			"approved_unsent": [
+				_serialize_job(job) for job in db.execute(
+					"SELECT * FROM jobs WHERE deleted_at IS NULL AND status = 'approved' ORDER BY score DESC"
+				).fetchall()
+				if platform_supports(str(job["source_platform"] or "boss"), "deliver")
 			],
 			"pending_greetings": [
 				_serialize_job(job) for job in get_jobs_ready_to_send(db, include_pending_review=True)
@@ -1871,8 +1950,23 @@ def api_workbench_deliver():
 	try:
 		body = request.json or {}
 		job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
+		scope_approved = body.get("scope") == "approved"
+		if scope_approved:
+			# Deliver every job the user already approved (review window or dashboard), no ticking needed.
+			scope_db = _get_web_db()
+			try:
+				job_ids = [
+					str(row["id"]) for row in scope_db.execute(
+						"SELECT id FROM jobs WHERE deleted_at IS NULL AND status = 'approved' ORDER BY score DESC"
+					).fetchall()
+				]
+			finally:
+				scope_db.close()
+			if not job_ids:
+				return _json_response({"error": "没有已通过、待投递的岗位"}, 400)
 		if not job_ids:
 			return _json_response({"error": "请选择要投递的岗位"}, 400)
+		skip_invalid = bool(body.get("skip_invalid")) or scope_approved
 		direct_send = bool(body.get("direct_send"))
 		if not direct_send:
 			from bosshunter.ai.greeter import greeting_config_error
@@ -1909,6 +2003,42 @@ def api_workbench_deliver():
 					"unsupported_platform": "unknown",
 					"invalid_ids": unsupported,
 				}, 403)
+			skipped_info = None
+			if skip_invalid:
+				allowed_now = {"ready", "approved", "error"} if direct_send else {"ready", "approved"}
+				keep_ids: list[str] = []
+				skipped_by_status: dict[str, int] = {}
+				for row in platform_rows:
+					status_text = str(row["status"] or "")
+					reason = None
+					if status_text not in allowed_now:
+						reason = status_text or "unknown"
+					elif str(row["greeting_selection"] or "") == "pending":
+						reason = "greeting_review"
+					elif direct_send and not str(row["greeting"] or "").strip():
+						reason = "no_greeting"
+					if reason:
+						skipped_by_status[reason] = skipped_by_status.get(reason, 0) + 1
+					else:
+						keep_ids.append(str(row["id"]))
+				if not keep_ids:
+					return _json_response({
+						"error": "所选岗位里没有可投递的岗位：只有“已通过/待确认”的岗位能投递（已过滤、已跳过、已投递的会被忽略）",
+						"skipped_by_status": skipped_by_status,
+					}, 409)
+				skipped_info = {
+					"skipped_count": len(platform_rows) - len(keep_ids),
+					"skipped_by_status": skipped_by_status,
+				}
+				keep_set = set(keep_ids)
+				job_ids = keep_ids
+				platform_rows = [row for row in platform_rows if str(row["id"]) in keep_set]
+
+			def respond(payload):
+				if skipped_info and isinstance(payload, dict):
+					payload = {**payload, **skipped_info}
+				return _json_response(payload)
+
 			pending_review_ids = [
 				str(row["id"])
 				for row in platform_rows
@@ -2013,7 +2143,7 @@ def api_workbench_deliver():
 				db.close()
 
 			if queued_payload is not None:
-				return _json_response(queued_payload)
+				return respond(queued_payload)
 
 			if waiting_task:
 				waiting_task.context["confirmed_job_ids"] = job_ids
@@ -2021,10 +2151,10 @@ def api_workbench_deliver():
 				confirmation_event = waiting_task.context.get("confirmation_event")
 				if isinstance(confirmation_event, Event):
 					confirmation_event.set()
-				return _json_response(waiting_task.snapshot())
+				return respond(waiting_task.snapshot())
 
 			if monitoring_task:
-				return _json_response(
+				return respond(
 					_queue_monitor_delivery(
 						monitoring_task,
 						job_ids,
@@ -2033,13 +2163,15 @@ def api_workbench_deliver():
 				)
 
 			deliver_options = {"_workbench_job_ids": job_ids}
+			if body.get("tailor_resumes"):
+				deliver_options["_workbench_tailor_resumes"] = True
 			if direct_send:
 				# The greeting is already finalized on the review card. Keep direct
 				# send separate from generation so a click cannot replace the text or
 				# move the job back into greeting review.
 				deliver_options["_workbench_skip_greeting"] = True
 			task = task_runner.start("deliver", _task_config(deliver_options))
-			return _json_response(task)
+			return respond(task)
 	except TaskAlreadyRunningError as e:
 		return _json_response({"error": str(e)}, 409)
 	except Exception as e:
@@ -2645,6 +2777,48 @@ def api_company_suggestions():
 		return _json_response({"suggestions": company_suggestions(db, blocked)})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/companies/rejected")
+def api_rejected_companies_list():
+	db = _get_web_db()
+	try:
+		from bosshunter.rejected_companies import list_rejected
+
+		return _json_response({"companies": list_rejected(db)})
+	finally:
+		db.close()
+
+
+@app.route("/api/companies/rejected", method="POST")
+def api_rejected_companies_mark():
+	"""The companies of the given jobs turned the user down: remember them and stop collecting them."""
+	body = request.json or {}
+	job_ids = [str(job_id) for job_id in body.get("job_ids", []) if str(job_id)]
+	if not job_ids:
+		return _json_response({"error": "请选择岗位"}, 400)
+	with job_mutation_lock:
+		db = _get_web_db()
+		try:
+			from bosshunter.rejected_companies import mark_jobs_company_rejected
+
+			return _json_response(mark_jobs_company_rejected(db, job_ids))
+		finally:
+			db.close()
+
+
+@app.route("/api/companies/rejected", method="DELETE")
+def api_rejected_companies_remove():
+	company = str(request.query.get("company") or "").strip()
+	db = _get_web_db()
+	try:
+		from bosshunter.rejected_companies import remove_rejected
+
+		if not company or not remove_rejected(db, company):
+			return _json_response({"error": "未找到这家公司"}, 404)
+		return _json_response({"success": True})
 	finally:
 		db.close()
 

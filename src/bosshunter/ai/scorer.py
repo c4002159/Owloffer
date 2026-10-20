@@ -13,6 +13,7 @@ from bosshunter.ai.prefilter import _parse_salary_range_k, quick_score
 from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, passes_match_gate, recruit_weight
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.company_dedup import cooldown_days, duplicate_of_approved_today
+from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
     add_history,
@@ -818,8 +819,11 @@ def score_jobs(
             for job in pending_jobs:
                 if stop_event is not None and stop_event.is_set():
                     break
+                rejected_by = is_rejected_company(job.get("company"), rejected_names(db))
                 duplicate_of = duplicate_of_approved_today(db, job, cooldown_days(config))
-                if duplicate_of:
+                if rejected_by:
+                    qs, qs_reason = 0, f"公司已拒绝过：{rejected_by}"
+                elif duplicate_of:
                     qs, qs_reason = 0, f"与近期已通过的公司重复：{duplicate_of}"
                 else:
                     qs, qs_reason = quick_score(job, config)

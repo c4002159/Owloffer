@@ -114,6 +114,20 @@ def approve_jobs(conn: sqlite3.Connection, job_ids: list[str], note: str = "审�
     return changed
 
 
+def revoke_approval(conn: sqlite3.Connection, job_ids: list[str]) -> int:
+    """Put approved, unsent jobs back into the review list."""
+    changed = 0
+    for job_id in job_ids:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+        ).fetchone()
+        if row and row["status"] == "approved":
+            update_job_status(conn, job_id, "ready")
+            add_history(conn, job_id, "status_changed", "审查窗口撤销通过")
+            changed += 1
+    return changed
+
+
 def skip_jobs(conn: sqlite3.Connection, job_ids: list[str]) -> int:
     changed = 0
     for job_id in job_ids:

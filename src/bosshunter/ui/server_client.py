@@ -53,6 +53,20 @@ def start_task(mode: str, port: int = DEFAULT_PORT) -> tuple[bool, dict | str]:
     return False, detail or f"启动失败（HTTP {status}）"
 
 
+def start_deliver_approved(*, tailor_resumes: bool = True, port: int = DEFAULT_PORT) -> tuple[bool, dict | str]:
+    """Deliver every approved job through the dashboard's delivery queue (optionally tailoring resumes first)."""
+    status, payload = _call(
+        "POST", "/api/workbench/deliver", {"scope": "approved", "tailor_resumes": tailor_resumes},
+        port=port, timeout=30,
+    )
+    if status == 0:
+        return False, "面板服务未运行"
+    if status == 200 and isinstance(payload, dict):
+        return True, payload
+    detail = str(payload.get("error")) if isinstance(payload, dict) and payload.get("error") else f"启动失败（HTTP {status}）"
+    return False, detail
+
+
 def workbench_tasks(port: int = DEFAULT_PORT) -> tuple[dict | None, dict | None]:
     """(active task, last task) from the dashboard, or (None, None) when unreachable."""
     status, payload = _call("GET", "/api/workbench", port=port, timeout=6)

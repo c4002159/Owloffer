@@ -23,6 +23,7 @@ from bosshunter.db import get_db, insert_job, job_exists, record_sighting, recom
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.outsourcing import load_rules
 from bosshunter.platform_safety import PlatformSafetyStop
+from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.throttle import PageThrottle
 
 console = Console()
@@ -94,6 +95,7 @@ def _scrape_jobs_impl(
     profile = config.get("profile", {}) if isinstance(config.get("profile"), dict) else {}
     outsourcing_rules = load_rules(config)
     recompute_outsourcing(db, outsourcing_rules)
+    rejected = rejected_names(db)
 
     def emit() -> None:
         if callable(progress_callback):
@@ -111,6 +113,10 @@ def _scrape_jobs_impl(
             emit()
             return False
         if matching_blocked_company(candidate.company, profile.get("blocked_companies", [])):
+            counts["filtered"] += 1
+            emit()
+            return False
+        if is_rejected_company(candidate.company, rejected):
             counts["filtered"] += 1
             emit()
             return False

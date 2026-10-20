@@ -109,6 +109,7 @@ interface WorkbenchData {
   funnel: FunnelData
   funnel_today: FunnelData
   pending_confirmation: Job[]
+  approved_unsent: Job[]
   pending_greetings: Job[]
   send_errors: Job[]
   needs_resume: Job[]
@@ -152,6 +153,7 @@ const emptyWorkbench: WorkbenchData = {
   funnel: {},
   funnel_today: {},
   pending_confirmation: [],
+  approved_unsent: [],
   pending_greetings: [],
   send_errors: [],
   needs_resume: [],
