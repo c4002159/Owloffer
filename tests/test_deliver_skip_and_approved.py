@@ -159,3 +159,39 @@ def test_pool_search_hides_companies_that_rejected_us(base_dir):
     assert "x1" not in {item["id"] for item in hidden["items"]}
     _, shown = _request("/api/jobs/search?limit=50")
     assert "x1" in {item["id"] for item in shown["items"]}
+
+
+def _running_delivery_task(monkeypatch, scheduled, confirmed=()):
+    from bosshunter.web.tasks import WorkbenchTask
+
+    task = WorkbenchTask(id="deliver-1", mode="deliver", label="确认投递")
+    task.context["delivery_scheduled_ids"] = set(scheduled)
+    if confirmed:
+        task.context["confirmed_job_ids"] = list(confirmed)
+    monkeypatch.setattr(server.task_runner, "_tasks", {task.id: task})
+    return task
+
+
+def test_active_delivery_job_ids_lists_queued_jobs_of_the_running_task(monkeypatch):
+    _running_delivery_task(monkeypatch, {"b", "a"}, confirmed=["c"])
+    assert server._active_delivery_job_ids(server.task_runner.status()) == ["a", "b", "c"]
+
+
+def test_active_delivery_job_ids_is_empty_without_a_running_task(monkeypatch):
+    task = _running_delivery_task(monkeypatch, {"a"})
+    task.status = "completed"
+    assert server._active_delivery_job_ids(server.task_runner.status()) == []
+    monkeypatch.setattr(server.task_runner, "_tasks", {})
+    assert server._active_delivery_job_ids(server.task_runner.status()) == []
+
+
+def test_workbench_payload_carries_delivery_job_ids(base_dir, monkeypatch):
+    task = _running_delivery_task(monkeypatch, {"ok1", "ok2"})
+    # The fixture replaced status() with an idle runner; report the running task instead.
+    monkeypatch.setattr(
+        server.task_runner, "status",
+        lambda: {"active": task.snapshot(), "last_task": task.snapshot(), "tasks": [task.snapshot()]},
+    )
+    status, payload = _request("/api/workbench")
+    assert status.startswith("200")
+    assert payload["delivery_job_ids"] == ["ok1", "ok2"]

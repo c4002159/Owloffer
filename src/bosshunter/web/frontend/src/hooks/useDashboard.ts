@@ -110,6 +110,7 @@ interface WorkbenchData {
   funnel_today: FunnelData
   pending_confirmation: Job[]
   approved_unsent: Job[]
+  delivery_job_ids?: string[]
   pending_greetings: Job[]
   send_errors: Job[]
   needs_resume: Job[]

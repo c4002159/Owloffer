@@ -1561,6 +1561,23 @@ def api_history_prepare_reply(history_id):
 		return _json_response({"success": True, "summary": summary})
 
 
+def _active_delivery_job_ids(status: dict) -> list[str]:
+	"""Jobs queued or being delivered by the running task; the pool greys these out."""
+	active = status.get("active") or {}
+	runtime = task_runner._tasks.get(active.get("id"))
+	if not runtime or runtime.status not in {"running", "stopping"}:
+		return []
+	ids: set[str] = set()
+	for key in ("delivery_scheduled_ids", "confirmed_job_ids"):
+		for _attempt in range(3):  # the worker thread may update the set while we copy it
+			try:
+				ids.update(str(job_id) for job_id in list(runtime.context.get(key) or ()))
+				break
+			except RuntimeError:
+				continue
+	return sorted(ids)
+
+
 @app.route("/api/workbench")
 def api_workbench():
 	db = _get_web_db()
@@ -1574,6 +1591,7 @@ def api_workbench():
 		today_sent = int(today_sent_row["cnt"] if today_sent_row else 0)
 		status = task_runner.status()
 		return _json_response({
+			"delivery_job_ids": _active_delivery_job_ids(status),
 			"funnel": get_funnel_stats(db),
 			"funnel_today": get_funnel_stats(db, today=True),
 			"pending_confirmation": [

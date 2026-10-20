@@ -23,6 +23,7 @@ interface JobsTableProps {
   onBlockCompany?: (job: Job) => void
   blockedCompanies?: string[]
   blockingJobId?: string | null
+  busyIds?: string[]
   loading?: boolean
   sortBy: JobSortKey
   sortOrder: JobSortOrder
@@ -70,7 +71,7 @@ function statusVariant(status: string) {
   return variants.has(status) ? status : 'default'
 }
 
-export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, onMarkManuallySent, onStatusChange, onBlockCompany, blockedCompanies = [], blockingJobId = null, loading = false, sortBy, sortOrder, onSortChange }: JobsTableProps) {
+export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, onMarkManuallySent, onStatusChange, onBlockCompany, blockedCompanies = [], blockingJobId = null, busyIds = [], loading = false, sortBy, sortOrder, onSortChange }: JobsTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [pageInput, setPageInput] = useState(String(page + 1))
   const totalPages = Math.ceil(total / pageSize)
@@ -150,18 +151,23 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                 const isExternalPlatform = job.source_platform === 'zhilian' || job.source_platform === '51job' || job.source_platform === 'liepin'
                 const jobUrl = safeJobUrl(job)
                 const alreadySent = ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent'].includes(job.status)
+                // 正在投递或排在投递队列里：整行变灰，不能再选、不能再操作。
+                const inDelivery = !alreadySent && busyIds.includes(job.id)
                 const company = (job.company || '').trim()
                 const blockedRule = blockedCompanies.find(rule => rule.trim() && company.toLowerCase().includes(rule.trim().toLowerCase()))
                 return (
                   <Fragment key={job.id}>
                     <tr
-                      className="cursor-pointer border-b border-card-border bg-card transition-colors hover:bg-surface"
+                      aria-disabled={inDelivery || undefined}
+                      title={inDelivery ? '正在投递或在投递队列中，完成前不能操作' : undefined}
+                      className={`border-b border-card-border bg-card transition-colors ${inDelivery ? 'pointer-events-none opacity-45 grayscale' : 'cursor-pointer hover:bg-surface'}`}
                       onClick={() => setExpanded(isExpanded ? null : job.id)}
                     >
                       <td className="px-3 py-3 text-center" onClick={event => event.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={selectedIds.includes(job.id)}
+                          disabled={inDelivery}
                           onChange={() => onToggleSelected(job.id)}
                           aria-label={`选择 ${job.company} ${job.title}`}
                           className="h-4 w-4 accent-primary"
@@ -192,7 +198,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         <span className={`font-mono font-black ${getScoreColor(job.score)}`}>{job.score || '-'}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusVariant(job.status) as any}>{getStatusLabel(job.status)}</Badge>
+                        <Badge variant={statusVariant(job.status) as any}>{inDelivery ? '投递队列中' : getStatusLabel(job.status)}</Badge>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted">{job.hr_active || '活跃度未知'}</td>
                       <td className="px-4 py-3 text-xs text-muted">

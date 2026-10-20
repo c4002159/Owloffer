@@ -1838,13 +1838,25 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     setPage(0)
   }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType])
 
+  const busyIds = useMemo(() => deliveryWorkbench.delivery_job_ids ?? [], [deliveryWorkbench.delivery_job_ids])
+  useEffect(() => {
+    // 刚进入投递队列的岗位从已选里去掉，避免重复投递。
+    if (!busyIds.length) return
+    setSelectedIds(previous => {
+      const next = previous.filter(id => !busyIds.includes(id))
+      return next.length === previous.length ? previous : next
+    })
+  }, [busyIds])
+
   const toggleSelected = (jobId: string) => {
+    if (busyIds.includes(jobId)) return
     setSelectedIds(previous => previous.includes(jobId) ? previous.filter(id => id !== jobId) : [...previous, jobId])
   }
 
-  const allPageSelected = items.length > 0 && items.every(job => selectedIds.includes(job.id))
+  const selectableItems = items.filter(job => !busyIds.includes(job.id))
+  const allPageSelected = selectableItems.length > 0 && selectableItems.every(job => selectedIds.includes(job.id))
   const toggleCurrentPage = () => {
-    const pageIds = new Set(items.map(job => job.id))
+    const pageIds = new Set(selectableItems.map(job => job.id))
     setSelectedIds(previous => allPageSelected
       ? previous.filter(id => !pageIds.has(id))
       : [...new Set([...previous, ...pageIds])])
@@ -2305,6 +2317,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         onBlockCompany={job => void blockCompany(job)}
         blockedCompanies={blockedCompanies}
         blockingJobId={blockingJobId}
+        busyIds={busyIds}
         loading={loading}
         sortBy={sortBy}
         sortOrder={sortOrder}
