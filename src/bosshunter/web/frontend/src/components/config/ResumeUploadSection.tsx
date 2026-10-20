@@ -159,7 +159,7 @@ export function ResumeUploadSection({ currentResumePath = '', updateConfig }: Re
 
   return (
     <div>
-      <label className="mb-2 block text-xs text-foreground">简历文件</label>
+      <label className="mb-2 block text-xs text-foreground">简历文件（默认简历：没有匹配方向时使用）</label>
       {resumeInfo ? (
         <ResumeFileCard
           info={resumeInfo}

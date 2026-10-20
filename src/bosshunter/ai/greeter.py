@@ -104,6 +104,21 @@ def _get_resume_summary(config: dict) -> str:
     return _get_resume_text(config)
 
 
+def _job_resume_summary(config: dict, job: dict, default_summary: str) -> str:
+    """Resume text for one job: the direction-specific resume when one matches, else the default."""
+    from bosshunter.ai.keywords import load_plan
+    from bosshunter.resumes import read_resume_for_job, resume_path_for_job
+
+    plan = load_plan(Path("."))
+    if str(resume_path_for_job(config, job, plan)) == str((config.get("profile") or {}).get("resume_path") or "./resume.md"):
+        return default_summary
+    text = read_resume_for_job(config, job, plan)
+    if not text:
+        return default_summary
+    context = _parse_graduation_context(text)
+    return f"{context}\n\n{text}" if context else text
+
+
 _GRADUATION_RANGE_RE = re.compile(
     r"(20\d{2})\s*[年./-]\s*(\d{1,2})\s*(?:月)?\s*(?:至|到|-|—|~|～)\s*"
     r"(20\d{2})\s*[年./-]\s*(\d{1,2})\s*(?:月)?"
@@ -805,7 +820,7 @@ def generate_greetings(config: dict, job_ids: list[str] | None = None, db_path=N
                     continue
                 try:
                     greeting = (
-                        _generate_with_token_retry(job, resume_summary, config, "", recent_openings)
+                        _generate_with_token_retry(job, _job_resume_summary(config, job, resume_summary), config, "", recent_openings)
                         if ai_enabled else fixed_greeting
                     )
                 except OperationCancelled:

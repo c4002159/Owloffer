@@ -3433,6 +3433,156 @@ def api_resume_delete():
 		return _json_response({"error": str(e)}, 500)
 
 
+# ─── Direction resumes (several resumes, picked per job) ───
+
+def _extra_resume_entry(config: dict, raw_path: str):
+	"""The configured extra-resume entry whose path matches ``raw_path`` (security: only configured files)."""
+	from bosshunter.resumes import extra_resumes
+
+	try:
+		wanted = resolve_resume_filesystem_path(raw_path, BASE_DIR)
+	except (OSError, ValueError):
+		return None
+	for entry in extra_resumes(config):
+		try:
+			if resolve_resume_filesystem_path(entry["path"], BASE_DIR) == wanted:
+				return entry
+		except (OSError, ValueError):
+			continue
+	return None
+
+
+def _form_text(name: str) -> str:
+	"""Form field text; undo a latin-1 mis-decode when the browser sent raw UTF-8 bytes."""
+	raw = str(request.forms.get(name) or "")
+	if raw and all(ord(ch) < 256 for ch in raw):
+		try:
+			return raw.encode("latin-1").decode("utf-8")
+		except UnicodeError:
+			return raw
+	return raw
+
+
+@app.route("/api/resumes")
+def api_resumes_list():
+	try:
+		from urllib.parse import quote
+
+		from bosshunter.ai.keywords import load_plan
+		from bosshunter.resumes import extra_resumes
+
+		config = load_config(CONFIG_PATH)
+		items = []
+		for entry in extra_resumes(config):
+			info = load_resume_info(resolve_resume_filesystem_path(entry["path"], BASE_DIR))
+			if info is None:
+				continue
+			info.pop("content", None)
+			if info.get("has_original_pdf"):
+				info["original_preview_url"] = "/api/resumes/original?path=" + quote(str(info["path"]), safe="")
+			info["direction"] = entry["direction"]
+			items.append(info)
+		plan = load_plan(BASE_DIR) or {}
+		directions = [d.get("name") for d in plan.get("directions", []) if d.get("name")]
+		return _json_response({"resumes": items, "directions": directions})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/resumes/upload", method="POST")
+def api_resumes_upload():
+	"""Add a direction resume without replacing the default one."""
+	try:
+		upload = request.files.get("file")
+		if not upload:
+			return _json_response({"error": "No file uploaded"}, 400)
+		content = upload.file.read()
+		if len(content) > 10 * 1024 * 1024:
+			return _json_response({"error": "文件大小超过 10MB 限制"}, 400)
+		direction = _form_text("direction").strip()[:60]
+		raw_name = upload.raw_filename or upload.filename
+		safe_name, stored_content = prepare_resume_content(raw_name, content)
+		RESUME_DIR.mkdir(parents=True, exist_ok=True)
+		config = load_config(CONFIG_PATH)
+		primary = resolve_active_resume_path(config.get("profile", {}).get("resume_path") or None, BASE_DIR)
+		final_name = select_resume_markdown_filename(RESUME_DIR, safe_name, stored_content, primary)
+		dest = RESUME_DIR / final_name
+		original_pdf_bytes = content if upload_keeps_original_pdf(raw_name) else None
+		write_resume_artifacts(dest, stored_content, original_pdf_bytes=original_pdf_bytes)
+
+		profile = config.setdefault("profile", {})
+		entries = [e for e in (profile.get("resumes") or []) if isinstance(e, dict)]
+		stored_path = str(dest.resolve())
+		entries = [e for e in entries if str(e.get("path")) != stored_path]
+		entries.append({"path": stored_path, "direction": direction})
+		profile["resumes"] = entries
+		if not str(profile.get("resume_path") or "").strip():
+			profile["resume_path"] = stored_path
+		_write_config(config)
+		return _json_response({"success": True, "path": stored_path, "direction": direction})
+	except ResumeUploadError as e:
+		return _json_response({"error": str(e)}, 400)
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/resumes", method="PATCH")
+def api_resumes_patch():
+	"""Change the direction of a configured extra resume."""
+	try:
+		body = request.json or {}
+		config = load_config(CONFIG_PATH)
+		entry = _extra_resume_entry(config, str(body.get("path") or ""))
+		if entry is None:
+			return _json_response({"error": "未找到这份方向简历"}, 404)
+		entry["direction"] = str(body.get("direction") or "").strip()[:60]
+		profile = config.setdefault("profile", {})
+		profile["resumes"] = [
+			{"path": e["path"], "direction": entry["direction"] if e["path"] == entry["path"] else e["direction"]}
+			for e in profile.get("resumes") or [] if isinstance(e, dict)
+		]
+		_write_config(config)
+		return _json_response({"success": True})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/resumes", method="DELETE")
+def api_resumes_delete():
+	"""Detach a direction resume (the file stays on disk)."""
+	try:
+		config = load_config(CONFIG_PATH)
+		entry = _extra_resume_entry(config, str(request.query.get("path") or ""))
+		if entry is None:
+			return _json_response({"error": "未找到这份方向简历"}, 404)
+		profile = config.setdefault("profile", {})
+		profile["resumes"] = [
+			e for e in profile.get("resumes") or [] if isinstance(e, dict) and e.get("path") != entry["path"]
+		]
+		_write_config(config)
+		return _json_response({"success": True})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/resumes/original")
+def api_resumes_original():
+	try:
+		config = load_config(CONFIG_PATH)
+		entry = _extra_resume_entry(config, str(request.query.get("path") or ""))
+		if entry is None:
+			abort(404, "Resume not configured")
+		configured = resolve_resume_filesystem_path(entry["path"], BASE_DIR)
+		_, pdf_path = resolve_configured_resume_files(configured)
+		if not pdf_path.is_file():
+			abort(404, "Original PDF not found")
+		return static_file(pdf_path.name, root=str(pdf_path.parent), mimetype="application/pdf")
+	except HTTPResponse:
+		raise
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
 # ─── Static Files + SPA Fallback ─────────────────────────
 
 _STATIC_MIME_TYPES = {

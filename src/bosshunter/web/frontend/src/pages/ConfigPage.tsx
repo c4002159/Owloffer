@@ -7,6 +7,7 @@ import { Slider } from '@/components/ui/slider'
 import { TagsInput } from '@/components/ui/tags-input'
 import { CityMultiSelect, type CityOption } from '@/components/config/CityMultiSelect'
 import { ResumeUploadSection } from '@/components/config/ResumeUploadSection'
+import { ExtraResumesSection } from '@/components/config/ExtraResumesSection'
 import { BlockedCompaniesDialog } from '@/components/config/BlockedCompaniesDialog'
 import { KeywordRecommendations } from '@/components/config/KeywordRecommendations'
 import { SendWindowsInput, sendWindowsError } from '@/components/config/SendWindowsInput'
@@ -318,6 +319,7 @@ export default function ConfigPage() {
                 currentResumePath={config.profile?.resume_path || ''}
                 updateConfig={updateConfig}
               />
+              <ExtraResumesSection />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="最高学历">

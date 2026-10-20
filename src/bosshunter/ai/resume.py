@@ -1067,7 +1067,10 @@ def save_resume_draft(
             raise KeyError(job_id)
         job = dict(row)
         candidate = _remove_recruiter_company_references(candidate, job)
-        base_path = Path(str(config.get("profile", {}).get("resume_path") or ""))
+        from bosshunter.ai.keywords import load_plan
+        from bosshunter.resumes import resume_path_for_job
+
+        base_path = Path(resume_path_for_job(config, job, load_plan(Path("."))))
         if not base_path.exists():
             raise ValueError("基础简历文件不存在")
         base_resume = base_path.read_text(encoding="utf-8")
@@ -1122,8 +1125,11 @@ def generate_tailored_resume(job_id: str, config: dict) -> Path | None:
 
     job = dict(row)
 
-    # Load base resume
-    resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
+    # Load base resume (direction-specific when one matches this job)
+    from bosshunter.ai.keywords import load_plan
+    from bosshunter.resumes import resume_path_for_job
+
+    resume_path = Path(resume_path_for_job(config, job, load_plan(Path("."))))
     if not resume_path.exists():
         return fail(f"基础简历文件不存在：{resume_path}")
 

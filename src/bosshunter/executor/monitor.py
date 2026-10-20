@@ -842,8 +842,9 @@ def _generate_auto_reply(messages: list[dict], job: dict, config: dict) -> str |
 
     # Read resume summary from file
     from pathlib import Path
-    resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
-    resume_summary = resume_path.read_text(encoding="utf-8")[:800] if resume_path.exists() else "（未配置简历）"
+    from bosshunter.resumes import read_resume_for_job
+
+    resume_summary = read_resume_for_job(config, job)[:800] or "（未配置简历）"
 
     prompt = f"""你是一位求职者，正在BOSS直聘上和HR沟通。请根据对话上下文生成一条自然、礼貌的回复。
 

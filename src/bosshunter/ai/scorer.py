@@ -163,12 +163,15 @@ class ScoreOutcome:
     pause_reason: str = ""
 
 
-def _load_resume(config: dict) -> str:
-    """Load resume from configured path."""
-    resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
-    if not resume_path.exists():
+def _load_resume(config: dict, job: dict | None = None) -> str:
+    """Load the resume for a job (direction-specific when configured) plus GitHub evidence."""
+    from bosshunter.ai.keywords import load_plan
+    from bosshunter.resumes import read_resume_for_job, resume_path_for_job
+
+    plan = load_plan(Path(".")) if job else None
+    if not Path(resume_path_for_job(config, job, plan)).exists():
         return ""
-    resume = resume_path.read_text(encoding="utf-8")
+    resume = read_resume_for_job(config, job, plan)
     from bosshunter.github_profile import load_profile, summarize_profile
 
     github = load_profile(Path("."))
@@ -853,7 +856,7 @@ def score_jobs(
                     next_job = next(job_iter)
                 except StopIteration:
                     return False
-                future = executor.submit(_score_job_with_ai, next_job, resume, config, max_attempts)
+                future = executor.submit(_score_job_with_ai, next_job, _load_resume(config, next_job) or resume, config, max_attempts)
                 futures[future] = next_job
                 return True
 
