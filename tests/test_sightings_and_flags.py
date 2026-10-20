@@ -67,7 +67,7 @@ def test_long_listing_lowers_recruit_score_only_through_hr_points():
     job = {"hr_active": "在线", "jd": "x" * 200, "outsourcing_level": "clean"}
     fresh, _ = compute_recruit_score(job, 0)
     old, detail = compute_recruit_score(job, 5)
-    assert old == fresh - 24 and "连续在招5天" in detail
+    assert old == fresh - 30 and "连续在招5天" in detail
 
 
 def test_long_listing_lowers_only_the_activity_score_never_the_match_score(db):
@@ -134,3 +134,19 @@ def test_repeat_flags_mark_busy_companies_and_duplicate_postings(db):
     assert "同公司3岗" in flags["c0"]
     assert flags["d1"] == ["重复发布×2"] and flags["d2"] == ["重复发布×2"]
     assert flags["solo"] == ["连续在招3天"]
+
+
+def test_migration_rescores_old_activity_scores_with_the_new_weights_once(db):
+    from bosshunter.db import _migrate_activity_weights
+
+    _job(db, "old", match=80, hr="在线")
+    db.execute("UPDATE jobs SET recruit_score = 77, recruit_detail = 'HR活跃40/40(旧)' WHERE id = 'old'")
+    db.execute("DELETE FROM schema_flags WHERE name = 'activity_weights_50_30_10_10'")
+    db.commit()
+    _migrate_activity_weights(db)
+    row = db.execute("SELECT recruit_score, recruit_detail FROM jobs WHERE id = 'old'").fetchone()
+    assert row["recruit_score"] == 100 and "HR活跃50/50" in row["recruit_detail"]
+    db.execute("UPDATE jobs SET recruit_score = 5 WHERE id = 'old'")
+    db.commit()
+    _migrate_activity_weights(db)
+    assert db.execute("SELECT recruit_score FROM jobs WHERE id = 'old'").fetchone()["recruit_score"] == 5

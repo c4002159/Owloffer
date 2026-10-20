@@ -174,6 +174,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_5(conn)
     _migrate_dual_score(conn)
     _migrate_pure_match_scores(conn)
+    _migrate_activity_weights(conn)
     _migrate_outsourcing(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
@@ -1225,6 +1226,27 @@ def _migrate_pure_match_scores(conn: sqlite3.Connection) -> None:
         stripped = re.sub(r"^综合[^；]*；", "", str(row["score_reason"] or ""))
         conn.execute("UPDATE jobs SET score_reason = ? WHERE id = ?", (stripped, row["id"]))
     conn.execute("INSERT OR IGNORE INTO schema_flags (name) VALUES ('pure_match_scores')")
+    conn.commit()
+
+
+def _migrate_activity_weights(conn: sqlite3.Connection) -> None:
+    """One-time: rescore every stored activity score with the 50/30/10/10 weights.
+
+    HR activity 50, freshness 30, outsourcing 10, JD completeness 10. Older rows were computed with
+    40/20/20/20, so the pool would otherwise mix two scales.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_flags (name TEXT PRIMARY KEY)")
+    if conn.execute("SELECT 1 FROM schema_flags WHERE name = 'activity_weights_50_30_10_10'").fetchone():
+        return
+    from bosshunter.ai.recruit_score import compute_recruit_score
+
+    for row in conn.execute("SELECT * FROM jobs WHERE recruit_score IS NOT NULL").fetchall():
+        job = dict(row)
+        activity, detail = compute_recruit_score(job, sighting_streak(conn, job["id"]))
+        conn.execute(
+            "UPDATE jobs SET recruit_score = ?, recruit_detail = ? WHERE id = ?", (activity, detail, job["id"])
+        )
+    conn.execute("INSERT OR IGNORE INTO schema_flags (name) VALUES ('activity_weights_50_30_10_10')")
     conn.commit()
 
 
