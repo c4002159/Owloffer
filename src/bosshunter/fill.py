@@ -7,10 +7,12 @@ from bosshunter.employment import internship_search_config
 from bosshunter.rejected_companies import apply_rejected_companies
 from bosshunter.zombie import apply_zombie_filter, refresh_long_listed
 from bosshunter.review_queue import (
+    apply_activity_gate,
     apply_company_dedup,
     apply_match_gate,
     automation_settings,
     kind_quotas,
+    refresh_recruit_scores,
     waiting_by_kind,
 )
 
@@ -38,6 +40,8 @@ def _tidy(config: dict) -> None:
         apply_rejected_companies(db)
         apply_zombie_filter(db, config)
         apply_company_dedup(db, config)
+        refresh_recruit_scores(db, config)
+        apply_activity_gate(db, config)
         apply_match_gate(db, config)
     finally:
         db.close()

@@ -57,11 +57,17 @@ export function JobFilterBar({
           <option value="3d">近 3 天</option>
           <option value="7d">近 7 天</option>
         </Select>
-        <Select className={controlClass} value={filters.minScore} onChange={event => update('minScore', event.target.value)} aria-label="最低评分">
-          <option value="">最低评分：不限</option>
-          <option value="60">60+</option>
-          <option value="71">71+</option>
-          <option value="80">80+</option>
+        <Select className={controlClass} value={filters.minScore} onChange={event => update('minScore', event.target.value)} aria-label="最低匹配度">
+          <option value="">最低匹配度：不限</option>
+          <option value="60">匹配度 60+</option>
+          <option value="71">匹配度 71+</option>
+          <option value="80">匹配度 80+</option>
+        </Select>
+        <Select className={controlClass} value={filters.minActivity} onChange={event => update('minActivity', event.target.value)} aria-label="最低活跃度">
+          <option value="">最低活跃度：不限</option>
+          <option value="60">活跃度 60+</option>
+          <option value="75">活跃度 75+</option>
+          <option value="90">活跃度 90+</option>
         </Select>
         <Input
           type="number"

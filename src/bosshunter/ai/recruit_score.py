@@ -1,7 +1,9 @@
-"""Recruiting-authenticity score: how likely is this posting a live, reachable opening.
+"""Activity score (0-100): how likely a posting is a live, reachable opening.
 
-Computed locally (no API call) from signals BossHunter already stores, on a 0-100
-scale. The scorer blends it with the AI match score using ``scoring.recruit_weight``.
+Computed locally (no API call) from signals BossHunter already stores: how recently the HR was
+active, how fresh the posting is, whether the company looks like an outsourcer, and how complete
+the JD is. It is a separate indicator from the AI match score, which only measures fit with the
+user's experience; the two are never blended.
 """
 
 from bosshunter.ai.prefilter import hr_active_level, job_age_days
@@ -9,15 +11,6 @@ from bosshunter.ai.prefilter import hr_active_level, job_age_days
 _HR_POINTS = {3: 40, 2: 28, 1: 12, 0: 0}
 _HR_UNKNOWN_POINTS = 20
 _OUTSOURCING_POINTS = {"clean": 20, "suspected": 8, "confirmed": 0}
-
-
-def recruit_weight(config: dict) -> float:
-    """Share (0-1) of the final score given to recruiting authenticity; 0 disables blending."""
-    raw = (config.get("scoring") or {}).get("recruit_weight", 0)
-    try:
-        return min(max(float(raw), 0.0), 0.9)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _freshness_points(job: dict) -> tuple[int, str]:
@@ -73,11 +66,6 @@ def compute_recruit_score(job: dict, streak: int = 0) -> tuple[int, str]:
     return total, detail
 
 
-def blend_scores(match_score: int, recruit_score: int, weight: float) -> int:
-    """Blend the AI match score and the recruiting score into one 0-100 number."""
-    return int(round(match_score * (1 - weight) + recruit_score * weight))
-
-
 def min_match_score(config: dict) -> int:
     """Hard floor for the AI match score (0 = off); weaker matches never reach the review list."""
     raw = (config.get("scoring") or {}).get("min_match_score", 0)
@@ -89,3 +77,16 @@ def min_match_score(config: dict) -> int:
 
 def passes_match_gate(match_score: int, config: dict) -> bool:
     return int(match_score) >= min_match_score(config)
+
+
+def min_activity_score(config: dict) -> int:
+    """Floor for the activity score (0 = off); postings that look dead never reach the review list."""
+    raw = (config.get("scoring") or {}).get("min_activity_score", 0)
+    try:
+        return min(max(int(raw), 0), 100)
+    except (TypeError, ValueError):
+        return 0
+
+
+def passes_activity_gate(activity_score: int, config: dict) -> bool:
+    return int(activity_score) >= min_activity_score(config)

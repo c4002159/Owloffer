@@ -1,6 +1,7 @@
 """Database module - SQLite storage for jobs, history and state tracking."""
 
 import json
+import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -172,6 +173,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_4(conn)
     _migrate_v1_5(conn)
     _migrate_dual_score(conn)
+    _migrate_pure_match_scores(conn)
     _migrate_outsourcing(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
@@ -1206,6 +1208,23 @@ def _migrate_dual_score(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS job_sightings ("
         "job_id TEXT NOT NULL, seen_date TEXT NOT NULL, PRIMARY KEY (job_id, seen_date))"
     )
+    conn.commit()
+
+
+def _migrate_pure_match_scores(conn: sqlite3.Connection) -> None:
+    """One-time: undo the old match/activity blend so ``score`` is the match score again.
+
+    Earlier versions stored a blended number in ``score`` with a "综合X=匹配…" prefix in the reason.
+    ``match_score`` kept the pure value, so restore it and strip the prefix.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_flags (name TEXT PRIMARY KEY)")
+    if conn.execute("SELECT 1 FROM schema_flags WHERE name = 'pure_match_scores'").fetchone():
+        return
+    conn.execute("UPDATE jobs SET score = match_score WHERE match_score IS NOT NULL AND score != match_score")
+    for row in conn.execute("SELECT id, score_reason FROM jobs WHERE score_reason LIKE '综合%'").fetchall():
+        stripped = re.sub(r"^综合[^；]*；", "", str(row["score_reason"] or ""))
+        conn.execute("UPDATE jobs SET score_reason = ? WHERE id = ?", (stripped, row["id"]))
+    conn.execute("INSERT OR IGNORE INTO schema_flags (name) VALUES ('pure_match_scores')")
     conn.commit()
 
 

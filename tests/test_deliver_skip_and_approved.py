@@ -195,3 +195,23 @@ def test_workbench_payload_carries_delivery_job_ids(base_dir, monkeypatch):
     status, payload = _request("/api/workbench")
     assert status.startswith("200")
     assert payload["delivery_job_ids"] == ["ok1", "ok2"]
+
+
+def test_pool_search_filters_and_sorts_by_activity_separately_from_match(base_dir):
+    base, _ = base_dir
+    db = get_db(base / "data" / "bosshunter.db")
+    for job_id, score, activity in (("p1", 90, 40), ("p2", 70, 95), ("p3", 80, 70)):
+        insert_job(db, {**_job(job_id), "company": f"公司{job_id}"})
+        update_job_status(db, job_id, "pending")
+        db.execute("UPDATE jobs SET score = ?, recruit_score = ? WHERE id = ?", (score, activity, job_id))
+    db.commit()
+    db.close()
+    _, by_activity = _request("/api/jobs/search?limit=50&status=pending&sort_by=recruit_score&sort_order=desc")
+    assert [item["id"] for item in by_activity["items"]] == ["p2", "p3", "p1"]
+    _, by_match = _request("/api/jobs/search?limit=50&status=pending&sort_by=score&sort_order=desc")
+    assert [item["id"] for item in by_match["items"]] == ["p1", "p3", "p2"]
+    _, active_only = _request("/api/jobs/search?limit=50&status=pending&min_activity=70")
+    assert sorted(item["id"] for item in active_only["items"]) == ["p2", "p3"]
+    _, matching = _request("/api/jobs/search?limit=50&status=pending&min_score=80&min_activity=50")
+    assert [item["id"] for item in matching["items"]] == ["p3"]
+    assert {item["id"]: item["recruit_score"] for item in by_activity["items"]} == {"p1": 40, "p2": 95, "p3": 70}

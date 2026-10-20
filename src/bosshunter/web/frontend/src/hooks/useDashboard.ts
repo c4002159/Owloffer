@@ -26,8 +26,12 @@ interface Job {
   education?: string
   recruitment_type?: 'campus' | 'experienced' | 'unknown' | string
   jd: string
+  /** 匹配度：只衡量和你经历的契合度。 */
   score: number
   score_reason: string
+  /** 活跃度：衡量岗位像不像真在招（HR 活跃、新鲜度、公司、JD 完整度）。 */
+  recruit_score?: number | null
+  recruit_detail?: string | null
   greeting: string
   greeting_original?: string | null
   greeting_optimized?: string | null

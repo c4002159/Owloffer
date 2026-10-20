@@ -90,8 +90,8 @@ platforms:
 scoring:
   threshold: 70
   max_candidates: 20
-  recruit_weight: 0 # 0 = 只用 AI 匹配分；0.5 = 匹配度与招聘真实度各占一半
-  min_match_score: 0 # 匹配分硬门槛：低于它的岗位不进审查列表（0 = 关闭，建议 50）
+  min_match_score: 0 # 匹配度门槛：低于它的岗位不进审查列表（0 = 关闭，建议 50）；匹配度只衡量和你经历的契合度
+  min_activity_score: 0 # 活跃度门槛（0-100）：衡量岗位像不像真在招，低于它的不进审查列表（0 = 关闭）
 
 automation:
   auto_send: false # 默认关闭：岗位先进审查窗口，由你确认后才发送

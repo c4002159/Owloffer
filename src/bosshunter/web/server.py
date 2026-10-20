@@ -1252,6 +1252,7 @@ def _query_values(name: str) -> list[str]:
 def api_job_search():
 	try:
 		minimum_score = _optional_float_param("min_score", maximum=100)
+		minimum_activity = _optional_float_param("min_activity", maximum=100)
 		salary_min = _optional_float_param("salary_min")
 		salary_max = _optional_float_param("salary_max")
 		limit = _integer_param("limit", 15, minimum=1, maximum=100)
@@ -1268,7 +1269,7 @@ def api_job_search():
 		if any(value not in {"博士", "硕士", "本科", "大专", "不限", "其他", "unknown"} for value in education_filters):
 			raise ValueError("education 参数无效")
 		sort_by = request.params.get("sort_by", "created_at").strip()
-		if sort_by not in {"salary", "education", "score", "status", "hr_active", "created_at"}:
+		if sort_by not in {"salary", "education", "score", "recruit_score", "status", "hr_active", "created_at"}:
 			raise ValueError("sort_by 参数无效")
 		sort_order = request.params.get("sort_order", "desc").strip().lower()
 		if sort_order not in {"asc", "desc"}:
@@ -1288,6 +1289,9 @@ def api_job_search():
 	if minimum_score is not None:
 		conditions.append("score >= ?")
 		params.append(minimum_score)
+	if minimum_activity is not None:
+		conditions.append("COALESCE(recruit_score, 0) >= ?")
+		params.append(minimum_activity)
 	if status_filters:
 		placeholders = ",".join("?" for _ in status_filters)
 		conditions.append(f"status IN ({placeholders})")
@@ -1329,6 +1333,7 @@ def api_job_search():
 		"salary": "CAST(REPLACE(substr(COALESCE(salary, ''), 1, CASE WHEN instr(salary, 'K') > 0 THEN instr(salary, 'K') - 1 ELSE length(salary) END), ',', '') AS REAL)",
 		"education": "CASE TRIM(COALESCE(education, '')) WHEN '博士' THEN 5 WHEN '硕士' THEN 4 WHEN '本科' THEN 3 WHEN '大专' THEN 2 WHEN '不限' THEN 1 ELSE 0 END",
 		"score": "COALESCE(score, 0)",
+		"recruit_score": "COALESCE(recruit_score, 0)",
 		"status": "COALESCE(status, '')",
 		"hr_active": "COALESCE(hr_active, '')",
 		"created_at": "COALESCE(created_at, '')",

@@ -70,23 +70,55 @@ def test_long_listing_lowers_recruit_score_only_through_hr_points():
     assert old == fresh - 24 and "连续在招5天" in detail
 
 
-def test_refresh_lowers_score_and_drops_job_below_review_threshold(db):
-    config = {"scoring": {"recruit_weight": 0.5}, "automation": {"review_min_score": 85}}
+def test_long_listing_lowers_only_the_activity_score_never_the_match_score(db):
     _job(db, "a", match=80)
-    update_job_score(db, "a", 90, "综合90=旧前缀；原始理由")
-    assert rq.refresh_recruit_scores(db, config) == 0  # nothing changed yet
+    assert rq.refresh_recruit_scores(db, {}) == 1  # first pass replaces the placeholder detail
+    before = db.execute("SELECT score, recruit_score FROM jobs WHERE id='a'").fetchone()
+    assert before["score"] == 80
     record_sighting(db, "a", date.today())
     record_sighting(db, "a", date.today() - timedelta(days=1))
     record_sighting(db, "a", date.today() - timedelta(days=2))
-    rq.refresh_recruit_scores(db, config)
-    row = db.execute("SELECT score, score_reason FROM jobs WHERE id='a'").fetchone()
-    assert row["score"] < 90 and row["score_reason"].startswith("综合") and row["score_reason"].endswith("原始理由")
-    assert rq.refresh_recruit_scores(db, config) == 0
+    assert rq.refresh_recruit_scores(db, {}) == 1
+    after = db.execute("SELECT score, recruit_score, recruit_detail FROM jobs WHERE id='a'").fetchone()
+    assert after["score"] == 80                      # match with the user's experience is untouched
+    assert after["recruit_score"] < before["recruit_score"]
+    assert "连续在招3天" in after["recruit_detail"]
+    assert rq.refresh_recruit_scores(db, {}) == 0    # nothing changed since
 
 
-def test_refresh_is_off_without_recruit_weight(db):
-    _job(db, "a")
-    assert rq.refresh_recruit_scores(db, {}) == 0
+def test_activity_gate_filters_low_activity_jobs_but_not_by_match(db):
+    _job(db, "alive", match=60)
+    _job(db, "dead", match=95)
+    update_job_dual_score(db, "dead", 95, 30, "d")
+    update_job_dual_score(db, "alive", 60, 90, "d")
+    assert rq.apply_activity_gate(db, {}) == 0
+    assert rq.apply_activity_gate(db, {"scoring": {"min_activity_score": 70}}) == 1
+    statuses = {r["id"]: r["status"] for r in db.execute("SELECT id, status FROM jobs")}
+    assert statuses == {"alive": "ready", "dead": "filtered"}
+
+
+def test_match_gate_also_drops_jobs_below_the_review_line(db):
+    _job(db, "low", match=55)
+    _job(db, "ok", match=65)
+    assert rq.apply_match_gate(db, {"automation": {"review_min_score": 60}}) == 1
+    statuses = {r["id"]: r["status"] for r in db.execute("SELECT id, status FROM jobs")}
+    assert statuses == {"low": "filtered", "ok": "ready"}
+
+
+def test_migration_restores_pure_match_scores_once(db):
+    from bosshunter.db import _migrate_pure_match_scores
+
+    _job(db, "blended", match=80)
+    update_job_score(db, "blended", 90, "综合90=匹配80×50%+招聘真实度100×50%（HR活跃40/40）；原始理由")
+    db.execute("DELETE FROM schema_flags WHERE name = 'pure_match_scores'")
+    db.commit()
+    _migrate_pure_match_scores(db)
+    row = db.execute("SELECT score, score_reason FROM jobs WHERE id='blended'").fetchone()
+    assert row["score"] == 80 and row["score_reason"] == "原始理由"
+    # Runs only once: later manual score changes are left alone.
+    update_job_score(db, "blended", 77, "手动调整")
+    _migrate_pure_match_scores(db)
+    assert db.execute("SELECT score FROM jobs WHERE id='blended'").fetchone()["score"] == 77
 
 
 def test_repeat_flags_mark_busy_companies_and_duplicate_postings(db):

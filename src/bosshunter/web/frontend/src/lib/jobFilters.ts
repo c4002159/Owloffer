@@ -4,6 +4,7 @@ import type { Job } from '@/hooks/useDashboard'
 export interface JobFilters {
   query: string
   minScore: string
+  minActivity: string
   salaryMin: string
   salaryMax: string
   status: string[]
@@ -17,6 +18,7 @@ export interface JobFilters {
 export const EMPTY_JOB_FILTERS: JobFilters = {
   query: '',
   minScore: '',
+  minActivity: '',
   salaryMin: '',
   salaryMax: '',
   status: [],
@@ -95,6 +97,7 @@ export function filterJobs(jobs: Job[], filters: JobFilters) {
   if (hasInvalidSalaryRange(filters)) return []
   const keyword = filters.query.trim().toLocaleLowerCase()
   const minimumScore = filters.minScore === '' ? null : Number(filters.minScore)
+  const minimumActivity = filters.minActivity === '' ? null : Number(filters.minActivity)
   const salaryMin = filters.salaryMin === '' ? null : Number(filters.salaryMin)
   const salaryMax = filters.salaryMax === '' ? null : Number(filters.salaryMax)
   const salaryEnabled = salaryMin !== null || salaryMax !== null
@@ -108,6 +111,7 @@ export function filterJobs(jobs: Job[], filters: JobFilters) {
       if (!searchable.includes(keyword)) return false
     }
     if (minimumScore !== null && Number(job.score || 0) < minimumScore) return false
+    if (minimumActivity !== null && Number(job.recruit_score || 0) < minimumActivity) return false
     if (filters.status.length > 0 && !filters.status.includes(job.status)) return false
     if (filters.sourcePlatform.length > 0 && !filters.sourcePlatform.includes(job.source_platform || 'boss')) return false
     if (filters.city.length > 0 && !filters.city.includes(jobCityBaseName(job.city))) return false

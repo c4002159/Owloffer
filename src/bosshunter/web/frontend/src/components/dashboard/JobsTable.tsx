@@ -138,7 +138,8 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                 <th className="px-4 py-3 text-left font-bold">城市</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('薪资', 'salary')}</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('学历 / 招聘类型', 'education')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('评分', 'score')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('匹配度', 'score')}</th>
+                <th className="px-4 py-3 text-left">{sortableHeader('活跃度', 'recruit_score')}</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('状态', 'status')}</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('招聘者活跃', 'hr_active')}</th>
                 <th className="px-4 py-3 text-left">{sortableHeader('时间', 'created_at')}</th>
@@ -194,8 +195,11 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         {job.employment_review && <div className="mt-1 text-amber-600">{job.employment_review}</div>}
                         <div className="mt-1 text-muted">{job.recruitment_type === 'campus' ? '校招' : job.recruitment_type === 'experienced' ? '社招' : '类型未识别'}</div>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3" title="匹配度：只衡量和你经历的契合度">
                         <span className={`font-mono font-black ${getScoreColor(job.score)}`}>{job.score || '-'}</span>
+                      </td>
+                      <td className="px-4 py-3" title={job.recruit_detail || '活跃度：衡量岗位像不像真在招'}>
+                        <span className={`font-mono font-black ${job.recruit_score == null ? 'text-muted' : getScoreColor(job.recruit_score)}`}>{job.recruit_score ?? '-'}</span>
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={statusVariant(job.status) as any}>{inDelivery ? '投递队列中' : getStatusLabel(job.status)}</Badge>
@@ -274,7 +278,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-card-border bg-surface">
-                        <td colSpan={hasActions ? 11 : 10} className="px-6 py-4">
+                        <td colSpan={hasActions ? 12 : 11} className="px-6 py-4">
                           <div className="max-w-2xl w-[calc(100vw-9rem)] md:w-[calc(100vw-22rem)]">
                             <InterviewPreparation key={job.id} job={job} />
                           </div>
@@ -288,8 +292,14 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                               <p className="line-clamp-6 whitespace-pre-wrap leading-6 text-muted">{job.greeting || '未生成'}</p>
                             </div>
                             <div className="rounded-2xl border border-card-border bg-card p-4">
-                              <p className="mb-2 text-xs font-black text-primary">评分理由</p>
+                              <p className="mb-2 text-xs font-black text-primary">匹配度理由</p>
                               <p className="line-clamp-6 whitespace-pre-wrap leading-6 text-muted">{job.score_reason || '无'}</p>
+                              {job.recruit_detail && (
+                                <>
+                                  <p className="mb-1 mt-3 text-xs font-black text-primary">活跃度依据</p>
+                                  <p className="line-clamp-4 whitespace-pre-wrap leading-6 text-muted">{job.recruit_detail}</p>
+                                </>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -300,7 +310,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
               })}
               {!jobs.length && (
                 <tr>
-                  <td colSpan={hasActions ? 11 : 10} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={hasActions ? 12 : 11} className="px-4 py-10 text-center text-sm text-muted">
                     {loading ? '正在读取岗位…' : '没有符合当前条件的岗位'}
                   </td>
                 </tr>

@@ -533,7 +533,8 @@ class DashboardPageTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("搜索职位、公司、JD 或评分理由", filter_source)
-        self.assertIn("最低评分", filter_source)
+        self.assertIn("最低匹配度", filter_source)
+        self.assertIn("最低活跃度", filter_source)
         self.assertIn("最低薪资", filter_source)
         self.assertIn("最高薪资", filter_source)
         self.assertIn("全部状态", filter_source)

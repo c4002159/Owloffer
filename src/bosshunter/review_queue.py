@@ -167,55 +167,68 @@ def assign_categories(conn: sqlite3.Connection, plan: dict | None) -> int:
 
 
 def refresh_recruit_scores(conn: sqlite3.Connection, config: dict) -> int:
-    """Re-apply the long-listing penalty to jobs still waiting for review.
+    """Recompute the activity score of jobs still waiting for review.
 
-    A posting that stays listed for days gradually loses recruiting-authenticity
-    points, so its blended score can sink below ``review_min_score`` and leave the
-    review list. Only ``ready`` jobs with a stored match score are touched.
+    A posting that stays listed for days gradually loses activity points (see
+    ``compute_recruit_score``). Only the activity score and its explanation change; the match
+    score is never touched.
     """
-    from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, recruit_weight
+    from bosshunter.ai.recruit_score import compute_recruit_score
     from bosshunter.db import sighting_streak
 
-    weight = recruit_weight(config)
-    if weight <= 0:
-        return 0
-    rows = conn.execute(
-        "SELECT * FROM jobs WHERE status = 'ready' AND deleted_at IS NULL AND match_score IS NOT NULL"
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM jobs WHERE status = 'ready' AND deleted_at IS NULL").fetchall()
     changed = 0
     for row in rows:
         job = dict(row)
-        recruit, detail = compute_recruit_score(job, sighting_streak(conn, job["id"]))
-        score = blend_scores(int(job["match_score"]), recruit, weight)
-        if recruit == job.get("recruit_score") and score == job.get("score"):
+        activity, detail = compute_recruit_score(job, sighting_streak(conn, job["id"]))
+        if activity == job.get("recruit_score") and detail == job.get("recruit_detail"):
             continue
-        prefix = f"综合{score}=匹配{job['match_score']}×{1 - weight:.0%}+招聘真实度{recruit}×{weight:.0%}（{detail}）；"
-        reason = re.sub(r"^综合[^；]*；", "", str(job.get("score_reason") or ""))
         conn.execute(
-            "UPDATE jobs SET score = ?, recruit_score = ?, recruit_detail = ?, score_reason = ?, "
-            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (score, recruit, detail, prefix + reason, job["id"]),
+            "UPDATE jobs SET recruit_score = ?, recruit_detail = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (activity, detail, job["id"]),
         )
         changed += 1
     conn.commit()
     return changed
 
 
-def apply_match_gate(conn: sqlite3.Connection, config: dict) -> int:
-    """Filter ``ready`` jobs whose AI match score is below ``scoring.min_match_score``."""
-    from bosshunter.ai.recruit_score import min_match_score
+def apply_activity_gate(conn: sqlite3.Connection, config: dict) -> int:
+    """Filter ``ready`` jobs whose activity score is below ``scoring.min_activity_score``."""
+    from bosshunter.ai.recruit_score import min_activity_score
 
-    floor = min_match_score(config)
+    floor = min_activity_score(config)
     if floor <= 0:
         return 0
     rows = conn.execute(
-        "SELECT id, match_score FROM jobs WHERE status = 'ready' AND deleted_at IS NULL "
-        "AND match_score IS NOT NULL AND match_score < ?",
+        "SELECT id, recruit_score FROM jobs WHERE status = 'ready' AND deleted_at IS NULL "
+        "AND recruit_score IS NOT NULL AND recruit_score < ?",
         (floor,),
     ).fetchall()
     for row in rows:
         update_job_status(conn, row["id"], "filtered")
-        add_history(conn, row["id"], "filtered", f"匹配分 {row['match_score']} 低于硬门槛 {floor}")
+        add_history(conn, row["id"], "filtered", f"活跃度 {row['recruit_score']} 低于门槛 {floor}")
+    return len(rows)
+
+
+def apply_match_gate(conn: sqlite3.Connection, config: dict) -> int:
+    """Filter ``ready`` jobs whose match score is below the hard floor or the review line.
+
+    The floor is the larger of ``scoring.min_match_score`` and ``automation.review_min_score``, so a
+    job never sits in ``ready`` without being listed in the review window.
+    """
+    from bosshunter.ai.recruit_score import min_match_score
+
+    floor = max(min_match_score(config), automation_settings(config)["review_min_score"])
+    if floor <= 0:
+        return 0
+    rows = conn.execute(
+        "SELECT id, COALESCE(match_score, score) AS match FROM jobs WHERE status = 'ready' AND deleted_at IS NULL "
+        "AND COALESCE(match_score, score) < ?",
+        (floor,),
+    ).fetchall()
+    for row in rows:
+        update_job_status(conn, row["id"], "filtered")
+        add_history(conn, row["id"], "filtered", f"匹配度 {row['match']} 低于门槛 {floor}")
     return len(rows)
 
 

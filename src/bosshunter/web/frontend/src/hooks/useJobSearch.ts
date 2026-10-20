@@ -11,7 +11,7 @@ interface JobSearchResponse {
   offset: number
 }
 
-export type JobSortKey = 'salary' | 'education' | 'score' | 'status' | 'hr_active' | 'created_at'
+export type JobSortKey = 'salary' | 'education' | 'score' | 'recruit_score' | 'status' | 'hr_active' | 'created_at'
 export type JobSortOrder = 'asc' | 'desc'
 
 export function useJobSearch(
@@ -49,6 +49,7 @@ export function useJobSearch(
     })
     if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim())
     if (filters.minScore) params.set('min_score', filters.minScore)
+    if (filters.minActivity) params.set('min_activity', filters.minActivity)
     if (filters.salaryMin) params.set('salary_min', filters.salaryMin)
     if (filters.salaryMax) params.set('salary_max', filters.salaryMax)
     ;(filters.status.length ? filters.status : (viewStatuses ?? [])).forEach(value => params.append('status', value))
@@ -85,7 +86,7 @@ export function useJobSearch(
       })
 
     return () => controller.abort()
-  }, [debouncedQuery, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, viewStatuses, revision])
+  }, [debouncedQuery, filters.minScore, filters.minActivity, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, viewStatuses, revision])
 
   return { items, total, allTotal, cityOptions, loading, error, refresh }
 }

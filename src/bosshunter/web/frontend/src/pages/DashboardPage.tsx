@@ -252,7 +252,7 @@ async function waitForGreetTask(taskId: string, timeoutMs = 300000): Promise<Wor
 }
 
 function jobSubtitle(job: Job) {
-  return [job.score ? `匹配 ${job.score}` : '', job.salary, job.hr_active || '活跃度未知', getStatusLabel(job.status)].filter(Boolean).join(' · ')
+  return [job.score ? `匹配度 ${job.score}` : '', job.recruit_score != null ? `活跃度 ${job.recruit_score}` : '', job.salary, job.hr_active || 'HR活跃未知', getStatusLabel(job.status)].filter(Boolean).join(' · ')
 }
 
 function safeExternalUrl(value: string | undefined, platform: string) {
@@ -1702,11 +1702,12 @@ function JobDetailModal({ job, onClose, onChanged }: { job: Job; onClose: () => 
           <InfoBlock label="招聘者活跃" value={job.hr_active || '活跃度未知'} />
           <InfoBlock label="公司" value={[job.company_size, job.company_industry].filter(Boolean).join(' · ') || '-'} />
           <InfoBlock label="来源平台" value={job.source_platform && job.source_platform !== 'boss' && PLATFORM_LABELS[job.source_platform] ? `${PLATFORM_LABELS[job.source_platform]}｜当前只开放采集` : 'BOSS 直聘'} />
-          <InfoBlock label="匹配分" value={String(job.score || '-')} />
+          <InfoBlock label="匹配度" value={String(job.score || '-')} />
+          <InfoBlock label="活跃度" value={job.recruit_score != null ? `${job.recruit_score}${job.recruit_detail ? `（${job.recruit_detail}）` : ''}` : '-'} />
           <InfoBlock label="定制简历" value={job.resume_path || '未生成'} />
         </div>
         <div className="mt-4 rounded-2xl border border-card-border bg-surface p-4">
-          <div className="text-sm font-black">评分理由</div>
+          <div className="text-sm font-black">匹配度理由</div>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{job.score_reason || '-'}</p>
         </div>
         <div className="mt-4 rounded-2xl border border-card-border bg-surface p-4">
@@ -1869,7 +1870,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
       return
     }
     setSortBy(nextSortBy)
-    setSortOrder(nextSortBy === 'score' || nextSortBy === 'created_at' ? 'desc' : 'asc')
+    setSortOrder(nextSortBy === 'score' || nextSortBy === 'recruit_score' || nextSortBy === 'created_at' ? 'desc' : 'asc')
   }
 
   const loadRecycleBin = async () => {

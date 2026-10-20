@@ -18,6 +18,7 @@ from bosshunter.review_queue import (
     approve_all,
     approve_jobs,
     approve_reply,
+    apply_activity_gate,
     apply_company_dedup,
     apply_match_gate,
     approved_unsent,
@@ -88,13 +89,13 @@ class ReviewWindow:
     def _build_jobs_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
         notebook.add(frame, text="待审查岗位")
-        columns = ("company", "salary", "score", "match", "recruit", "hr", "flags")
+        columns = ("company", "salary", "match", "activity", "hr", "flags")
         self.jobs_tree = ttk.Treeview(frame, columns=columns, selectmode="extended", height=14)
         self.jobs_tree.tag_configure("flagged", background="#fff3c4")
         self.jobs_tree.heading("#0", text="分类 / 职位")
         for key, title, width in (
-            ("company", "公司", 130), ("salary", "薪资", 60), ("score", "综合", 45),
-            ("match", "匹配", 45), ("recruit", "真实度", 50), ("hr", "HR活跃", 70), ("flags", "标记", 140),
+            ("company", "公司", 140), ("salary", "薪资", 70), ("match", "匹配度", 55),
+            ("activity", "活跃度", 55), ("hr", "HR活跃", 80), ("flags", "标记", 150),
         ):
             self.jobs_tree.heading(key, text=title)
             self.jobs_tree.column(key, width=width, anchor="w")
@@ -116,11 +117,12 @@ class ReviewWindow:
         """Approved jobs stay visible here with their state, ready for one-click delivery."""
         frame = ttk.Frame(notebook)
         notebook.add(frame, text="已通过待投递")
-        columns = ("company", "salary", "score", "kind", "state")
+        columns = ("company", "salary", "match", "activity", "kind", "state")
         self.approved_tree = ttk.Treeview(frame, columns=columns, selectmode="extended", height=14)
         self.approved_tree.heading("#0", text="职位")
         for key, title, width in (
-            ("company", "公司", 160), ("salary", "薪资", 70), ("score", "综合", 50), ("kind", "类型", 60), ("state", "状态", 130),
+            ("company", "公司", 150), ("salary", "薪资", 70), ("match", "匹配度", 55), ("activity", "活跃度", 55),
+            ("kind", "类型", 50), ("state", "状态", 120),
         ):
             self.approved_tree.heading(key, text=title)
             self.approved_tree.column(key, width=width, anchor="w")
@@ -166,6 +168,7 @@ class ReviewWindow:
             apply_company_dedup(db, self.config)
             apply_match_gate(db, self.config)
             refresh_recruit_scores(db, self.config)
+            apply_activity_gate(db, self.config)
             jobs = review_pending(db, self.settings["review_min_score"])
             approved = approved_unsent(db)
             drafts = pending_reply_drafts(db)
@@ -182,7 +185,7 @@ class ReviewWindow:
                 self.jobs_tree.insert(
                     parent, "end", iid=str(job["id"]), text=job["title"],
                     values=(job["company"], job.get("salary") or "-", _fmt(job.get("score")),
-                            _fmt(job.get("match_score")), _fmt(job.get("recruit_score")),
+                            _fmt(job.get("recruit_score")),
                             job.get("hr_active") or "-", " ".join(labels)),
                     tags=("flagged",) if labels else (),
                 )
@@ -197,6 +200,7 @@ class ReviewWindow:
             self.approved_tree.insert(
                 "", "end", iid=str(job["id"]), text=job["title"],
                 values=(job["company"], job.get("salary") or "-", _fmt(job.get("score")),
+                        _fmt(job.get("recruit_score")),
                         "实习" if job_kind(job) == "internship" else "全职",
                         "已确认·招呼语已备" if has_greeting else "已确认·待投递"),
             )
