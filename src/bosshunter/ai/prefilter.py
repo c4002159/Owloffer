@@ -1,6 +1,8 @@
 """Pre-filter module - hard filtering before LLM evaluation."""
 
 import re
+from datetime import datetime, timezone
+
 from bosshunter.employment import internship_rejection
 
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
@@ -43,7 +45,68 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
     if not profile.get("allow_internship", False) and _contains_internship_signal(job):
         return 0, "实习/管培岗位"
 
+    freshness_score, freshness_reason = freshness_filter_result(job, profile)
+    if freshness_score <= 0:
+        return 0, freshness_reason
+
     return salary_filter_result(str(job.get("salary") or ""), profile)
+
+
+def hr_active_level(hr_active: str) -> int | None:
+    """Rank an HR activity label: 3 = online/just now, 2 = within ~3 days, 1 = within a month, 0 = stale.
+
+    Returns None when the label is empty or unrecognised (unknown, not stale).
+    """
+    text = str(hr_active or "").strip()
+    if not text:
+        return None
+    if "在线" in text or "刚刚" in text or "分钟" in text or "小时" in text:
+        return 3
+    if "今日" in text or "今天" in text:
+        return 3
+    match = re.search(r"(\d+)\s*(日|天)内", text)
+    if match:
+        return 2 if int(match.group(1)) <= 3 else 1
+    if "本周" in text or re.search(r"\d+\s*周内", text):
+        return 1
+    if "本月" in text or re.search(r"\d+\s*(月|个月)内", text):
+        return 1
+    if "半年" in text or "很久" in text or "月前" in text or "年前" in text:
+        return 0
+    return None
+
+
+def job_age_days(job: dict, now: datetime | None = None) -> float | None:
+    """Days since BossHunter first stored the job; None when no timestamp is available."""
+    created = job.get("created_at")
+    if not created:
+        return None
+    try:
+        first_seen = datetime.fromisoformat(str(created).replace("Z", "")).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    current = now or datetime.now(timezone.utc)
+    return max((current - first_seen).total_seconds() / 86400, 0.0)
+
+
+def freshness_filter_result(job: dict, profile: dict, now: datetime | None = None) -> tuple[int, str]:
+    """Hard filters on job age (first seen) and HR activity; both are off unless configured."""
+    max_age_days = _as_number(profile.get("max_job_age_days", 0))
+    if max_age_days > 0:
+        age = job_age_days(job, now)
+        if age is not None and age > max_age_days:
+            return 0, f"岗位首次采集已超过 {max_age_days:g} 天"
+
+    min_level = int(_as_number(profile.get("hr_active_min_level", 0)))
+    if min_level > 0:
+        level = hr_active_level(str(job.get("hr_active") or ""))
+        if level is None:
+            if not _as_bool(profile.get("hr_active_unknown_pass", True)):
+                return 0, "HR 活跃度未知，已过滤"
+        elif level < min_level:
+            return 0, f"HR 活跃度不足: {job.get('hr_active')}"
+
+    return 100, "预筛通过"
 
 
 def salary_filter_result(salary: str, profile: dict) -> tuple[int, str]:

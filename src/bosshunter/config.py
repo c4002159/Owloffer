@@ -83,6 +83,11 @@ DEFAULTS: dict[str, Any] = {
         "deal_breakers": [],
         "jd_deal_breakers": [],
         "blocked_companies": [],
+        # 0 = off. Jobs first stored more than this many days ago are filtered.
+        "max_job_age_days": 0,
+        # 0 = off, 1 = within a month, 2 = within ~3 days, 3 = online / active today.
+        "hr_active_min_level": 0,
+        "hr_active_unknown_pass": True,
     },
     "search": {
         "keywords": [],
@@ -147,9 +152,19 @@ DEFAULTS: dict[str, Any] = {
             },
         },
     },
+    "automation": {
+        # Off by default: jobs wait in the review window until the user approves them.
+        "auto_send": False,
+        # Collection/scoring pauses once this many jobs wait for review or sending.
+        "review_cap": 150,
+        # Only jobs scoring at least this much are kept in the review window.
+        "review_min_score": 60,
+    },
     "scoring": {
         "threshold": 71,
         "max_candidates": 20,
+        # 0 = score is the AI match score only; 0.5 = half match, half recruiting authenticity.
+        "recruit_weight": 0,
     },
     "throttle": {
         "daily_limit": 30,

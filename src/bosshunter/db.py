@@ -171,6 +171,7 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     _migrate_v1_3(conn)
     _migrate_v1_4(conn)
     _migrate_v1_5(conn)
+    _migrate_dual_score(conn)
     _migrate_outsourcing(conn)
     _migrate_platform_access_events(conn)
     _init_scoring_runs(conn)
@@ -1180,6 +1181,37 @@ def _migrate_v1_5(conn: sqlite3.Connection) -> None:
     for name, definition in additions.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.commit()
+
+
+def _migrate_dual_score(conn: sqlite3.Connection) -> None:
+    """Add the separate match / recruiting-authenticity score columns and a role category."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    additions = {
+        "match_score": "INTEGER NULL",
+        "recruit_score": "INTEGER NULL",
+        "recruit_detail": "TEXT NULL",
+        "category": "TEXT NULL",
+    }
+    for name, definition in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.commit()
+
+
+def update_job_dual_score(
+    conn: sqlite3.Connection,
+    job_id: str,
+    match_score: int,
+    recruit_score: int,
+    recruit_detail: str,
+) -> None:
+    """Record the two component scores next to the blended ``score``."""
+    conn.execute(
+        "UPDATE jobs SET match_score = ?, recruit_score = ?, recruit_detail = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
+        (match_score, recruit_score, recruit_detail, job_id),
+    )
     conn.commit()
 
 

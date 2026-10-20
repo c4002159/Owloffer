@@ -1547,6 +1547,40 @@ def _handle_conversation(job: dict, config: dict, conversation: dict | None = No
         close_tab(target_id)
         return "recorded_user_reply" if recorded else "skipped_user_replied"
 
+    # A reply the user approved (and possibly edited) in the review window is sent here,
+    # inside the chat this cycle already opened and under the normal send-window checks.
+    from bosshunter.review_queue import latest_approved_reply
+
+    db = get_db()
+    approved_reply = latest_approved_reply(db, job["id"])
+    db.close()
+    if approved_reply:
+        if stop_requested(config):
+            close_tab(target_id)
+            return "stopped"
+        if _send_message_in_chat(target_id, approved_reply["message"], config):
+            console.print("[green]    ✓ 已按你确认的内容发送回复[/green]")
+            db = get_db()
+            add_history(
+                db,
+                job["id"],
+                "replied",
+                _build_reply_resolution_detail(
+                    "replied.v1",
+                    "用户在审查窗口确认后由监测发送",
+                    approved_reply["pending_detail"],
+                    approved_reply["message"],
+                    approved_reply["pending_history_id"],
+                ),
+            )
+            update_job_status(db, job["id"], "replied")
+            db.close()
+            close_tab(target_id)
+            return "auto_replied"
+        console.print("[yellow]    ! 已确认的回复发送失败，保留待发送状态[/yellow]")
+        close_tab(target_id)
+        return "failed"
+
     db = get_db()
     existing_pending_reply = _has_existing_pending_reply(db, job["id"], messages)
     db.close()

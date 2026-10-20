@@ -227,6 +227,12 @@ JS_EXTRACT_DETAIL = """
     info.hr_name = bossSection?.querySelector('.name')?.textContent?.trim() || '';
     info.hr_title = bossSection?.querySelector('.title')?.textContent?.trim() || '';
     info.hr_active = document.querySelector('.boss-active-time')?.textContent?.trim() || '';
+    if (!info.hr_active) {
+        // An online HR has no .boss-active-time node; the status sits in the boss card text.
+        const bossText = bossSection?.innerText || '';
+        const activeMatch = bossText.match(/在线|刚刚活跃|今日活跃|本周活跃|本月活跃|\\d+日内活跃|\\d+周内活跃|\\d+月内活跃|半年前活跃/);
+        info.hr_active = activeMatch ? activeMatch[0] : '';
+    }
     info.url = window.location.pathname;
     return JSON.stringify(info);
 })()

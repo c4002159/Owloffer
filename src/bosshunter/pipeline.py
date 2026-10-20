@@ -46,8 +46,25 @@ def run_pipeline(config: dict) -> None:
 
     # Step 4: Confirm which jobs to pursue
     console.print("[bold]Step 4/6: 确认投递清单[/bold]")
-    from bosshunter.ui.confirm import show_confirmation
-    approved = show_confirmation(config)
+    from bosshunter.review_queue import approve_jobs, automation_settings, review_pending
+
+    settings = automation_settings(config)
+    if settings["auto_send"]:
+        # Explicitly enabled by the user (automation.auto_send): approve everything
+        # that cleared the review score; throttle and send windows still apply.
+        from bosshunter.db import get_db
+
+        db = get_db()
+        try:
+            ids = [job["id"] for job in review_pending(db, settings["review_min_score"])]
+            approved = approve_jobs(db, ids, note="auto_send 自动确认") > 0
+        finally:
+            db.close()
+        console.print(f"[yellow]  auto_send 已开启：自动确认 {len(ids)} 个岗位[/yellow]")
+    else:
+        from bosshunter.ui.confirm import show_confirmation
+
+        approved = show_confirmation(config)
     if not approved:
         console.print("[yellow]  已取消发送[/yellow]")
         return

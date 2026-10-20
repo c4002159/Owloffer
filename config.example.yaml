@@ -20,6 +20,9 @@ profile:
   deal_breakers: ["外包", "996"]
   jd_deal_breakers: []  # 示例：需要排除完整 JD 中的词时再填写
   blocked_companies: [] # 示例：不希望采集的公司名称或关键词
+  max_job_age_days: 0 # 岗位首次被采集超过 N 天则过滤；0 = 关闭（网页版没有发布时间，用首次采集时间近似）
+  hr_active_min_level: 0 # HR 活跃度下限：0 关闭，1 一个月内，2 三天内，3 在线/今日活跃
+  hr_active_unknown_pass: true # 读不到 HR 活跃度时是否放行
   # 可选：个人亮点（用于招呼语生成）
   extra_highlights:
     - "你的核心竞争力描述"

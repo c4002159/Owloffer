@@ -1,0 +1,238 @@
+"""Review queue: what waits for the user's decision before anything is sent.
+
+Jobs scoring at or above ``automation.review_min_score`` sit in status ``ready``
+until the user approves or skips them. Reply drafts the monitor produced wait
+in ``reply_pending`` until the user approves the final text, after which the
+next monitor cycle sends it (``reply_approved``).
+"""
+
+import json
+import sqlite3
+
+from bosshunter.db import add_history, update_job_status
+
+DEFAULT_REVIEW_CAP = 150
+DEFAULT_MIN_SCORE = 60
+UNCATEGORIZED = "其他"
+
+
+def automation_settings(config: dict) -> dict:
+    raw = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+    try:
+        cap = max(1, int(raw.get("review_cap", DEFAULT_REVIEW_CAP)))
+    except (TypeError, ValueError):
+        cap = DEFAULT_REVIEW_CAP
+    try:
+        min_score = int(raw.get("review_min_score", DEFAULT_MIN_SCORE))
+    except (TypeError, ValueError):
+        min_score = DEFAULT_MIN_SCORE
+    return {"auto_send": bool(raw.get("auto_send", False)), "review_cap": cap, "review_min_score": min_score}
+
+
+def review_pending(conn: sqlite3.Connection, min_score: int) -> list[dict]:
+    """Jobs waiting for review: scored high enough, not yet approved or skipped."""
+    rows = conn.execute(
+        """
+        SELECT * FROM jobs
+        WHERE status = 'ready' AND deleted_at IS NULL AND score >= ?
+        ORDER BY COALESCE(category, ?) , score DESC
+        """,
+        (min_score, UNCATEGORIZED),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def approved_unsent(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE status = 'approved' AND deleted_at IS NULL ORDER BY score DESC"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def review_cap_reached(conn: sqlite3.Connection, config: dict) -> bool:
+    """True once reviewable plus approved-but-unsent jobs reach ``automation.review_cap``."""
+    settings = automation_settings(config)
+    waiting = len(review_pending(conn, settings["review_min_score"])) + len(approved_unsent(conn))
+    return waiting >= settings["review_cap"]
+
+
+def approve_jobs(conn: sqlite3.Connection, job_ids: list[str], note: str = "审查窗口确认") -> int:
+    """Mark reviewed jobs approved; only jobs still in ``ready`` are touched."""
+    changed = 0
+    for job_id in job_ids:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+        ).fetchone()
+        if row and row["status"] == "ready":
+            update_job_status(conn, job_id, "approved")
+            add_history(conn, job_id, "approved", note)
+            changed += 1
+    return changed
+
+
+def skip_jobs(conn: sqlite3.Connection, job_ids: list[str]) -> int:
+    changed = 0
+    for job_id in job_ids:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ? AND deleted_at IS NULL", (job_id,)
+        ).fetchone()
+        if row and row["status"] in {"ready", "approved"}:
+            update_job_status(conn, job_id, "skipped")
+            add_history(conn, job_id, "skipped", "审查窗口跳过")
+            changed += 1
+    return changed
+
+
+def direction_for_keyword(keyword: str, plan: dict | None) -> str:
+    """Role category for a search keyword, taken from the keyword plan's directions."""
+    if not plan or not keyword:
+        return UNCATEGORIZED
+    needle = str(keyword).strip().lower()
+    for direction in plan.get("directions", []):
+        if needle in (str(k).strip().lower() for k in direction.get("keywords", [])):
+            return direction.get("name") or UNCATEGORIZED
+    return UNCATEGORIZED
+
+
+def assign_categories(conn: sqlite3.Connection, plan: dict | None) -> int:
+    """Fill ``category`` for jobs that have none yet, from their source keyword."""
+    rows = conn.execute(
+        "SELECT id, source_keyword FROM jobs WHERE deleted_at IS NULL AND (category IS NULL OR category = '')"
+    ).fetchall()
+    updated = 0
+    for row in rows:
+        category = direction_for_keyword(row["source_keyword"], plan)
+        conn.execute("UPDATE jobs SET category = ? WHERE id = ?", (category, row["id"]))
+        updated += 1
+    conn.commit()
+    return updated
+
+
+def dispatch_approved(config: dict, report=None) -> dict:
+    """One-click delivery: tailored resume + greeting for every approved job, then throttled sending.
+
+    ``report`` is an optional ``callable(str)`` for progress lines. Sending itself
+    uses ``send_greetings`` and therefore keeps the daily limit, random intervals,
+    send windows and risk stops from the config.
+    """
+    from bosshunter.ai.greeter import generate_greetings
+    from bosshunter.ai.resume import generate_tailored_resume, get_last_resume_failure_reason
+    from bosshunter.db import get_db
+    from bosshunter.executor.sender import send_greetings
+
+    say = report or (lambda _msg: None)
+    db = get_db()
+    try:
+        jobs = approved_unsent(db)
+    finally:
+        db.close()
+    ids = [str(job["id"]) for job in jobs]
+    result = {"approved": len(ids), "resumes": 0, "resume_failed": 0, "greetings": 0, "sent": 0}
+    if not ids:
+        say("没有已通过的岗位")
+        return result
+
+    for index, job in enumerate(jobs, 1):
+        say(f"定制简历 {index}/{len(jobs)}：{job['company']}｜{job['title']}")
+        try:
+            path = generate_tailored_resume(str(job["id"]), config)
+        except Exception as exc:  # one failed resume must not block the rest of the batch
+            path = None
+            say(f"  简历生成异常：{type(exc).__name__}")
+        if path:
+            result["resumes"] += 1
+        else:
+            result["resume_failed"] += 1
+            reason = get_last_resume_failure_reason(str(job["id"]))
+            if reason:
+                say(f"  简历生成失败：{reason}")
+
+    say("生成招呼语…")
+    result["greetings"] = generate_greetings(config, job_ids=ids)
+    say("开始按限速发送…")
+    result["sent"] = send_greetings(config)
+    say(f"完成：简历 {result['resumes']}，招呼语 {result['greetings']}，已发送 {result['sent']}")
+    return result
+
+
+# ---- reply drafts -------------------------------------------------------
+
+def _parse_detail(detail: str) -> dict:
+    try:
+        value = json.loads(detail or "{}")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def pending_reply_drafts(conn: sqlite3.Connection) -> list[dict]:
+    """Unresolved AI reply drafts that the user has not approved yet."""
+    from bosshunter.db import get_unresolved_reply_pending
+
+    drafts = []
+    for row in get_unresolved_reply_pending(conn):
+        if latest_approved_reply(conn, row["job_id"]):
+            continue
+        payload = _parse_detail(row["detail"])
+        drafts.append({
+            "history_id": row["id"],
+            "job_id": row["job_id"],
+            "company": row["company"],
+            "title": row["title"],
+            "hr_question": payload.get("hr_question", ""),
+            "ai_reply": payload.get("ai_reply", ""),
+        })
+    return drafts
+
+
+def approve_reply(conn: sqlite3.Connection, history_id: int, message: str) -> bool:
+    """Record the user's final reply text; the monitor sends it on its next cycle."""
+    text = str(message or "").strip()
+    row = conn.execute(
+        "SELECT id, job_id, action, detail FROM history WHERE id = ?", (history_id,)
+    ).fetchone()
+    if not text or not row or row["action"] != "reply_pending":
+        return False
+    latest = conn.execute(
+        "SELECT MAX(id) AS id FROM history WHERE job_id = ? AND action = 'reply_pending'",
+        (row["job_id"],),
+    ).fetchone()
+    if int(latest["id"] or 0) != int(row["id"]):
+        return False
+    payload = {
+        "schema": "reply_approved.v1",
+        "message": text[:1000],
+        "pending_history_id": int(row["id"]),
+        "pending_detail": row["detail"],
+    }
+    add_history(conn, row["job_id"], "reply_approved", json.dumps(payload, ensure_ascii=False))
+    return True
+
+
+def latest_approved_reply(conn: sqlite3.Connection, job_id: str) -> dict | None:
+    """The newest approved-but-unsent reply for a job, or None."""
+    row = conn.execute(
+        """
+        SELECT a.id, a.detail FROM history a
+        WHERE a.job_id = ? AND a.action = 'reply_approved'
+          AND NOT EXISTS (
+              SELECT 1 FROM history r
+              WHERE r.job_id = a.job_id AND r.id > a.id
+                AND r.action IN ('replied', 'auto_replied', 'reply_dismissed')
+          )
+        ORDER BY a.id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    if not row:
+        return None
+    payload = _parse_detail(row["detail"])
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        return None
+    return {
+        "history_id": row["id"],
+        "message": message,
+        "pending_history_id": payload.get("pending_history_id"),
+        "pending_detail": payload.get("pending_detail", ""),
+    }

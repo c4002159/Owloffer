@@ -10,6 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_ai_api_key
 from bosshunter.ai.prefilter import _parse_salary_range_k, quick_score
+from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, recruit_weight
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
@@ -18,10 +19,12 @@ from bosshunter.db import (
     get_jobs_by_status,
     persist_job_score_and_trace,
     reset_ai_filtered_jobs,
+    update_job_dual_score,
     update_job_quick_score,
     update_job_score,
     update_job_status,
 )
+from bosshunter.review_queue import automation_settings, review_cap_reached
 from bosshunter.scoring_selection import select_scoring_jobs, validate_options
 
 console = Console()
@@ -63,6 +66,7 @@ SCORING_PROMPT = """你是一位严谨的招聘匹配评估员。请依据完整
 - 区分“已证明满足”“有相邻证据”“未体现、待确认”“明确不满足”。没有写过某项经历只能说“未体现”，不能断言从未做过；已有相关经历时应说明具体方向的差距，不能否定整个行业或能力。
 - 可迁移能力必须有具体行动或成果支持，不能仅靠关键词加分；也不能因缺少完全同名岗位而忽略实际做过的工作。自主项目能支持职责与成果，不能凭空折算为全职任职年限。
 - JD中的“优先、加分、感兴趣”不是必备条件；不得从JD替候选人编造意愿、性格或薪资偏好。驻场、出差等意愿未写明时列为待确认，不视为拒绝。
+- 简略或泛化的技术要求（如“会使用Java编程处理问题”“熟悉一门编程语言”）没有给出具体年限、框架或规模时，不属于硬性缺口：简历或“GitHub项目证据”中有对应语言的项目即视为有直接证据，只有相邻语言的项目视为相邻证据，二者都不应触发technical_required封顶；只有JD写明具体年限、框架、规模或明确要求该技术为必备的深度经验，才按硬性要求核对。
 - 同一项缺口不要在多个维度重复扣分。未提出的条件不扣分；年限按JD要求的相关工作范围核对，不把总工作年限直接当成细分岗位年限。明确要求的经验、资格或现有资源未体现时，属于证据缺口，不能按已满足给满分。
 - 保留JD条件的完整范围与连接词：“A或B”满足任一即可；“A，C优先”不能把A也当成优先。行业经历与细分业务经验要分别核对，不因缺少某种业务经验就断言没有整个行业经历。
 - 行业与客户类型要查遍每段任职，不能只看最近的自主项目。按实际服务领域判断：保险属于金融领域，为企业或政府提供技术产品能支撑B/G端经验；这些不能自动证明信贷、基金销售等细分业务能力。描述差距时保留这种区别。
@@ -163,7 +167,13 @@ def _load_resume(config: dict) -> str:
     resume_path = Path(config.get("profile", {}).get("resume_path", "./resume.md"))
     if not resume_path.exists():
         return ""
-    return resume_path.read_text(encoding="utf-8")
+    resume = resume_path.read_text(encoding="utf-8")
+    from bosshunter.github_profile import load_profile, summarize_profile
+
+    github = load_profile(Path("."))
+    if github and github.get("repos"):
+        resume = f"{resume.rstrip()}\n\n{summarize_profile(github)}"
+    return resume
 
 
 def _call_claude(prompt: str, config: dict, max_tokens: int | None = None) -> str | None:
@@ -832,7 +842,12 @@ def score_jobs(
             futures: dict[Future[ScoreOutcome], dict] = {}
             job_iter = iter(ai_jobs)
 
+            cap_state = {"hit": False}
+
             def submit_next() -> bool:
+                if cap_state["hit"] or review_cap_reached(db, config):
+                    cap_state["hit"] = True
+                    return False
                 try:
                     next_job = next(job_iter)
                 except StopIteration:
@@ -866,26 +881,37 @@ def score_jobs(
                     completed_job = False
                     if result is not None:
                         job_missing = False
+                        final_score, final_reason = result.score, result.reason
+                        blend = recruit_weight(config)
+                        recruit_value, recruit_detail = compute_recruit_score(job)
+                        if blend > 0:
+                            final_score = blend_scores(result.score, recruit_value, blend)
+                            final_reason = (
+                                f"综合{final_score}=匹配{result.score}×{1 - blend:.0%}+招聘真实度{recruit_value}×{blend:.0%}"
+                                f"（{recruit_detail}）；{result.reason}"
+                            )
                         if result.structured:
                             try:
                                 persist_job_score_and_trace(
                                     db,
                                     job["id"],
-                                    result.score,
-                                    result.reason,
+                                    final_score,
+                                    final_reason,
                                     build_score_trace(result),
                                 )
                             except ValueError:
                                 job_missing = True
                         else:
-                            update_job_score(db, job["id"], result.score, result.reason)
+                            update_job_score(db, job["id"], final_score, final_reason)
+                        if not job_missing:
+                            update_job_dual_score(db, job["id"], result.score, recruit_value, recruit_detail)
                         if job_missing:
                             _notify(
                                 config,
                                 f"已跳过 {job['company']}｜{job['title']}：岗位在评分期间被删除，评分结果未保存。",
                             )
                         else:
-                            if result.score >= threshold:
+                            if final_score >= threshold:
                                 update_job_status(db, job["id"], "ready")
                                 scored += 1
                             else:
@@ -925,6 +951,12 @@ def score_jobs(
 
         if prefiltered > 0:
             console.print(f"[dim]  预筛阶段淘汰 {prefiltered} 个岗位（节省 {prefiltered} 次 API 调用）[/dim]")
+        if cap_state["hit"]:
+            _notify(
+                config,
+                f"待审查岗位已达上限（{automation_settings(config)['review_cap']} 个），评分已暂停；"
+                f"请先在审查窗口处理，剩余 {len(remaining_job_ids)} 个岗位之后继续评分。",
+            )
         if pause_reason:
             _notify(
                 config,

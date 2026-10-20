@@ -118,6 +118,103 @@ def connect(ctx: click.Context) -> None:
     console.print("\n[bold green]连接检测完成[/bold green]")
 
 
+@cli.command(name="github-sync")
+@click.option("--user", "username", default=None, help="GitHub 用户名（默认读取 profile.github_username）")
+@click.pass_context
+def github_sync(ctx: click.Context, username: str | None) -> None:
+    """读取公开 GitHub 仓库并缓存技术栈档案，供评分时和简历双比对"""
+    from bosshunter.github_profile import fetch_profile, save_profile, summarize_profile
+
+    config = ctx.obj["config"]
+    username = username or (config.get("profile", {}) or {}).get("github_username", "")
+    if not username:
+        console.print("[red]请用 --user 指定 GitHub 用户名，或在 config.yaml 的 profile.github_username 中填写[/red]")
+        raise SystemExit(1)
+    try:
+        profile = fetch_profile(str(username))
+    except Exception as exc:  # network or API failure: report, never crash the CLI
+        console.print(f"[red]读取 GitHub 失败: {type(exc).__name__}: {exc}[/red]")
+        raise SystemExit(1)
+    path = save_profile(profile, ctx.obj["base_dir"])
+    console.print(f"[green]✓ 已缓存 {len(profile['repos'])} 个仓库 → {path}[/green]")
+    console.print(summarize_profile(profile))
+
+
+@cli.command()
+@click.option("--apply", "apply_tiers", default=None, help="把指定层写入 config.yaml 的搜索关键词，如 core 或 core,expand")
+@click.option("--stats", is_flag=True, help="只显示各关键词的产出统计，不调用 AI")
+@click.pass_context
+def keywords(ctx: click.Context, apply_tiers: str | None, stats: bool) -> None:
+    """让关键词模型读简历和 GitHub 档案，生成核心/扩展/探索三层搜索词"""
+    from bosshunter.ai import keywords as kw
+    from bosshunter.ai.scorer import _load_resume
+    from bosshunter.config import save_config
+    from bosshunter.db import get_db
+
+    config = ctx.obj["config"]
+    base_dir = ctx.obj["base_dir"]
+
+    if stats:
+        db = get_db()
+        try:
+            rows = kw.keyword_yield(db, int(config.get("scoring", {}).get("threshold", 60)))
+        finally:
+            db.close()
+        for row in rows:
+            console.print(f"{row['keyword']}: 采集 {row['collected']}，达标 {row['qualified']}（{row['rate']:.0%}）")
+        if not rows:
+            console.print("[yellow]还没有带关键词来源的岗位数据[/yellow]")
+        return
+
+    if apply_tiers:
+        plan = kw.load_plan(base_dir)
+        if not plan:
+            console.print("[red]还没有关键词方案，请先不带 --apply 运行一次 bosshunter keywords[/red]")
+            raise SystemExit(1)
+        tiers = tuple(t.strip() for t in apply_tiers.split(",") if t.strip())
+        unknown = [t for t in tiers if t not in kw.TIERS]
+        if unknown:
+            console.print(f"[red]未知层: {', '.join(unknown)}（可选 core / expand / explore）[/red]")
+            raise SystemExit(1)
+        chosen = kw.select_keywords(plan, tiers)
+        config.setdefault("search", {})["keywords"] = chosen
+        config.setdefault("platforms", {}).setdefault("boss", {}).setdefault("search", {})["keywords"] = chosen
+        profile = config.setdefault("profile", {})
+        merged = list(dict.fromkeys([*(profile.get("deal_breakers") or []), *plan.get("excludes", [])]))
+        profile["deal_breakers"] = merged
+        save_config(config)
+        console.print(f"[green]✓ 已写入 {len(chosen)} 个搜索词，并合并 {len(plan.get('excludes', []))} 个排除词[/green]")
+        console.print("、".join(chosen))
+        return
+
+    resume = _load_resume(config)
+    if not resume:
+        console.print("[red]无法读取简历文件[/red]")
+        raise SystemExit(1)
+    plan = kw.generate_plan(config, resume)
+    if not plan:
+        console.print("[red]未能生成关键词方案：请检查 AI 配置（bosshunter ai-status）[/red]")
+        raise SystemExit(1)
+    path = kw.save_plan(plan, base_dir)
+    for direction in plan["directions"]:
+        console.print(f"[bold]{direction['name']}[/bold] [dim]{direction['evidence']}[/dim]")
+        console.print("  " + "、".join(direction["keywords"]))
+    for tier, label in (("core", "核心词"), ("expand", "扩展词"), ("explore", "探索词")):
+        console.print(f"[cyan]{label}[/cyan]: " + "、".join(plan[tier]))
+    console.print(f"[dim]排除词: {'、'.join(plan['excludes'])}[/dim]")
+    console.print(f"[green]✓ 方案已保存 → {path}；确认后运行 bosshunter keywords --apply core,expand[/green]")
+
+
+@cli.command()
+@click.pass_context
+def review(ctx: click.Context) -> None:
+    """打开置顶审查窗口：通过/跳过岗位、确认回复草稿、一键投递"""
+    from bosshunter.ai.keywords import load_plan
+    from bosshunter.ui.review_window import open_review_window
+
+    open_review_window(ctx.obj["config"], load_plan(ctx.obj["base_dir"]))
+
+
 @cli.command(name="ai-status")
 @click.pass_context
 def ai_status(ctx: click.Context) -> None:
