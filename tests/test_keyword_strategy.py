@@ -104,3 +104,12 @@ def test_greeting_prompt_has_a_platform_specific_scene():
     assert "{platform_style}" in GREETING_PROMPT
     assert "微信" in _platform_style({"source_platform": "51job"})
     assert "聊天窗口" in _platform_style({"source_platform": "liepin"}) and "BOSS" in _platform_style({})
+
+
+def test_greeting_prompt_carries_company_background_job_and_experience():
+    from bosshunter.ai.greeter import GREETING_PROMPT, _company_background
+
+    assert "{company_background}" in GREETING_PROMPT and "公司背景" in GREETING_PROMPT
+    assert _company_background({}) == "未提供"
+    text = _company_background({"company_industry": "汽车零部件", "company_size": "100-499人"})
+    assert "汽车零部件" in text and "100-499人" in text

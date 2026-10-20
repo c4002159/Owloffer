@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from pathlib import Path
 from threading import Event
@@ -282,9 +283,9 @@ class _SharedProcessor:
         recompute_outsourcing(conn, self.outsourcing_rules)
         self.rejected_companies = rejected_names(conn)
         try:
-            self.keyword_limit = int(config.get("_keyword_limit") or 0)
+            self.cap_total: int | None = int(config.get("_keyword_limit") or 0) or None
         except (TypeError, ValueError):
-            self.keyword_limit = 0
+            self.cap_total = None
         # Cross-platform dedup: a company with a job already in the pool, or applied to within the
         # cooldown window on ANY platform, is not collected again.
         automation = config.get("automation") if isinstance(config.get("automation"), dict) else {}
@@ -410,7 +411,7 @@ class _SharedProcessor:
         self.event(phase="saving")
         if self.stop_event is not None and self.stop_event.is_set():
             return False
-        if self.keyword_limit and len(self.new_job_ids) >= self.keyword_limit:
+        if self.cap_total is not None and len(self.new_job_ids) >= self.cap_total:
             return False
         return self.stop_event is None or not self.stop_event.is_set()
 
@@ -447,6 +448,17 @@ class CollectionOrchestrator:
             raw_options = boss_resume_options(self.db_path, str(resume_id))
         options = normalize_collection_options(self.config, raw_options)
         order = options["platform_order"]
+        automation = self.config.get("automation") if isinstance(self.config.get("automation"), dict) else {}
+        self._budget = automation.get("keyword_budget") is True and not resume_id
+        self._budget_plan = None
+        if self._budget:
+            try:
+                from bosshunter.ai.keywords import load_plan
+
+                self._budget_plan = load_plan(self.db_path.parent.parent)
+            except Exception:
+                self._budget_plan = None
+        self._platform_count = len(order)
         states: dict[str, dict[str, Any]] = {
             platform: {"status": "queued", "new": 0, "target": None, "percent": None}
             for platform in order
@@ -525,9 +537,15 @@ class CollectionOrchestrator:
                         if platform == "liepin" and self._uses_default_registry
                         else self.registry.get(platform)
                     )
-                    result = collector.collect(request, hooks)
                     ok_statuses = {"completed", "completed_with_shortage"}
                     quotas = options.get("quotas") or {}
+                    if self._budget and request.keywords:
+                        result = self._collect_with_budget(
+                            collector, request, processor, hooks, conn, int(quotas.get("fulltime", 0) or 0),
+                            "fulltime", intern=False,
+                        )
+                    else:
+                        result = collector.collect(request, hooks)
                     if (
                         intern_words and int(quotas.get("internship", 0) or 0) > 0
                         and result.status in ok_statuses
@@ -584,7 +602,8 @@ class CollectionOrchestrator:
                     or (self.stop_event and self.stop_event.is_set())
                 ):
                     break
-
+            if self._budget:
+                self.keyword_moves = self._adjust_tiers(conn, options)
         finally:
             conn.close()
 
@@ -611,7 +630,68 @@ class CollectionOrchestrator:
             "platforms": states,
             "collected_job_ids": unique_new_ids,
             "results": [result.__dict__ for result in platform_results],
+            "keyword_moves": list(getattr(self, "keyword_moves", [])),
         }
+
+    def _collect_with_budget(self, collector, request, processor, hooks, conn, quota, kind, *, intern, words=None):
+        """One collect() per keyword, in tier order, each capped by its share of the platform's budget.
+
+        Full-time words get core > expand > explore caps; paused words are skipped (unless every word is paused);
+        results of every keyword are recorded so tiers can move. Internship words share the budget evenly.
+        """
+        from dataclasses import replace
+
+        from bosshunter import keyword_strategy as ks
+
+        words = list(words if words is not None else request.keywords)
+        raw = math.ceil(max(quota, 0) * 2 / 0.9)            # about half survive scoring; 10% is reserve
+        share = ks.platform_share(raw, getattr(self, "_platform_count", 1))
+        if intern:
+            tiers = {"core": words, "expand": [], "explore": [], "paused": []}
+        else:
+            tiers = ks.current_tiers(conn, words, getattr(self, "_budget_plan", None))
+            if not any(tiers[t] for t in ks.TIERS):
+                tiers = {"core": words, "expand": [], "explore": [], "paused": []}
+        caps = ks.first_pass_caps(tiers, share)
+        ordered = [word for tier in ks.TIERS for word in tiers[tier]]
+        results: list[PlatformCollectionResult] = []
+        ok = {"completed", "completed_with_shortage"}
+        for word in ordered:
+            if self.stop_event is not None and self.stop_event.is_set():
+                break
+            before, seen0, filtered0 = len(processor.new_job_ids), processor.progress.seen, processor.progress.filtered
+            processor.cap_total = before + caps.get(word, ks.MIN_SLICE)
+            result = collector.collect(replace(request, keywords=[word]), hooks)
+            processor.cap_total = None
+            ks.record_run(
+                conn, request.platform, word, kind,
+                seen=processor.progress.seen - seen0, new=len(processor.new_job_ids) - before,
+                filtered=processor.progress.filtered - filtered0,
+            )
+            results.append(result)
+            if result.status not in ok and result.reason_code != "callback_stopped":
+                return result                                   # a safety stop ends the whole platform
+        if not results:
+            return PlatformCollectionResult(request.platform, "completed", "search_exhausted", "没有可采集的关键词")
+        merged = results[-1]
+        shortage = any(r.status == "completed_with_shortage" for r in results)
+        merged.status = "completed_with_shortage" if shortage else "completed"
+        if merged.reason_code == "callback_stopped":
+            merged.reason_code = "search_exhausted"
+        merged.message = f"按关键词预算采集 {len(results)} 个词：" + "；".join(r.message for r in results if r.message)[:400]
+        return merged
+
+    def _adjust_tiers(self, conn, options) -> list[dict]:
+        """Move keywords between tiers from their recent results, once per run."""
+        from bosshunter import keyword_strategy as ks
+
+        words: list[str] = []
+        for platform in options["platform_order"]:
+            words.extend(options["platforms"][platform].get("keywords") or [])
+        try:
+            return ks.adjust_tiers(conn, list(dict.fromkeys(words)), getattr(self, "_budget_plan", None))
+        except Exception:
+            return []
 
     def _collect_internships(self, request, raw, intern_words, quotas, processor, hooks, conn):
         """Second pass of one platform: the internship keywords with internships accepted, capped near the quota.
@@ -651,6 +731,11 @@ class CollectionOrchestrator:
             else self.registry.get(platform)
         )
         try:
+            if getattr(self, "_budget", False):
+                return self._collect_with_budget(
+                    collector, intern_request, processor, intern_hooks, conn,
+                    int(quotas.get("internship", 0) or 0), "internship", intern=True, words=intern_words,
+                )
             return collector.collect(intern_request, intern_hooks)
         except CollectionError as exc:
             return PlatformCollectionResult(platform, "blocked", exc.code, exc.message, error=str(exc))

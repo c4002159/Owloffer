@@ -772,3 +772,57 @@ class KeywordLimitTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = CollectionOrchestrator({"_keyword_limit": 2}, db_path=Path(tmp) / "c.db", registry=registry).run(options)["platforms"]["liepin"]
         self.assertEqual(state["new"], 2)
+
+
+class KeywordBudgetInRunsTests(TestCase):
+    """Full-flow and standalone collection: one search per keyword, in tier order, each within its tier's budget."""
+
+    def _run(self, tiers, quotas, extra_config=None):
+        from bosshunter import keyword_strategy as ks
+
+        calls = []
+
+        class PerKeyword:
+            platform = "liepin"
+
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                calls.append(word)
+                for index in range(10):
+                    candidate = JobCandidate(**{**_candidate("liepin", f"{word}-{index}", f"{word}岗位{index}").__dict__,
+                                                "company": f"{word}公司{index}号", "city": "上海"})
+                    if not hooks.on_list_candidate(candidate) or not hooks.on_candidate(candidate):
+                        break
+                return PlatformCollectionResult("liepin", "completed", "search_exhausted", "ok")
+
+        registry = CollectorRegistry({"liepin": PerKeyword})
+        options = _options(order=["liepin"])
+        options["platforms"]["liepin"].update(cities=["上海"], keywords=list(tiers))
+        options["quotas"] = quotas
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "c.db"
+            db = get_db(db_path)
+            try:
+                for word, tier in tiers.items():
+                    ks.set_pinned(db, word, True, tier=tier)
+            finally:
+                db.close()
+            config = {"automation": {"keyword_budget": True, **(extra_config or {})}}
+            result = CollectionOrchestrator(config, db_path=db_path, registry=registry).run(options)
+            db = get_db(db_path)
+            try:
+                runs = {row["keyword"]: row["new"] for row in db.execute("SELECT keyword, new FROM keyword_runs")}
+            finally:
+                db.close()
+        return calls, runs, result
+
+    def test_keywords_run_core_first_and_each_stays_within_its_tier_budget(self):
+        calls, runs, result = self._run({"甲": "expand", "乙": "core", "丙": "explore"}, {"fulltime": 10, "internship": 0})
+        self.assertEqual(calls, ["乙", "甲", "丙"])
+        self.assertEqual(runs, {"乙": 10, "甲": 7, "丙": 4})                    # core 12 > expand 7 > explore 4
+        self.assertEqual(result["platforms"]["liepin"]["new"], 21)
+        self.assertIn("keyword_moves", result)
+
+    def test_budget_is_off_without_the_switch(self):
+        calls, runs, _ = self._run({"甲": "core", "乙": "core"}, {"fulltime": 10, "internship": 0}, {"keyword_budget": False})
+        self.assertEqual(runs, {})

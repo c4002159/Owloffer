@@ -32,6 +32,7 @@ GREETING_PROMPT = """以求职者身份，写一条在{platform}发给HR的简�
 ## 目标岗位
 - 职位：{title}
 - 公司：{company}
+- 公司背景：{company_background}
 - 薪资：{salary}
 - 学历要求：{education}
 - 招聘类型：{recruitment_type}
@@ -51,7 +52,7 @@ GREETING_PROMPT = """以求职者身份，写一条在{platform}发给HR的简�
 {greeting_preference}
 
 ## 要求
-1. 建议40-90字、最多3个短句，写“岗位切入点＋一项真实经历/结果”。JD提供具体产品或业务场景、且与我的经历相关时，优先带一句克制、可尝试的产品/业务建议，再自然接真实自荐；信息不足或用户不希望提建议时只写来意和经历，不硬编建议。建议只能作为设想，不能断言对方业务有问题或保证效果。可用普通问候开头，说完就停，不复述JD、不凑字数；为保留事实含义可适当超出建议字数，但全文不得超过300字符（含标点）。
+1. 建议40-90字、最多3个短句，写“岗位切入点＋一项真实经历/结果”。切入点要把公司背景（行业、业务场景）、岗位介绍里的具体任务和我的真实经历连起来，说明为什么这段经历对这家公司的这个岗位有用，而不是泛泛自荐；公司背景为“未提供”时只用岗位介绍。JD提供具体产品或业务场景、且与我的经历相关时，优先带一句克制、可尝试的产品/业务建议，再自然接真实自荐；信息不足或用户不希望提建议时只写来意和经历，不硬编建议。建议只能作为设想，不能断言对方业务有问题或保证效果。可用普通问候开头，说完就停，不复述JD、不凑字数；为保留事实含义可适当超出建议字数，但全文不得超过300字符（含标点）。
 2. {question_rule}
 3. 像本人发私信：用具体动作和结果，建议保持商量语气，不总结行业规律、不教HR做业务。不写“关键在于、最难的是、不是…而是…”等金句，不用“赋能、闭环、抓手、有体感、自己扛、现成打法”等包装词或刻意口语，不硬补邀约、口号及承诺。
 4. 不得捏造我没有的经历、头衔或身份，不把JD当成我的经历；只概括背景中的事实，不夸大成果或职级，保留所用数据的真实周期。毕业年份、届别和在读状态只用明确事实，不推断。
@@ -424,6 +425,16 @@ PLATFORM_STYLES = {
 }
 
 
+def _company_background(job: dict) -> str:
+    """Industry, size and any company intro collected with the job; '未提供' when there is nothing."""
+    parts = [
+        str(job.get(key) or "").strip()
+        for key in ("company_industry", "company_size", "company_intro")
+    ]
+    text = "；".join(part for part in parts if part)
+    return _truncate_prompt_text(text, 240) if text else "未提供"
+
+
 def _platform_style(job: dict) -> str:
     return PLATFORM_STYLES.get(str(job.get("source_platform") or "boss"), PLATFORM_STYLES["boss"])
 
@@ -495,6 +506,7 @@ def _generate_greeting_once(
     prompt = GREETING_PROMPT.format(
         platform=_platform_label(job),
         platform_style=_platform_style(job),
+        company_background=_company_background(job),
         resume_summary=resume_summary,
         title=job["title"],
         company=job["company"],

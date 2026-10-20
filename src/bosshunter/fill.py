@@ -74,6 +74,8 @@ def collect_external(config: dict, platform: str, keyword: str, stop_event: Even
 
     run_config = dict(config)
     run_config["_workbench_stop_event"] = stop_event
+    # fill() already budgets keywords itself, one keyword per call; do not budget a second time inside.
+    run_config["automation"] = {**(config.get("automation") or {}), "keyword_budget": False}
     # No internship second pass inside one keyword: fill() schedules internship keywords itself.
     options = {
         "platform_order": [platform], "auto_score": False,

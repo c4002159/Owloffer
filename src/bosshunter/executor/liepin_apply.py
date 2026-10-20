@@ -70,7 +70,7 @@ CHAT_STATE_JS = r"""
     chatLabel: chat ? (chat.innerText || '').replace(/\s+/g, '') : '', chatX: chatPoint.x, chatY: chatPoint.y, chatOk: chatPoint.ok,
     inputReady: !!input, inputX: inputPoint.x, inputY: inputPoint.y, inputOk: inputPoint.ok,
     sendReady: !!send, sendX: sendPoint.x, sendY: sendPoint.y, sendOk: sendPoint.ok,
-    typed: input ? input.value : '', body: body.replace(/\s+/g, ' ').slice(-1500),
+    typed: input ? input.value : '', body: body.replace(/\s+/g, ' ').slice(0, 8000),   // the open chat sits above the conversation list
   });
 })()
 """

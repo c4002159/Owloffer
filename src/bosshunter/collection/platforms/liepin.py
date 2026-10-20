@@ -201,6 +201,8 @@ JS_EXTRACT_DETAIL = r"""
     var cityNode = document.querySelector('.job-dq-box .ellipsis-1');
     var companyNode = document.querySelector('.company-info-container .ellipsis-1') || document.querySelector("div[data-nick='job-detail-company-info'] .ellipsis-1");
     var updatedMatch = body.match(/(?:\d+\s*(?:分钟|小时|天|周|个月|月|年)前|刚刚|今天|昨天)更新/);
+    var industryMatch = body.match(/企业行业[:：]\s*([^\n]+)/);
+    var scaleMatch = body.match(/人数规模[:：]\s*([^\n]+)/);
     var addressMatch = body.match(/职位地址[:：]\s*([^\n]+)/);
     var activeMatch = body.match(/(?:\S{1,6}前在线|刚刚在线|当前在线|今日在线|本周在线)/);
     return JSON.stringify({
@@ -208,6 +210,8 @@ JS_EXTRACT_DETAIL = r"""
         hr_active: activeMatch ? activeMatch[0] : '',
         updated: updatedMatch ? updatedMatch[0] : '',
         address: addressMatch ? addressMatch[1].trim() : '',
+        industry: industryMatch ? industryMatch[1].trim() : '',
+        scale: scaleMatch ? scaleMatch[1].trim() : '',
         title: titleNode ? String(titleNode.innerText || '').trim() : '',
         salary: salaryNode ? String(salaryNode.innerText || '').replace(/\s+/g, '').trim() : '',
         company: companyNode ? String(companyNode.innerText || '').trim() : '',
@@ -565,6 +569,8 @@ class LiepinCollector:
             education=base.education,
             jd=str(detail.get("jd") or base.jd or "").strip(),
             updated_days=update_label_days(str(detail.get("updated") or "")),
+            company_industry=str(detail.get("industry") or "").strip(),
+            company_size=str(detail.get("scale") or "").strip(),
             hr_active=str(detail.get("hr_active") or "").strip(),
             url=base.url,
             source_keyword=base.source_keyword,

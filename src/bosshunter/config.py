@@ -163,6 +163,8 @@ DEFAULTS: dict[str, Any] = {
         "company_cooldown_days": 1,
         # A posting listed this many days in a row while its HR is inactive counts as a zombie.
         "zombie_days": 7,
+        # Collection runs give every keyword a budget by tier and move keywords between tiers by their results.
+        "keyword_budget": True,
     },
     "scoring": {
         "threshold": 71,
