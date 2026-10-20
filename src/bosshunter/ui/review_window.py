@@ -6,6 +6,8 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from bosshunter.company_suggestions import block_companies
+from bosshunter.config import save_config
 from bosshunter.db import add_history, get_db
 from bosshunter.review_queue import (
     UNCATEGORIZED,
@@ -16,6 +18,8 @@ from bosshunter.review_queue import (
     automation_settings,
     dispatch_approved,
     pending_reply_drafts,
+    refresh_recruit_scores,
+    repeat_flags,
     review_pending,
     skip_jobs,
 )
@@ -69,12 +73,13 @@ class ReviewWindow:
     def _build_jobs_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
         notebook.add(frame, text="待审查岗位")
-        columns = ("company", "salary", "score", "match", "recruit", "hr")
+        columns = ("company", "salary", "score", "match", "recruit", "hr", "flags")
         self.jobs_tree = ttk.Treeview(frame, columns=columns, selectmode="extended", height=14)
+        self.jobs_tree.tag_configure("flagged", background="#fff3c4")
         self.jobs_tree.heading("#0", text="分类 / 职位")
         for key, title, width in (
-            ("company", "公司", 150), ("salary", "薪资", 70), ("score", "综合", 50),
-            ("match", "匹配", 50), ("recruit", "真实度", 55), ("hr", "HR活跃", 80),
+            ("company", "公司", 130), ("salary", "薪资", 60), ("score", "综合", 45),
+            ("match", "匹配", 45), ("recruit", "真实度", 50), ("hr", "HR活跃", 70), ("flags", "标记", 140),
         ):
             self.jobs_tree.heading(key, text=title)
             self.jobs_tree.column(key, width=width, anchor="w")
@@ -85,6 +90,7 @@ class ReviewWindow:
         bar.pack(fill="x", pady=(6, 0))
         ttk.Button(bar, text="通过所选", command=self.approve_selected).pack(side="left")
         ttk.Button(bar, text="跳过所选", command=self.skip_selected).pack(side="left", padx=6)
+        ttk.Button(bar, text="拉黑所选公司…", command=self.block_selected_companies).pack(side="left")
         ttk.Button(bar, text="一键投递已通过岗位", command=self.start_dispatch).pack(side="right")
 
     def _build_replies_tab(self, notebook: ttk.Notebook) -> None:
@@ -114,9 +120,11 @@ class ReviewWindow:
         try:
             if self.plan:
                 assign_categories(db, self.plan)
+            refresh_recruit_scores(db, self.config)
             jobs = review_pending(db, self.settings["review_min_score"])
             approved = approved_unsent(db)
             drafts = pending_reply_drafts(db)
+            flags = repeat_flags(db, jobs)
         finally:
             db.close()
 
@@ -125,10 +133,13 @@ class ReviewWindow:
         for category, rows in group_by_category(jobs).items():
             parent = self.jobs_tree.insert("", "end", iid=f"cat:{category}", text=f"{category}（{len(rows)}）", open=True)
             for job in rows:
+                labels = flags.get(str(job["id"]), [])
                 self.jobs_tree.insert(
                     parent, "end", iid=str(job["id"]), text=job["title"],
                     values=(job["company"], job.get("salary") or "-", _fmt(job.get("score")),
-                            _fmt(job.get("match_score")), _fmt(job.get("recruit_score")), job.get("hr_active") or "-"),
+                            _fmt(job.get("match_score")), _fmt(job.get("recruit_score")),
+                            job.get("hr_active") or "-", " ".join(labels)),
+                    tags=("flagged",) if labels else (),
                 )
         for iid in selected:
             if self.jobs_tree.exists(iid):
@@ -179,6 +190,33 @@ class ReviewWindow:
         finally:
             db.close()
         self.log.set(f"已跳过 {changed} 个岗位")
+        self.refresh()
+
+    def block_selected_companies(self) -> None:
+        ids = self._selected_job_ids()
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        db = get_db()
+        try:
+            rows = db.execute(f"SELECT DISTINCT company FROM jobs WHERE id IN ({placeholders})", ids).fetchall()
+            names = sorted({str(row["company"]).strip() for row in rows if str(row["company"]).strip()})
+            if not names:
+                return
+            listing = "\n".join(names[:15]) + ("\n…" if len(names) > 15 else "")
+            if not messagebox.askyesno(
+                "加入企业黑名单",
+                f"以下公司将加入黑名单：\n\n{listing}\n\n"
+                "之后不再采集、评分，这些公司待审查的岗位会被移出列表。\n确认加入？",
+                parent=self.root,
+            ):
+                return
+            added = block_companies(db, self.config, names)
+        finally:
+            db.close()
+        if added:
+            save_config(self.config)
+        self.log.set(f"已将 {len(added)} 家公司加入黑名单")
         self.refresh()
 
     def start_dispatch(self) -> None:

@@ -2589,6 +2589,53 @@ def api_config_post():
 		return _json_response({"error": str(e)}, 500)
 
 
+@app.route("/api/companies/suggestions")
+def api_company_suggestions():
+	"""Companies worth blocking (outsourcing hits, repeated or long-running postings)."""
+	db = _get_web_db()
+	try:
+		from bosshunter.company_suggestions import company_suggestions
+
+		config = load_config(CONFIG_PATH)
+		blocked = (config.get("profile") or {}).get("blocked_companies") or []
+		return _json_response({"suggestions": company_suggestions(db, blocked)})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+	finally:
+		db.close()
+
+
+@app.route("/api/keywords/plan")
+def api_keywords_plan():
+	from bosshunter.ai.keywords import load_plan
+
+	return _json_response({"plan": load_plan(BASE_DIR)})
+
+
+@app.route("/api/keywords/generate", method="POST")
+def api_keywords_generate():
+	"""Ask the keyword model (resume + GitHub evidence + skill file) for a tiered plan."""
+	try:
+		from bosshunter.ai.keywords import generate_plan, save_plan
+		from bosshunter.ai.scorer import _load_resume
+
+		config = load_config(CONFIG_PATH)
+		resume = _load_resume(config)
+		if not resume:
+			return _json_response({"error": "无法读取简历，请先在“个人信息”里上传简历"}, 400)
+		if not get_ai_api_key(config):
+			return _json_response({"error": "尚未配置 AI Key，请先在 AI 设置里连接 AI 服务"}, 400)
+		plan = generate_plan(config, resume)
+		if not plan:
+			return _json_response({"error": "未能生成关键词方案，请检查 AI 配置后重试"}, 502)
+		save_plan(plan, BASE_DIR)
+		return _json_response({"plan": plan})
+	except AIRequestError as exc:
+		return _json_response({"error": exc.user_message}, 400)
+	except Exception:
+		return _json_response({"error": "生成关键词方案失败，请稍后重试"}, 500)
+
+
 @app.route("/api/config/models", method="POST")
 def api_config_models():
 	"""Use draft AI settings and saved credentials without persisting the draft."""

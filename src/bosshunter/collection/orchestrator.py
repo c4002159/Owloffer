@@ -24,7 +24,9 @@ from bosshunter.collection_run_store import (
     boss_combo_key, boss_resume_options, claim_boss_resume, create_collection_run,
     save_boss_checkpoint, update_collection_run,
 )
-from bosshunter.db import get_db, insert_job_if_new, job_identity_exists, recompute_outsourcing
+from bosshunter.db import (
+    find_job_id, get_db, insert_job_if_new, job_identity_exists, record_sighting, recompute_outsourcing,
+)
 from bosshunter.employment import internship_config_error
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.outsourcing import load_rules
@@ -290,6 +292,12 @@ class _SharedProcessor:
             candidate.source_job_id,
             legacy_job_id=candidate.storage_id,
         ):
+            # Still listed today: remember the sighting so long-running postings can be spotted.
+            known_id = find_job_id(
+                self.conn, candidate.platform, candidate.source_job_id, candidate.storage_id
+            )
+            if known_id:
+                record_sighting(self.conn, known_id)
             self.progress.duplicate += 1
             self.event()
             return False
@@ -318,6 +326,7 @@ class _SharedProcessor:
             return True
         if inserted:
             self.new_job_ids.append(candidate.storage_id)
+            record_sighting(self.conn, candidate.storage_id)
         else:
             self.progress.duplicate += 1
         self.event(phase="saving")

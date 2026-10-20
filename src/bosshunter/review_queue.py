@@ -7,10 +7,12 @@ next monitor cycle sends it (``reply_approved``).
 """
 
 import json
+import re
 import sqlite3
 
 from bosshunter.db import add_history, update_job_status
 
+COMPANY_REPEAT_MIN = 3
 DEFAULT_REVIEW_CAP = 150
 DEFAULT_MIN_SCORE = 60
 UNCATEGORIZED = "其他"
@@ -106,6 +108,75 @@ def assign_categories(conn: sqlite3.Connection, plan: dict | None) -> int:
         updated += 1
     conn.commit()
     return updated
+
+
+def refresh_recruit_scores(conn: sqlite3.Connection, config: dict) -> int:
+    """Re-apply the long-listing penalty to jobs still waiting for review.
+
+    A posting that stays listed for days gradually loses recruiting-authenticity
+    points, so its blended score can sink below ``review_min_score`` and leave the
+    review list. Only ``ready`` jobs with a stored match score are touched.
+    """
+    from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, recruit_weight
+    from bosshunter.db import sighting_streak
+
+    weight = recruit_weight(config)
+    if weight <= 0:
+        return 0
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE status = 'ready' AND deleted_at IS NULL AND match_score IS NOT NULL"
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        job = dict(row)
+        recruit, detail = compute_recruit_score(job, sighting_streak(conn, job["id"]))
+        score = blend_scores(int(job["match_score"]), recruit, weight)
+        if recruit == job.get("recruit_score") and score == job.get("score"):
+            continue
+        prefix = f"综合{score}=匹配{job['match_score']}×{1 - weight:.0%}+招聘真实度{recruit}×{weight:.0%}（{detail}）；"
+        reason = re.sub(r"^综合[^；]*；", "", str(job.get("score_reason") or ""))
+        conn.execute(
+            "UPDATE jobs SET score = ?, recruit_score = ?, recruit_detail = ?, score_reason = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (score, recruit, detail, prefix + reason, job["id"]),
+        )
+        changed += 1
+    conn.commit()
+    return changed
+
+
+def _norm(text: object) -> str:
+    return re.sub(r"\s+", "", str(text or "")).lower()
+
+
+def repeat_flags(conn: sqlite3.Connection, jobs: list[dict]) -> dict[str, list[str]]:
+    """Highlight labels per job id: repeated postings, busy companies, long-running listings."""
+    from bosshunter.db import sighting_streak
+
+    live = conn.execute(
+        "SELECT company, title FROM jobs WHERE deleted_at IS NULL AND status NOT IN ('filtered', 'skipped', 'rejected')"
+    ).fetchall()
+    by_company: dict[str, int] = {}
+    by_company_title: dict[tuple[str, str], int] = {}
+    for row in live:
+        company, title = _norm(row["company"]), _norm(row["title"])
+        by_company[company] = by_company.get(company, 0) + 1
+        by_company_title[(company, title)] = by_company_title.get((company, title), 0) + 1
+
+    flags: dict[str, list[str]] = {}
+    for job in jobs:
+        company, title = _norm(job.get("company")), _norm(job.get("title"))
+        labels = []
+        if by_company.get(company, 0) >= COMPANY_REPEAT_MIN:
+            labels.append(f"同公司{by_company[company]}岗")
+        if by_company_title.get((company, title), 0) >= 2:
+            labels.append(f"重复发布×{by_company_title[(company, title)]}")
+        streak = sighting_streak(conn, job["id"])
+        if streak >= 3:
+            labels.append(f"连续在招{streak}天")
+        if labels:
+            flags[str(job["id"])] = labels
+    return flags
 
 
 def dispatch_approved(config: dict, report=None) -> dict:

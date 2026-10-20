@@ -7,6 +7,8 @@ import { Slider } from '@/components/ui/slider'
 import { TagsInput } from '@/components/ui/tags-input'
 import { CityMultiSelect, type CityOption } from '@/components/config/CityMultiSelect'
 import { ResumeUploadSection } from '@/components/config/ResumeUploadSection'
+import { BlockedCompaniesDialog } from '@/components/config/BlockedCompaniesDialog'
+import { KeywordRecommendations } from '@/components/config/KeywordRecommendations'
 import { SendWindowsInput, sendWindowsError } from '@/components/config/SendWindowsInput'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
@@ -72,6 +74,7 @@ export default function ConfigPage() {
   const [job51CityOptions, setJob51CityOptions] = useState<CityOption[]>([])
   const [liepinCityOptions, setLiepinCityOptions] = useState<CityOption[]>([])
   const [cityRefreshing, setCityRefreshing] = useState(false)
+  const [blockedDialogOpen, setBlockedDialogOpen] = useState(false)
   const [cityMessage, setCityMessage] = useState('')
 
   useEffect(() => {
@@ -407,8 +410,18 @@ export default function ConfigPage() {
             </Field>
             <Field label="屏蔽公司">
               <TagsInput value={config.profile?.blocked_companies || []} onChange={v => updateConfig('profile.blocked_companies', v)} placeholder="输入公司名称或关键词" />
-              <p className="mt-1 text-xs text-muted">公司名包含这些词时不采集，也不会进入 AI 评分。</p>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <p className="text-xs text-muted">公司名包含这些词时不采集，也不会进入 AI 评分。</p>
+                <Button size="sm" variant="secondary" onClick={() => setBlockedDialogOpen(true)}>批量推荐 / 管理</Button>
+              </div>
             </Field>
+            {blockedDialogOpen && (
+              <BlockedCompaniesDialog
+                blocked={config.profile?.blocked_companies || []}
+                onChange={v => updateConfig('profile.blocked_companies', v)}
+                onClose={() => setBlockedDialogOpen(false)}
+              />
+            )}
             <div className="flex items-center justify-between">
               <label className="text-xs text-foreground">接受实习/管培岗位</label>
               <Switch aria-label="接受实习/管培岗位" checked={config.profile?.allow_internship ?? false} onChange={v => {
@@ -445,7 +458,11 @@ export default function ConfigPage() {
                     <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
                   </div>
                   {enabled && <div className="mt-4 space-y-3">
-                    <Field label="搜索关键词" dataTour={platform === guidePlatform ? 'search-keywords' : undefined} hint={platform === 'boss' ? '输入岗位后请按回车键确认，多岗位用","隔开，否则配置无法保存。' : undefined}>
+                    <Field label="搜索关键词" dataTour={platform === guidePlatform ? 'search-keywords' : undefined} hint={platform === 'boss' ? '每个岗位是一个独立词条：输入后回车添加，或点下方推荐词条。' : undefined}>
+                      {platform === 'boss' && <KeywordRecommendations
+                        keywords={Array.isArray(search.keywords) ? search.keywords : []}
+                        onChange={value => updatePlatformSearch(platform, 'keywords', value)}
+                      />}
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
                     </Field>
                     <Field label="搜索城市" dataTour={platform === guidePlatform && platform !== 'boss' ? 'search-city' : undefined}>

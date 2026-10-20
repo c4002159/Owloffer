@@ -42,11 +42,26 @@ def _jd_points(job: dict) -> tuple[int, str]:
     return 4, "JD过短"
 
 
-def compute_recruit_score(job: dict) -> tuple[int, str]:
+def streak_factor(streak: int) -> float:
+    """HR-activity multiplier for a posting that has stayed listed for ``streak`` days in a row.
+
+    Up to 2 days: unchanged. From day 3 it drops 20% per extra day, floored at 40%,
+    because a posting that stays open for days suggests low hiring urgency.
+    """
+    if streak < 3:
+        return 1.0
+    return max(0.4, 1.0 - 0.2 * (streak - 2))
+
+
+def compute_recruit_score(job: dict, streak: int = 0) -> tuple[int, str]:
     """Return (0-100 score, human-readable breakdown)."""
     level = hr_active_level(str(job.get("hr_active") or ""))
     hr_points = _HR_UNKNOWN_POINTS if level is None else _HR_POINTS[level]
     hr_label = str(job.get("hr_active") or "").strip() or "HR活跃度未知"
+    factor = streak_factor(streak)
+    if factor < 1.0:
+        hr_points = int(round(hr_points * factor))
+        hr_label += f"，连续在招{streak}天×{factor:.1f}"
     fresh_points, fresh_label = _freshness_points(job)
     company_points = _OUTSOURCING_POINTS.get(str(job.get("outsourcing_level") or "clean"), 20)
     jd_points, jd_label = _jd_points(job)

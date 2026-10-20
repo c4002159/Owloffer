@@ -19,6 +19,7 @@ from bosshunter.db import (
     get_jobs_by_status,
     persist_job_score_and_trace,
     reset_ai_filtered_jobs,
+    sighting_streak,
     update_job_dual_score,
     update_job_quick_score,
     update_job_score,
@@ -883,7 +884,9 @@ def score_jobs(
                         job_missing = False
                         final_score, final_reason = result.score, result.reason
                         blend = recruit_weight(config)
-                        recruit_value, recruit_detail = compute_recruit_score(job)
+                        recruit_value, recruit_detail = compute_recruit_score(
+                            job, sighting_streak(db, job["id"])
+                        )
                         if blend > 0:
                             final_score = blend_scores(result.score, recruit_value, blend)
                             final_reason = (

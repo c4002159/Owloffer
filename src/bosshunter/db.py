@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1196,7 +1196,68 @@ def _migrate_dual_score(conn: sqlite3.Connection) -> None:
     for name, definition in additions.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS job_sightings ("
+        "job_id TEXT NOT NULL, seen_date TEXT NOT NULL, PRIMARY KEY (job_id, seen_date))"
+    )
     conn.commit()
+
+
+def _local_today() -> date:
+    return datetime.now().date()
+
+
+def record_sighting(conn: sqlite3.Connection, job_id: str, day: date | None = None) -> None:
+    """Remember that a job was seen on a given local day (one row per job and day)."""
+    conn.execute(
+        "INSERT OR IGNORE INTO job_sightings (job_id, seen_date) VALUES (?, ?)",
+        (str(job_id), (day or _local_today()).isoformat()),
+    )
+    conn.commit()
+
+
+def find_job_id(
+    conn: sqlite3.Connection,
+    source_platform: str,
+    source_job_id: str,
+    legacy_job_id: str | None = None,
+) -> str | None:
+    """Resolve the stored job id for a platform identity, if the job is already known."""
+    platform = str(source_platform or "boss").strip() or "boss"
+    source_id = str(source_job_id or "").strip()
+    if source_id:
+        row = conn.execute(
+            "SELECT id FROM jobs WHERE source_platform = ? AND source_job_id = ? LIMIT 1",
+            (platform, source_id),
+        ).fetchone()
+        if row:
+            return str(row["id"])
+    for candidate in (legacy_job_id, source_id):
+        if candidate and job_exists(conn, str(candidate)):
+            return str(candidate)
+    return None
+
+
+def sighting_streak(conn: sqlite3.Connection, job_id: str, today: date | None = None) -> int:
+    """Consecutive days (ending at the latest sighting) a job has stayed listed.
+
+    A job last seen before yesterday is no longer being listed, so its streak is 0.
+    """
+    today = today or _local_today()
+    rows = conn.execute(
+        "SELECT seen_date FROM job_sightings WHERE job_id = ? ORDER BY seen_date DESC",
+        (str(job_id),),
+    ).fetchall()
+    days = [date.fromisoformat(row["seen_date"]) for row in rows]
+    if not days or (today - days[0]).days > 1:
+        return 0
+    streak = 1
+    for newer, older in zip(days, days[1:]):
+        if (newer - older).days == 1:
+            streak += 1
+        else:
+            break
+    return streak
 
 
 def update_job_dual_score(
