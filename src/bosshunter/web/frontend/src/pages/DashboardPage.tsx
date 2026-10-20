@@ -738,6 +738,28 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     }
   }
 
+  const markSelectedCompaniesRejected = async (ids: string[]) => {
+    if (!ids.length) return
+    if (!window.confirm(`确认把所选 ${ids.length} 个岗位的公司标记为“已拒绝”吗？
+这些公司会记入数据库，之后采集时不再进入岗位池，同公司其他待投递岗位也会被过滤。`)) return
+    try {
+      const res = await fetch('/api/companies/rejected', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: ids }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '标记失败')
+      const markedIds = new Set(ids)
+      setSelected(prev => prev.filter(id => !markedIds.has(id)))
+      setConfirmedDeliveryIds(prev => new Set([...prev, ...ids]))
+      await refresh()
+      setNotice(`已记录 ${data.companies?.length || 0} 家公司为已拒绝，标记 ${data.marked_jobs || 0} 个岗位，另过滤 ${data.hidden_jobs || 0} 个同公司待投递岗位。`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '标记失败')
+    }
+  }
+
   const generateGreetings = async (ids: string[]) => {
     if (!ids.length) return
     setGeneratingGreetings(true)
@@ -1251,6 +1273,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               {generatingGreetings || greetTaskRunning ? '生成中...' : `生成打招呼用语 ${actionableSelected.length} 个`}
             </Button>
             <Button variant="secondary" size="sm" disabled={!actionableSelected.length} onClick={() => rejectSelectedJobs(actionableSelected)}>放弃已选 {actionableSelected.length} 个</Button>
+            <Button variant="secondary" size="sm" disabled={!actionableSelected.length} onClick={() => void markSelectedCompaniesRejected(actionableSelected)} title="这些公司已经拒绝过：记入数据库，之后采集不再进入岗位池">标记公司已拒绝 {actionableSelected.length} 个</Button>
             <Button size="sm" disabled={!actionableSelected.length} onClick={() => confirmDeliver(actionableSelected)}>一键投递已选 {actionableSelected.length} 个</Button>
           </div>
         </div>
