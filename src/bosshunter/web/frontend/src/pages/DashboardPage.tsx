@@ -1789,6 +1789,23 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
     ? deliveryWorkbench.task
     : deliveryWorkbench.last_task?.mode === 'deliver' ? deliveryWorkbench.last_task : null
+  // 已通过、等待投递的岗位按平台统计，让所有平台的队列都看得到。
+  const [approvedCounts, setApprovedCounts] = useState<Record<string, number>>({})
+  useEffect(() => {
+    const controller = new AbortController()
+    const load = async () => {
+      const next: Record<string, number> = {}
+      for (const platform of ['boss', '51job', 'liepin', 'zhilian']) {
+        const params = new URLSearchParams({ limit: '1', offset: '0', status: 'approved', source_platform: platform })
+        const res = await fetch(`/api/jobs/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+        const data = await res.json()
+        next[platform] = Number(data.total ?? 0)
+      }
+      setApprovedCounts(next)
+    }
+    load().catch(() => { /* 统计失败时不显示数字 */ })
+    return () => controller.abort()
+  }, [deliveryTask?.id, deliveryTask?.status, items])
 
   useEffect(() => {
     // 两个视图各自的岗位数，显示在切换按钮上（不受下面的筛选条件影响）。
@@ -2034,6 +2051,28 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     }
   }
 
+  const stopDelivery = async () => {
+    if (!deliveryTask) return
+    if (!window.confirm('停止当前投递队列吗？正在发送的这一条会先完成，其余岗位保持“已通过”，之后可以点“重新启动投递队列”。停止后才能移入回收站或标记公司。')) return
+    try {
+      await postJobAction(`/api/workbench/task/${deliveryTask.id}/stop`, {})
+      setNotice('已请求停止投递队列，当前这一条发送完成后会停下。')
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '停止投递队列失败')
+    }
+  }
+
+  const restartDelivery = async () => {
+    if (!window.confirm('重新启动投递队列？会再次处理所有已通过、尚未发送的 BOSS、前程无忧和猎聘岗位，仍受发送时间窗口和每日额度限制。')) return
+    try {
+      const result = await postJobAction('/api/workbench/deliver', { scope: 'approved' })
+      refreshJobs()
+      setNotice(`已重新启动投递队列。${describeSkipped(result)}`)
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '重新启动投递队列失败')
+    }
+  }
+
   const deliverAllApproved = async () => {
     if (!window.confirm('确认投递所有已通过的岗位吗？不用逐个勾选；BOSS、前程无忧和猎聘岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。')) return
     try {
@@ -2270,7 +2309,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
         {poolView === 'pending' && <>
           <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
-            <Send className="mr-1 h-4 w-4" />BOSS 一键投递已选
+            <Send className="mr-1 h-4 w-4" />一键投递已选
           </Button>
           <Button size="sm" onClick={() => void deliverAllApproved()}>
             <Send className="mr-1 h-4 w-4" />投递全部已通过
@@ -2285,21 +2324,40 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         <Button variant="secondary" size="sm" onClick={() => setShowScoreDialog(true)}>评分选项</Button>
         <ExportMenu onExport={exportJobs} hasSelection={selectedIds.length > 0} hasFiltered={total > 0} />
       </div>
-      {notice && <div className="mb-4 rounded-xl bg-secondary px-4 py-3 text-sm text-primary">{notice}</div>}
-      {deliveryTask && (
+      {notice && <div className="sticky top-2 z-30 mb-4 rounded-xl bg-secondary px-4 py-3 text-sm text-primary shadow-md">{notice}</div>}
+      {(deliveryTask || Object.values(approvedCounts).some(count => count > 0)) && (
         <div className="mb-4 rounded-2xl border border-card-border bg-surface p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-sm font-black">投递队列</div>
-              <p className="mt-1 text-xs text-muted">只展示已人工确认的 BOSS 发送任务；智联和 51job 不会进入此队列。</p>
+              <p className="mt-1 text-xs text-muted">只展示已人工确认的发送任务：BOSS、前程无忧和猎聘可进入此队列，智联需手动投递。</p>
             </div>
-            <span className="rounded-full bg-secondary px-3 py-1 text-xs font-black text-primary">
-              {deliveryTask.status === 'running' ? '处理中' : deliveryTask.status === 'completed' ? '已完成' : deliveryTask.status === 'failed' ? '失败' : deliveryTask.status}
-            </span>
+            <div className="flex items-center gap-2">
+              {deliveryTask?.status === 'running' && <Button size="sm" variant="destructive" onClick={() => void stopDelivery()}>停止投递队列</Button>}
+              {deliveryTask?.status !== 'running' && (approvedCounts.boss || 0) + (approvedCounts['51job'] || 0) + (approvedCounts.liepin || 0) > 0 && (
+                <Button size="sm" onClick={() => void restartDelivery()}>重新启动投递队列</Button>
+              )}
+              <span className="rounded-full bg-secondary px-3 py-1 text-xs font-black text-primary">
+                {!deliveryTask ? '未启动' : deliveryTask.status === 'running' ? '处理中' : deliveryTask.status === 'completed' ? '已完成' : deliveryTask.status === 'failed' ? '失败' : deliveryTask.status === 'stopped' ? '已停止' : deliveryTask.status}
+              </span>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+            {([['boss', 'BOSS 直聘', '自动'], ['51job', '前程无忧', '自动'], ['liepin', '猎聘', '自动'], ['zhilian', '智联招聘', '手动']] as const).map(([key, label, mode]) => (
+              <span key={key} className="rounded-full border border-card-border bg-card px-3 py-1">
+                {label} 待投递 {approvedCounts[key] ?? 0}（{mode}）
+              </span>
+            ))}
           </div>
           <div className="mt-3 rounded-xl border border-card-border bg-card px-3 py-2 text-sm">
-            <div className="font-bold">{deliveryTask.logs?.[deliveryTask.logs.length - 1] || '队列已创建，等待执行'}</div>
-            <div className="mt-1 text-xs text-muted">任务 ID：{deliveryTask.id}</div>
+            <div className="font-bold">{deliveryTask?.logs?.[deliveryTask.logs.length - 1] || '队列已创建，等待执行'}</div>
+            {(deliveryTask?.logs?.length || 0) > 1 && (
+              <div className="mt-1 space-y-0.5 text-xs text-muted">
+                {deliveryTask!.logs!.slice(-6, -1).reverse().map((line: string, index: number) => <div key={index}>{line}</div>)}
+              </div>
+            )}
+            {deliveryTask && <div className="mt-1 text-xs text-muted">任务 ID：{deliveryTask.id}</div>}
+            {String(deliveryTask?.logs?.[deliveryTask.logs.length - 1] || '').includes('发送时间窗口已截止') && <div className="mt-1 text-xs text-muted">发送只在设置的时间窗口内进行（配置里的 throttle.send_windows，默认 09:00-17:00）；窗口外点投递不会执行，明天窗口开启后再点，或在配置里调整窗口。</div>}
           </div>
         </div>
       )}
