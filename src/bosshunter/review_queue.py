@@ -163,6 +163,53 @@ def apply_match_gate(conn: sqlite3.Connection, config: dict) -> int:
     return len(rows)
 
 
+def apply_company_dedup(conn: sqlite3.Connection) -> int:
+    """Filter ``ready`` jobs whose company was already approved or sent today."""
+    from bosshunter.company_dedup import duplicate_of_approved_today
+
+    count = 0
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE status = 'ready' AND deleted_at IS NULL ORDER BY score DESC"
+    ).fetchall()
+    for row in rows:
+        job = dict(row)
+        original = duplicate_of_approved_today(conn, job)
+        if original:
+            update_job_status(conn, job["id"], "filtered")
+            add_history(conn, job["id"], "filtered", f"与今日已通过的公司重复：{original}")
+            count += 1
+    return count
+
+
+def approve_all(conn: sqlite3.Connection, config: dict) -> tuple[int, int]:
+    """Approve every reviewable job, keeping only the best one per company.
+
+    Returns (approved, filtered_as_duplicate). Companies already approved today
+    count as taken, and variants of one company (华为 / 华为技术) are one company.
+    """
+    from bosshunter.company_dedup import approved_today, same_company
+
+    jobs = sorted(
+        review_pending(conn, automation_settings(config)["review_min_score"]),
+        key=lambda job: job.get("score") or 0,
+        reverse=True,
+    )
+    taken = [item["company"] for item in approved_today(conn)]
+    chosen: list[dict] = []
+    duplicates: list[dict] = []
+    for job in jobs:
+        if any(same_company(job["company"], company) for company in taken):
+            duplicates.append(job)
+        else:
+            chosen.append(job)
+            taken.append(job["company"])
+    approved = approve_jobs(conn, [job["id"] for job in chosen], note="审查窗口：通过全部")
+    for job in duplicates:
+        update_job_status(conn, job["id"], "filtered")
+        add_history(conn, job["id"], "filtered", "通过全部时按公司去重：同公司已有更高分岗位")
+    return approved, len(duplicates)
+
+
 def _norm(text: object) -> str:
     return re.sub(r"\s+", "", str(text or "")).lower()
 

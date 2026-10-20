@@ -12,6 +12,7 @@ from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_a
 from bosshunter.ai.prefilter import _parse_salary_range_k, quick_score
 from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, passes_match_gate, recruit_weight
 from bosshunter.cancellation import OperationCancelled, run_cancellable
+from bosshunter.company_dedup import duplicate_of_approved_today
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
     add_history,
@@ -817,7 +818,11 @@ def score_jobs(
             for job in pending_jobs:
                 if stop_event is not None and stop_event.is_set():
                     break
-                qs, qs_reason = quick_score(job, config)
+                duplicate_of = duplicate_of_approved_today(db, job)
+                if duplicate_of:
+                    qs, qs_reason = 0, f"与今日已通过的公司重复：{duplicate_of}"
+                else:
+                    qs, qs_reason = quick_score(job, config)
                 update_job_quick_score(db, job["id"], qs)
                 if qs == 0:
                     update_job_score(db, job["id"], qs, f"预筛不通过: {qs_reason}")

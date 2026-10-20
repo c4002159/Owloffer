@@ -206,6 +206,20 @@ def keywords(ctx: click.Context, apply_tiers: str | None, stats: bool) -> None:
 
 
 @cli.command()
+@click.option("--per-keyword", default=20, show_default=True, help="每个关键词每次最多采集的岗位数")
+@click.option("--rounds", default=3, show_default=True, help="最多循环几轮关键词")
+@click.pass_context
+def fill(ctx: click.Context, per_keyword: int, rounds: int) -> None:
+    """一次补满审查列表（采集→评分→去重过滤，直到达到 automation.review_cap）"""
+    from bosshunter.fill import fill_review_list
+
+    summary = fill_review_list(ctx.obj["config"], console.print, per_keyword=per_keyword, max_rounds=rounds)
+    console.print(f"[green]待审查 {summary['waiting']} / {summary['cap']}，本次新采集 {summary['collected']} 个[/green]")
+    if summary["stopped"]:
+        console.print(f"[yellow]{summary['stopped']}[/yellow]")
+
+
+@cli.command()
 @click.pass_context
 def review(ctx: click.Context) -> None:
     """打开置顶审查窗口：通过/跳过岗位、确认回复草稿、一键投递"""

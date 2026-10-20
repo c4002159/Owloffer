@@ -9,10 +9,13 @@ from tkinter import messagebox, ttk
 from bosshunter.company_suggestions import block_companies
 from bosshunter.config import save_config
 from bosshunter.db import add_history, get_db
+from bosshunter.fill import fill_review_list
 from bosshunter.review_queue import (
     UNCATEGORIZED,
+    approve_all,
     approve_jobs,
     approve_reply,
+    apply_company_dedup,
     apply_match_gate,
     approved_unsent,
     assign_categories,
@@ -49,6 +52,9 @@ class ReviewWindow:
         self.settings = automation_settings(config)
         self.messages: "queue.Queue[str]" = queue.Queue()
         self.dispatching = False
+        self.filling = False
+        self.stop_event = threading.Event()
+        config["_workbench_stop_event"] = self.stop_event
 
         self.root = tk.Tk()
         self.root.title("BossHunter 审查")
@@ -89,10 +95,13 @@ class ReviewWindow:
 
         bar = ttk.Frame(frame)
         bar.pack(fill="x", pady=(6, 0))
-        ttk.Button(bar, text="通过所选", command=self.approve_selected).pack(side="left")
-        ttk.Button(bar, text="跳过所选", command=self.skip_selected).pack(side="left", padx=6)
-        ttk.Button(bar, text="拉黑所选公司…", command=self.block_selected_companies).pack(side="left")
+        ttk.Button(bar, text="通过全部", command=self.approve_everything).pack(side="left")
+        ttk.Button(bar, text="通过所选", command=self.approve_selected).pack(side="left", padx=6)
+        ttk.Button(bar, text="跳过所选", command=self.skip_selected).pack(side="left")
+        ttk.Button(bar, text="拉黑所选公司…", command=self.block_selected_companies).pack(side="left", padx=6)
         ttk.Button(bar, text="一键投递已通过岗位", command=self.start_dispatch).pack(side="right")
+        self.fill_button = ttk.Button(bar, text=f"补满到 {self.settings['review_cap']} 个", command=self.toggle_fill)
+        self.fill_button.pack(side="right", padx=6)
 
     def _build_replies_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook)
@@ -121,6 +130,7 @@ class ReviewWindow:
         try:
             if self.plan:
                 assign_categories(db, self.plan)
+            apply_company_dedup(db)
             apply_match_gate(db, self.config)
             refresh_recruit_scores(db, self.config)
             jobs = review_pending(db, self.settings["review_min_score"])
@@ -170,6 +180,53 @@ class ReviewWindow:
         return [iid for iid in self.jobs_tree.selection() if not iid.startswith("cat:")]
 
     # ---- job actions --------------------------------------------------
+    def approve_everything(self) -> None:
+        db = get_db()
+        try:
+            count = len(review_pending(db, self.settings["review_min_score"]))
+        finally:
+            db.close()
+        if not count:
+            return
+        if not messagebox.askyesno(
+            "通过全部",
+            f"将通过当前列表里的 {count} 个岗位。\n"
+            "同一家公司（含 华为 / 华为技术 这类写法）只保留得分最高的 1 个，"
+            "其余自动过滤；今天已通过过的公司也会被过滤。\n\n"
+            "通过只是标记，不会发送任何消息。确认？",
+            parent=self.root,
+        ):
+            return
+        db = get_db()
+        try:
+            approved, duplicates = approve_all(db, self.config)
+        finally:
+            db.close()
+        self.log.set(f"已通过 {approved} 个，{duplicates} 个因同公司重复被过滤")
+        self.refresh()
+
+    def toggle_fill(self) -> None:
+        if self.filling:
+            self.stop_event.set()
+            self.log.set("正在停止，当前这一步完成后结束…")
+            return
+        self.stop_event.clear()
+        self.filling = True
+        self.fill_button.config(text="停止补充")
+        threading.Thread(target=self._fill_worker, daemon=True).start()
+
+    def _fill_worker(self) -> None:
+        try:
+            summary = fill_review_list(self.config, report=self.messages.put, stop_event=self.stop_event)
+            note = f"补充结束：待审查 {summary['waiting']} / {summary['cap']}"
+            if summary["stopped"]:
+                note += f"（{summary['stopped']}）"
+            self.messages.put(note)
+        except Exception as exc:  # show the failure in the window instead of dying silently
+            self.messages.put(f"补充中断：{type(exc).__name__}: {exc}")
+        finally:
+            self.messages.put("__fill_done__")
+
     def approve_selected(self) -> None:
         ids = self._selected_job_ids()
         if not ids:
@@ -256,6 +313,10 @@ class ReviewWindow:
                 message = self.messages.get_nowait()
                 if message == "__done__":
                     self.dispatching = False
+                    self.refresh()
+                elif message == "__fill_done__":
+                    self.filling = False
+                    self.fill_button.config(text=f"补满到 {self.settings['review_cap']} 个")
                     self.refresh()
                 else:
                     self.log.set(message)
