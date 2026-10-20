@@ -18,7 +18,7 @@ from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest
 from bosshunter.collection.platforms.boss import BossBrowser, BossCollector, generate_boss_job_id
 from bosshunter.config import CITY_CODES
-from bosshunter.db import get_db, insert_job, job_exists, recompute_outsourcing
+from bosshunter.db import get_db, insert_job, job_exists, record_sighting, recompute_outsourcing
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.outsourcing import load_rules
 from bosshunter.platform_safety import PlatformSafetyStop
@@ -101,6 +101,7 @@ def _scrape_jobs_impl(
     def inspect(candidate: JobCandidate) -> bool:
         counts["seen"] += 1
         if job_exists(db, candidate.storage_id):
+            record_sighting(db, candidate.storage_id)
             counts["duplicate"] += 1
             emit()
             return False
@@ -130,6 +131,7 @@ def _scrape_jobs_impl(
             counts["duplicate"] += 1
         else:
             counts["new"] += 1
+            record_sighting(db, candidate.storage_id)
             report_state["new_count"] = counts["new"]
             if collected_job_ids is not None:
                 collected_job_ids.append(candidate.storage_id)
