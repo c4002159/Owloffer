@@ -145,6 +145,24 @@ def refresh_recruit_scores(conn: sqlite3.Connection, config: dict) -> int:
     return changed
 
 
+def apply_match_gate(conn: sqlite3.Connection, config: dict) -> int:
+    """Filter ``ready`` jobs whose AI match score is below ``scoring.min_match_score``."""
+    from bosshunter.ai.recruit_score import min_match_score
+
+    floor = min_match_score(config)
+    if floor <= 0:
+        return 0
+    rows = conn.execute(
+        "SELECT id, match_score FROM jobs WHERE status = 'ready' AND deleted_at IS NULL "
+        "AND match_score IS NOT NULL AND match_score < ?",
+        (floor,),
+    ).fetchall()
+    for row in rows:
+        update_job_status(conn, row["id"], "filtered")
+        add_history(conn, row["id"], "filtered", f"匹配分 {row['match_score']} 低于硬门槛 {floor}")
+    return len(rows)
+
+
 def _norm(text: object) -> str:
     return re.sub(r"\s+", "", str(text or "")).lower()
 

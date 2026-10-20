@@ -10,7 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_ai_api_key
 from bosshunter.ai.prefilter import _parse_salary_range_k, quick_score
-from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, recruit_weight
+from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, passes_match_gate, recruit_weight
 from bosshunter.cancellation import OperationCancelled, run_cancellable
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
@@ -917,7 +917,7 @@ def score_jobs(
                                 f"已跳过 {job['company']}｜{job['title']}：岗位在评分期间被删除，评分结果未保存。",
                             )
                         else:
-                            if final_score >= threshold:
+                            if final_score >= threshold and passes_match_gate(result.score, config):
                                 update_job_status(db, job["id"], "ready")
                                 scored += 1
                             else:

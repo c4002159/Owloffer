@@ -3,7 +3,9 @@ import json
 import pytest
 
 from bosshunter import review_queue as rq
-from bosshunter.db import add_history, get_db, insert_job_if_new, update_job_score, update_job_status
+from bosshunter.db import (
+    add_history, get_db, insert_job_if_new, update_job_dual_score, update_job_score, update_job_status,
+)
 
 
 @pytest.fixture
@@ -107,3 +109,26 @@ def test_group_by_category_orders_groups_by_best_score():
     groups = group_by_category(jobs)
     assert list(groups) == ["Agent", "IT管理", rq.UNCATEGORIZED]
     assert [j["id"] for j in groups["Agent"]] == ["3", "2"]
+
+
+def test_match_gate_filters_weak_matches_even_with_high_blended_score(db):
+    config = {"scoring": {"min_match_score": 50}}
+    _job(db, "weak", 62)
+    _job(db, "strong", 62)
+    update_job_dual_score(db, "weak", 35, 88, "d")
+    update_job_dual_score(db, "strong", 72, 40, "d")
+    assert rq.apply_match_gate(db, config) == 1
+    statuses = {r["id"]: r["status"] for r in db.execute("SELECT id, status FROM jobs")}
+    assert statuses == {"weak": "filtered", "strong": "ready"}
+    assert rq.apply_match_gate(db, config) == 0
+    assert rq.apply_match_gate(db, {}) == 0
+
+
+def test_passes_match_gate_boundaries():
+    from bosshunter.ai.recruit_score import min_match_score, passes_match_gate
+
+    config = {"scoring": {"min_match_score": 50}}
+    assert passes_match_gate(50, config) and not passes_match_gate(49, config)
+    assert passes_match_gate(0, {})
+    assert min_match_score({"scoring": {"min_match_score": "bad"}}) == 0
+    assert min_match_score({"scoring": {"min_match_score": 500}}) == 100

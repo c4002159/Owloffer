@@ -76,3 +76,16 @@ def compute_recruit_score(job: dict, streak: int = 0) -> tuple[int, str]:
 def blend_scores(match_score: int, recruit_score: int, weight: float) -> int:
     """Blend the AI match score and the recruiting score into one 0-100 number."""
     return int(round(match_score * (1 - weight) + recruit_score * weight))
+
+
+def min_match_score(config: dict) -> int:
+    """Hard floor for the AI match score (0 = off); weaker matches never reach the review list."""
+    raw = (config.get("scoring") or {}).get("min_match_score", 0)
+    try:
+        return min(max(int(raw), 0), 100)
+    except (TypeError, ValueError):
+        return 0
+
+
+def passes_match_gate(match_score: int, config: dict) -> bool:
+    return int(match_score) >= min_match_score(config)

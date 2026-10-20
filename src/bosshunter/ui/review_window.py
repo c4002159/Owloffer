@@ -13,6 +13,7 @@ from bosshunter.review_queue import (
     UNCATEGORIZED,
     approve_jobs,
     approve_reply,
+    apply_match_gate,
     approved_unsent,
     assign_categories,
     automation_settings,
@@ -120,6 +121,7 @@ class ReviewWindow:
         try:
             if self.plan:
                 assign_categories(db, self.plan)
+            apply_match_gate(db, self.config)
             refresh_recruit_scores(db, self.config)
             jobs = review_pending(db, self.settings["review_min_score"])
             approved = approved_unsent(db)

@@ -165,6 +165,8 @@ DEFAULTS: dict[str, Any] = {
         "max_candidates": 20,
         # 0 = score is the AI match score only; 0.5 = half match, half recruiting authenticity.
         "recruit_weight": 0,
+        # 0 = off. AI match scores below this never enter the review list, whatever the blended score.
+        "min_match_score": 0,
     },
     "throttle": {
         "daily_limit": 30,
