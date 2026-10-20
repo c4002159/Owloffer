@@ -464,9 +464,20 @@ export default function ConfigPage() {
                       {platform === 'boss' && <KeywordRecommendations
                         keywords={Array.isArray(search.keywords) ? search.keywords : []}
                         onChange={value => updatePlatformSearch(platform, 'keywords', value)}
+                        internKeywords={Array.isArray(config.search?.intern_keywords) ? config.search.intern_keywords : []}
+                        onInternChange={value => updateConfig('search.intern_keywords', value)}
                       />}
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
                     </Field>
+                    {platform === 'boss' && (
+                      <Field label="实习关键词（开发 / 产品）" hint="“补满”时单独用这些词搜实习岗位，名额在 config.yaml 的 automation.internship_quota。">
+                        <TagsInput
+                          value={Array.isArray(config.search?.intern_keywords) ? config.search.intern_keywords : []}
+                          onChange={value => updateConfig('search.intern_keywords', value)}
+                          placeholder="如：AI开发实习生、产品实习生"
+                        />
+                      </Field>
+                    )}
                     <Field label="搜索城市" dataTour={platform === guidePlatform && platform !== 'boss' ? 'search-city' : undefined}>
                       {platform === 'boss' ? <CityMultiSelect
                         tourTarget={platform === guidePlatform ? 'search-city' : undefined}

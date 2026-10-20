@@ -21,6 +21,8 @@ from bosshunter.review_queue import (
     assign_categories,
     automation_settings,
     dispatch_approved,
+    job_kind,
+    kind_quotas,
     pending_reply_drafts,
     refresh_recruit_scores,
     repeat_flags,
@@ -130,7 +132,7 @@ class ReviewWindow:
         try:
             if self.plan:
                 assign_categories(db, self.plan)
-            apply_company_dedup(db)
+            apply_company_dedup(db, self.config)
             apply_match_gate(db, self.config)
             refresh_recruit_scores(db, self.config)
             jobs = review_pending(db, self.settings["review_min_score"])
@@ -165,10 +167,17 @@ class ReviewWindow:
                 values=(draft["company"], draft["hr_question"].replace("\n", " ")[:80]),
             )
 
-        full = len(jobs) + len(approved) >= self.settings["review_cap"]
+        quotas = kind_quotas(self.config)
+        counts = {"fulltime": 0, "internship": 0}
+        for job in [*jobs, *approved]:
+            counts[job_kind(job)] += 1
+        if quotas["internship"] > 0:
+            quota_text = f"全职 {counts['fulltime']}/{quotas['fulltime']} · 实习 {counts['internship']}/{quotas['internship']}"
+        else:
+            quota_text = f"待审查 {len(jobs)} / 上限 {self.settings['review_cap']}"
+        full = all(counts[kind] >= quotas[kind] for kind in quotas if quotas[kind] > 0)
         self.status.set(
-            f"待审查 {len(jobs)} / 上限 {self.settings['review_cap']}"
-            f"{'（已满，评分暂停）' if full else ''}　已通过待发 {len(approved)}　待确认回复 {len(drafts)}"
+            f"{quota_text}{'（已满）' if full else ''}　待审查 {len(jobs)}　已通过待发 {len(approved)}　待确认回复 {len(drafts)}"
         )
 
     def _tick(self) -> None:

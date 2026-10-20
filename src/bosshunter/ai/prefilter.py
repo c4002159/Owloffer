@@ -3,7 +3,7 @@
 import re
 from datetime import datetime, timezone
 
-from bosshunter.employment import internship_rejection
+from bosshunter.employment import classify_employment, internship_rejection
 
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 
@@ -16,6 +16,9 @@ _ANONYMOUS_COMPANY_PATTERN = re.compile(
 
 def quick_score(job: dict, config: dict) -> tuple[int, str]:
     """Apply hard filters before LLM scoring."""
+    if _internship_quota(config) > 0 and not (config.get("profile") or {}).get("allow_internship"):
+        # An internship quota means internships are wanted; do not reject them as 实习/管培.
+        config = {**config, "profile": {**(config.get("profile") or {}), "allow_internship": True}}
     reason = internship_rejection(job, config)
     if reason:
         return 0, reason
@@ -49,7 +52,21 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
     if freshness_score <= 0:
         return 0, freshness_reason
 
-    return salary_filter_result(str(job.get("salary") or ""), profile)
+    salary_text = str(job.get("salary") or "")
+    if classify_employment(job) == "internship" and _PER_DAY_OR_HOUR.search(salary_text):
+        # Day or hour wages cannot be compared with a monthly salary floor.
+        return 100, "预筛通过"
+    return salary_filter_result(salary_text, profile)
+
+
+_PER_DAY_OR_HOUR = re.compile(r"/\s*天|/\s*日|日薪|/\s*小时|/\s*时|每天|每日")
+
+
+def _internship_quota(config: dict) -> int:
+    try:
+        return int(((config or {}).get("automation") or {}).get("internship_quota", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def hr_active_level(hr_active: str) -> int | None:

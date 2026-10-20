@@ -43,7 +43,7 @@ def test_cap_counts_pending_and_approved(db):
 
 def test_automation_defaults_keep_auto_send_off():
     settings = rq.automation_settings({})
-    assert settings == {"auto_send": False, "review_cap": 150, "review_min_score": 60}
+    assert settings == {"auto_send": False, "review_cap": 150, "review_min_score": 60, "internship_quota": 0}
     assert rq.automation_settings({"automation": {"review_cap": "bad"}})["review_cap"] == 150
 
 

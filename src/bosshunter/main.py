@@ -176,15 +176,24 @@ def keywords(ctx: click.Context, apply_tiers: str | None, stats: bool) -> None:
         if unknown:
             console.print(f"[red]未知层: {', '.join(unknown)}（可选 core / expand / explore）[/red]")
             raise SystemExit(1)
-        chosen = kw.select_keywords(plan, tiers)
-        config.setdefault("search", {})["keywords"] = chosen
-        config.setdefault("platforms", {}).setdefault("boss", {}).setdefault("search", {})["keywords"] = chosen
+        intern_words = kw.select_keywords(plan, ("intern",)) if "intern" in tiers else None
+        chosen = kw.select_keywords(plan, tuple(t for t in tiers if t != "intern"))
+        if chosen:
+            config.setdefault("search", {})["keywords"] = chosen
+            config.setdefault("platforms", {}).setdefault("boss", {}).setdefault("search", {})["keywords"] = chosen
+        if intern_words is not None:
+            config.setdefault("search", {})["intern_keywords"] = intern_words
         profile = config.setdefault("profile", {})
-        merged = list(dict.fromkeys([*(profile.get("deal_breakers") or []), *plan.get("excludes", [])]))
+        excludes = plan.get("excludes", [])
+        if int((config.get("automation") or {}).get("internship_quota", 0) or 0) > 0:
+            excludes = [word for word in excludes if "实习" not in word]  # internships are wanted
+        merged = list(dict.fromkeys([*(profile.get("deal_breakers") or []), *excludes]))
         profile["deal_breakers"] = merged
         save_config(config)
-        console.print(f"[green]✓ 已写入 {len(chosen)} 个搜索词，并合并 {len(plan.get('excludes', []))} 个排除词[/green]")
+        console.print(f"[green]✓ 已写入 {len(chosen)} 个搜索词、{len(intern_words or [])} 个实习词，并合并 {len(plan.get('excludes', []))} 个排除词[/green]")
         console.print("、".join(chosen))
+        if intern_words:
+            console.print("实习词：" + "、".join(intern_words))
         return
 
     resume = _load_resume(config)
@@ -199,10 +208,10 @@ def keywords(ctx: click.Context, apply_tiers: str | None, stats: bool) -> None:
     for direction in plan["directions"]:
         console.print(f"[bold]{direction['name']}[/bold] [dim]{direction['evidence']}[/dim]")
         console.print("  " + "、".join(direction["keywords"]))
-    for tier, label in (("core", "核心词"), ("expand", "扩展词"), ("explore", "探索词")):
+    for tier, label in (("core", "核心词"), ("expand", "扩展词"), ("explore", "探索词"), ("intern", "实习词")):
         console.print(f"[cyan]{label}[/cyan]: " + "、".join(plan[tier]))
     console.print(f"[dim]排除词: {'、'.join(plan['excludes'])}[/dim]")
-    console.print(f"[green]✓ 方案已保存 → {path}；确认后运行 bosshunter keywords --apply core,expand[/green]")
+    console.print(f"[green]✓ 方案已保存 → {path}；确认后运行 bosshunter keywords --apply core,expand,intern[/green]")
 
 
 @cli.command()

@@ -28,7 +28,49 @@ def automation_settings(config: dict) -> dict:
         min_score = int(raw.get("review_min_score", DEFAULT_MIN_SCORE))
     except (TypeError, ValueError):
         min_score = DEFAULT_MIN_SCORE
-    return {"auto_send": bool(raw.get("auto_send", False)), "review_cap": cap, "review_min_score": min_score}
+    try:
+        internship_quota = min(max(int(raw.get("internship_quota", 0)), 0), cap)
+    except (TypeError, ValueError):
+        internship_quota = 0
+    return {
+        "auto_send": bool(raw.get("auto_send", False)),
+        "review_cap": cap,
+        "review_min_score": min_score,
+        "internship_quota": internship_quota,
+    }
+
+
+def job_kind(job: dict) -> str:
+    """'internship' only with positive evidence (title or JD); everything else counts as full-time."""
+    from bosshunter.employment import classify_employment
+
+    return "internship" if classify_employment(job) == "internship" else "fulltime"
+
+
+def kind_quotas(config: dict) -> dict[str, int]:
+    """Review slots per kind: the internship quota, the rest of ``review_cap`` for full-time."""
+    settings = automation_settings(config)
+    return {
+        "internship": settings["internship_quota"],
+        "fulltime": settings["review_cap"] - settings["internship_quota"],
+    }
+
+
+def waiting_by_kind(conn: sqlite3.Connection, config: dict) -> dict[str, int]:
+    """Jobs waiting for review or sending, split into full-time and internship."""
+    settings = automation_settings(config)
+    counts = {"fulltime": 0, "internship": 0}
+    for job in review_pending(conn, settings["review_min_score"]) + approved_unsent(conn):
+        counts[job_kind(job)] += 1
+    return counts
+
+
+def kind_full(conn: sqlite3.Connection, config: dict, job: dict) -> bool:
+    """True when this job's kind has no free review slot (without a quota: when the whole cap is full)."""
+    if automation_settings(config)["internship_quota"] <= 0:
+        return review_cap_reached(conn, config)
+    kind = job_kind(job)
+    return waiting_by_kind(conn, config)[kind] >= kind_quotas(config)[kind]
 
 
 def review_pending(conn: sqlite3.Connection, min_score: int) -> list[dict]:
@@ -163,20 +205,21 @@ def apply_match_gate(conn: sqlite3.Connection, config: dict) -> int:
     return len(rows)
 
 
-def apply_company_dedup(conn: sqlite3.Connection) -> int:
+def apply_company_dedup(conn: sqlite3.Connection, config: dict | None = None) -> int:
     """Filter ``ready`` jobs whose company was already approved or sent today."""
-    from bosshunter.company_dedup import duplicate_of_approved_today
+    from bosshunter.company_dedup import cooldown_days, duplicate_of_approved_today
 
+    days = cooldown_days(config)
     count = 0
     rows = conn.execute(
         "SELECT * FROM jobs WHERE status = 'ready' AND deleted_at IS NULL ORDER BY score DESC"
     ).fetchall()
     for row in rows:
         job = dict(row)
-        original = duplicate_of_approved_today(conn, job)
+        original = duplicate_of_approved_today(conn, job, days)
         if original:
             update_job_status(conn, job["id"], "filtered")
-            add_history(conn, job["id"], "filtered", f"与今日已通过的公司重复：{original}")
+            add_history(conn, job["id"], "filtered", f"与近期已通过的公司重复：{original}")
             count += 1
     return count
 
@@ -184,17 +227,17 @@ def apply_company_dedup(conn: sqlite3.Connection) -> int:
 def approve_all(conn: sqlite3.Connection, config: dict) -> tuple[int, int]:
     """Approve every reviewable job, keeping only the best one per company.
 
-    Returns (approved, filtered_as_duplicate). Companies already approved today
+    Returns (approved, filtered_as_duplicate). Companies approved within the cooldown window
     count as taken, and variants of one company (华为 / 华为技术) are one company.
     """
-    from bosshunter.company_dedup import approved_today, same_company
+    from bosshunter.company_dedup import approved_within, cooldown_days, same_company
 
     jobs = sorted(
         review_pending(conn, automation_settings(config)["review_min_score"]),
         key=lambda job: job.get("score") or 0,
         reverse=True,
     )
-    taken = [item["company"] for item in approved_today(conn)]
+    taken = [item["company"] for item in approved_within(conn, cooldown_days(config))]
     chosen: list[dict] = []
     duplicates: list[dict] = []
     for job in jobs:

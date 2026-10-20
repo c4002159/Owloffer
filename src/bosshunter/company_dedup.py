@@ -6,7 +6,7 @@ later jobs from the same company are filtered instead of being shown again.
 
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _REGIONS = (
     "上海", "北京", "深圳", "广州", "杭州", "成都", "武汉", "南京", "苏州", "天津", "重庆", "西安", "长沙",
@@ -48,29 +48,46 @@ def _local_date(timestamp: str):
         return None
 
 
-def approved_today(conn: sqlite3.Connection) -> list[dict]:
-    """Jobs approved or sent today (local date): [{'id', 'company'}]."""
-    today = datetime.now().date()
+def cooldown_days(config: dict | None) -> int:
+    """How many days (including today) a company stays blocked after one of its jobs was approved."""
+    raw = ((config or {}).get("automation") or {}).get("company_cooldown_days", 1)
+    try:
+        return min(max(int(raw), 1), 60)
+    except (TypeError, ValueError):
+        return 1
+
+
+def approved_within(conn: sqlite3.Connection, days: int = 1) -> list[dict]:
+    """Jobs approved or sent within the last ``days`` local days (1 = today only)."""
+    days = max(int(days), 1)
+    first_day = datetime.now().date() - timedelta(days=days - 1)
     rows = conn.execute(
         """
         SELECT h.job_id AS id, j.company AS company, h.created_at AS created_at
         FROM history h JOIN jobs j ON j.id = h.job_id
         WHERE h.action IN ('approved', 'sent') AND j.deleted_at IS NULL
-          AND h.created_at >= datetime('now', '-2 day')
-        """
+          AND h.created_at >= datetime('now', ?)
+        """,
+        (f"-{days + 1} day",),
     ).fetchall()
     seen: set[str] = set()
     result = []
     for row in rows:
-        if _local_date(row["created_at"]) == today and row["id"] not in seen:
+        day = _local_date(row["created_at"])
+        if day is not None and day >= first_day and row["id"] not in seen:
             seen.add(row["id"])
             result.append({"id": row["id"], "company": row["company"]})
     return result
 
 
-def duplicate_of_approved_today(conn: sqlite3.Connection, job: dict) -> str | None:
-    """Name of a company approved today that this job duplicates, else None."""
-    for item in approved_today(conn):
+def approved_today(conn: sqlite3.Connection) -> list[dict]:
+    """Jobs approved or sent today (local date): [{'id', 'company'}]."""
+    return approved_within(conn, 1)
+
+
+def duplicate_of_approved_today(conn: sqlite3.Connection, job: dict, days: int = 1) -> str | None:
+    """Name of a company approved within the cooldown window that this job duplicates, else None."""
+    for item in approved_within(conn, days):
         if item["id"] != job.get("id") and same_company(job.get("company"), item["company"]):
             return str(item["company"])
     return None

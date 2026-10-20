@@ -8,8 +8,8 @@ from pathlib import Path
 
 from bosshunter.ai.credentials import call_anthropic_text, get_ai_api_key
 
-TIERS = ("core", "expand", "explore")
-TIER_LIMITS = {"core": 8, "expand": 12, "explore": 6}
+TIERS = ("core", "expand", "explore", "intern")
+TIER_LIMITS = {"core": 8, "expand": 12, "explore": 6, "intern": 8}
 SKILL_PATH = Path(__file__).resolve().parents[3] / "skills" / "keyword_expander.md"
 PLAN_NAME = "keyword_plan.json"
 
@@ -60,9 +60,11 @@ def parse_plan(text: str) -> dict | None:
     if not isinstance(raw, dict):
         return None
 
-    seen: set[str] = set()
     plan: dict = {}
+    seen: set[str] = set()
     for tier in TIERS:
+        if tier == "intern":
+            seen = set()  # internship words are a separate search, not deduplicated against the others
         words: list[str] = []
         for item in raw.get(tier) or []:
             word = str(item).strip()
@@ -71,7 +73,7 @@ def parse_plan(text: str) -> dict | None:
                 seen.add(key)
                 words.append(word)
         plan[tier] = words[: TIER_LIMITS[tier]]
-    if not any(plan[tier] for tier in TIERS):
+    if not any(plan[tier] for tier in TIERS if tier != "intern"):
         return None
     plan["excludes"] = [str(x).strip() for x in raw.get("excludes") or [] if str(x).strip()]
     plan["directions"] = [

@@ -159,6 +159,8 @@ DEFAULTS: dict[str, Any] = {
         "review_cap": 150,
         # Only jobs scoring at least this much are kept in the review window.
         "review_min_score": 60,
+        # A company approved or sent within this many days (1 = today only) is not shown again.
+        "company_cooldown_days": 1,
     },
     "scoring": {
         "threshold": 71,

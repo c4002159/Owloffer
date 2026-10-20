@@ -12,7 +12,7 @@ from bosshunter.ai.credentials import AIRequestError, call_anthropic_text, get_a
 from bosshunter.ai.prefilter import _parse_salary_range_k, quick_score
 from bosshunter.ai.recruit_score import blend_scores, compute_recruit_score, passes_match_gate, recruit_weight
 from bosshunter.cancellation import OperationCancelled, run_cancellable
-from bosshunter.company_dedup import duplicate_of_approved_today
+from bosshunter.company_dedup import cooldown_days, duplicate_of_approved_today
 from bosshunter.collection.text import clean_job_description
 from bosshunter.db import (
     add_history,
@@ -26,7 +26,7 @@ from bosshunter.db import (
     update_job_score,
     update_job_status,
 )
-from bosshunter.review_queue import automation_settings, review_cap_reached
+from bosshunter.review_queue import automation_settings, kind_full
 from bosshunter.scoring_selection import select_scoring_jobs, validate_options
 
 console = Console()
@@ -818,9 +818,9 @@ def score_jobs(
             for job in pending_jobs:
                 if stop_event is not None and stop_event.is_set():
                     break
-                duplicate_of = duplicate_of_approved_today(db, job)
+                duplicate_of = duplicate_of_approved_today(db, job, cooldown_days(config))
                 if duplicate_of:
-                    qs, qs_reason = 0, f"与今日已通过的公司重复：{duplicate_of}"
+                    qs, qs_reason = 0, f"与近期已通过的公司重复：{duplicate_of}"
                 else:
                     qs, qs_reason = quick_score(job, config)
                 update_job_quick_score(db, job["id"], qs)
@@ -854,13 +854,16 @@ def score_jobs(
             cap_state = {"hit": False}
 
             def submit_next() -> bool:
-                if cap_state["hit"] or review_cap_reached(db, config):
-                    cap_state["hit"] = True
-                    return False
-                try:
-                    next_job = next(job_iter)
-                except StopIteration:
-                    return False
+                while True:
+                    try:
+                        next_job = next(job_iter)
+                    except StopIteration:
+                        return False
+                    if kind_full(db, config, next_job):
+                        # No free review slot for this kind: leave the job pending for a later run.
+                        cap_state["hit"] = True
+                        continue
+                    break
                 future = executor.submit(_score_job_with_ai, next_job, _load_resume(config, next_job) or resume, config, max_attempts)
                 futures[future] = next_job
                 return True

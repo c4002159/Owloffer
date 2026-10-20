@@ -97,6 +97,7 @@ automation:
   auto_send: false # 默认关闭：岗位先进审查窗口，由你确认后才发送
   review_cap: 150 # 待审查加已通过未发送的岗位达到该数量时，评分暂停
   review_min_score: 60 # 综合分达到该值才进入审查窗口
+  company_cooldown_days: 1 # 同一公司通过/发送后几天内不再出现（1 = 仅当天，7 = 一周）
 
 throttle:
   daily_limit: 30

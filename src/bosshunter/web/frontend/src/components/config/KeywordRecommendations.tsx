@@ -13,21 +13,25 @@ interface KeywordPlan {
   core: string[]
   expand: string[]
   explore: string[]
+  intern?: string[]
   excludes: string[]
 }
 
 interface KeywordRecommendationsProps {
   keywords: string[]
   onChange: (keywords: string[]) => void
+  internKeywords?: string[]
+  onInternChange?: (keywords: string[]) => void
 }
 
-const TIERS: Array<{ key: 'core' | 'expand' | 'explore'; label: string; hint: string }> = [
+const TIERS: Array<{ key: 'core' | 'expand' | 'explore' | 'intern'; label: string; hint: string }> = [
   { key: 'core', label: '核心词', hint: '与简历高度吻合，每次都搜' },
   { key: 'expand', label: '扩展词', hint: '相邻方向，建议轮换搜' },
   { key: 'explore', label: '探索词', hint: '证据较弱，少量试探' },
+  { key: 'intern', label: '实习词', hint: '开发类和产品类实习，单独搜实习岗位' },
 ]
 
-export function KeywordRecommendations({ keywords, onChange }: KeywordRecommendationsProps) {
+export function KeywordRecommendations({ keywords, onChange, internKeywords = [], onInternChange }: KeywordRecommendationsProps) {
   const [plan, setPlan] = useState<KeywordPlan | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -56,10 +60,13 @@ export function KeywordRecommendations({ keywords, onChange }: KeywordRecommenda
     }
   }
 
-  const has = (word: string) => keywords.some(item => item.trim().toLowerCase() === word.trim().toLowerCase())
-  const add = (words: string[]) => {
-    const fresh = words.filter(word => word.trim() && !has(word))
-    if (fresh.length) onChange([...keywords, ...fresh])
+  const listFor = (tier: string) => (tier === 'intern' ? internKeywords : keywords)
+  const has = (tier: string, word: string) => listFor(tier).some(item => item.trim().toLowerCase() === word.trim().toLowerCase())
+  const add = (tier: string, words: string[]) => {
+    const fresh = words.filter(word => word.trim() && !has(tier, word))
+    if (!fresh.length) return
+    if (tier === 'intern') onInternChange?.([...internKeywords, ...fresh])
+    else onChange([...keywords, ...fresh])
   }
 
   return (
@@ -75,22 +82,22 @@ export function KeywordRecommendations({ keywords, onChange }: KeywordRecommenda
       {!plan && !error && <p className="mt-2 text-xs text-muted">读取简历和 GitHub 项目证据，按岗位方向分层推荐，点击词条即可单独添加到下面的搜索关键词。</p>}
       {plan && (
         <div className="mt-3 space-y-3">
-          {TIERS.map(tier => plan[tier.key].length > 0 && (
+          {TIERS.map(tier => (plan[tier.key] ?? []).length > 0 && (
             <div key={tier.key}>
               <div className="mb-1 flex items-center justify-between gap-2">
                 <span className="text-xs text-foreground"><b>{tier.label}</b><span className="ml-2 text-muted">{tier.hint}</span></span>
-                <button type="button" className="text-[11px] font-bold text-primary hover:underline" onClick={() => add(plan[tier.key])}>全部添加</button>
+                <button type="button" className="text-[11px] font-bold text-primary hover:underline" onClick={() => add(tier.key, plan[tier.key] ?? [])}>全部添加</button>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {plan[tier.key].map(word => (
+                {(plan[tier.key] ?? []).map(word => (
                   <button
                     key={word}
                     type="button"
-                    disabled={has(word)}
-                    onClick={() => add([word])}
+                    disabled={has(tier.key, word)}
+                    onClick={() => add(tier.key, [word])}
                     className="inline-flex items-center gap-1 rounded-md border border-card-border bg-surface px-2 py-0.5 text-xs text-foreground hover:border-primary hover:text-primary disabled:cursor-default disabled:opacity-50"
                   >
-                    {!has(word) && <Plus className="h-3 w-3" />}{word}
+                    {!has(tier.key, word) && <Plus className="h-3 w-3" />}{word}
                   </button>
                 ))}
               </div>
