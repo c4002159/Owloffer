@@ -1309,3 +1309,37 @@ class ZhilianScrollPagingTests(TestCase):
             PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"}, max_pages=1), hooks)
         self.assertEqual(reasons, ["公司近期已投递过", "工作地点不在目标城市"])
         self.assertEqual(clicks, [])                              # neither card was opened
+
+
+class ZhilianCardTitleTests(TestCase):
+    def test_an_unrelated_card_title_rules_the_card_out_before_it_is_opened(self):
+        clicks = []
+
+        def evaluate(_target, script):
+            if "item_count" in script:
+                return json.dumps({"url": "u", "input": "Agent工程师", "item_count": 2, "signature": "s"})
+            if "card.click()" in script:
+                clicks.append(1)
+                return json.dumps({"ok": True})
+            if "descriptionCard" in script:
+                return json.dumps({"status": "selector_changed"})
+            return json.dumps({"status": "ready", "items": [
+                {"card_index": 0, "title": "跟单员", "company": "甲公司", "city": "上海", "salary": "1-2万"},
+                {"card_index": 1, "title": "酒店前台", "company": "乙公司", "city": "上海", "salary": "1-2万"},
+            ]})
+
+        events = []
+        browser = ZhilianBrowser(
+            new_tab=lambda *_a, **_k: "tab", close_tab=lambda _t: True, evaluate=evaluate, scroll=lambda *_a, **_k: True,
+            wait_for_load=lambda *_a, **_k: True, navigate_action=lambda *_a: True,
+        )
+        hooks = CollectorHooks(
+            stop_event=None, on_list_candidate=lambda c: True, on_candidate=lambda c: False,
+            on_parse_failed=lambda r: None, on_event=lambda **kw: events.append(kw), on_list_company=lambda *_a: "",
+        )
+        ZhilianCollector(browser=browser, config={"search": {"keywords": ["AI Agent开发"]}}, sleep=lambda _s: None).collect(
+            PlatformCollectionRequest("zhilian", ["Agent工程师"], ["上海"], {"上海": "538"}, max_pages=1), hooks)
+        self.assertEqual(clicks, [])
+        reasons = [e.get("message", "") for e in events if e.get("increment_filtered")]
+        self.assertEqual(len(reasons), 2)
+        self.assertTrue(all("不相关" in reason for reason in reasons))

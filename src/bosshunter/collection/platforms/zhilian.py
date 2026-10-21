@@ -41,6 +41,7 @@ from bosshunter.db import (
     prune_page_progress,
     upsert_page_progress,
 )
+from bosshunter.collection.platforms.job51 import _is_relevant_to_keyword, _terms_match_title, resume_terms
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
@@ -222,7 +223,8 @@ JS_EXTRACT_LIST = """
     'div.joblist-box__item, div.joblist-item, article.job-card, div.job-card'
   )).map((item, cardIndex) => {
     const first = (selectors) => selectors.map((s) => item.querySelector(s)).find(Boolean);
-    const title = first(['a.jobinfo__name', '.job-card__title-text', '.job-name', '.job-title']);
+    // The current card shows "上海 - 职位名" in a clamped text span.
+    const title = first(['a.jobinfo__name', '.job-card__title-text', '.job-name', '.job-title', '.job-card__title .vue-clamp__text', '.vue-clamp__text']);
     const salary = first(['p.jobinfo__salary', '.job-card__salary', '.job-salary', '.salary']);
     const company = first(['.companyinfo__name', '.job-card__company-name', '.company-name', '.company']);
     const info = Array.from(item.querySelectorAll('.jobinfo__other-info-item')).map((node) => node.textContent.trim()).filter(Boolean);
@@ -243,7 +245,7 @@ JS_EXTRACT_LIST = """
       source_job_id: item.getAttribute('data-positionid') || item.getAttribute('data-job-id') || item.getAttribute('data-id')
         || (title ? title.getAttribute('data-positionid') : '') || (detailLink ? detailLink.getAttribute('data-positionid') : '')
         || (matchedId ? matchedId[1] : ''),
-      title: title ? title.textContent.trim() : '',
+      title: title ? title.textContent.trim().replace(/^[^\\s-]{1,8}\\s*-\\s*/, '') : '',
       salary: salary ? salary.textContent.trim() : '',
       company: company ? company.textContent.trim() : '',
       city,
@@ -918,6 +920,17 @@ class ZhilianCollector:
             return "当前设置不接受实习岗位"
         return ""
 
+    def _relevance_reason(self, candidate: JobCandidate) -> str:
+        """The search is fuzzy: a title that speaks neither of the searched words nor of the resume is not worth opening."""
+        keyword = candidate.source_keyword
+        if keyword and candidate.title and not _is_relevant_to_keyword(candidate.title, candidate.jd, keyword):
+            terms = getattr(self, "_resume_terms_cache", None)
+            if terms is None:
+                terms = self._resume_terms_cache = resume_terms(self.config, self.safety_conn)
+            if not _terms_match_title(candidate.title, terms):
+                return "职位与搜索关键词、简历关键词都不相关"
+        return ""
+
     def _salary_block_reason(self, candidate: JobCandidate) -> str | None:
         """薪资硬过滤（与 quick_score 同规则）；返回拦截原因，None 表示通过。"""
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
@@ -1541,6 +1554,16 @@ class ZhilianCollector:
                                         str(raw_item.get("company")).strip(), str(raw_item.get("city") or "").strip(),
                                         str(raw_item.get("title") or "").strip(),
                                     ):
+                                        continue
+                                # The card's title and salary rule it out too (excluded words, unrelated title, pay).
+                                if (raw_item.get("title") or "").strip():
+                                    card = JobCandidate(
+                                        platform="zhilian", source_job_id=f"card:{card_index}", title=str(raw_item["title"]).strip(),
+                                        company=str(raw_item.get("company") or "").strip(), salary=str(raw_item.get("salary") or "").strip(),
+                                        city=str(raw_item.get("city") or "").strip(), source_keyword=keyword,
+                                    )
+                                    if reason := self._salary_block_reason(card) or self._filter_reason(card) or self._relevance_reason(card):
+                                        hooks.on_event(message=f"智联 列表预筛：{reason}", increment_filtered=True, filtered_candidate=card)
                                         continue
                                 if detail_requests:
                                     delay = max(0.0, self.uniform(*self.delay_range))

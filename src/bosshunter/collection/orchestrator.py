@@ -488,7 +488,7 @@ class _SharedProcessor:
         """
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         stub = JobCandidate(
-            platform=self.request.platform, source_job_id=f"card:{company}:{city}", title=title or "（详情页未读取）",
+            platform=self.request.platform, source_job_id=f"card:{company}:{city}", title=title or "（列表卡片，未打开详情页）",
             company=company, city=city,
         )
         reason = ""
