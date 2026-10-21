@@ -68,6 +68,8 @@ def _hr_floor(config: dict) -> int:
 
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
+LIST_PATIENCE_POLLS = 30                # extra polls when the list is still not there: 30 x 1.5 s = 45 s
+LIST_PATIENCE_INTERVAL_SECONDS = 1.5
 HR_RENDER_POLLS = 6
 # 页面出现验证/限流字样时的兜底阶梯：每一步先把采集节奏放慢一档、等一等再重试；用完仍被拦才停止整个平台。
 # 只是等待和降速，不会去点击或绕过验证。
@@ -467,6 +469,30 @@ class LiepinCollector:
                                 break
                             if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                        # Liepin sometimes serves a short self-reloading placeholder before the list (observed: ~30 s
+                        # once, 4 s the next time). Be patient first, then reload once, before giving the keyword up.
+                        if status == "waiting":
+                            hooks.on_event(phase="pacing", keyword=keyword, city=city, page=page,
+                                           message="猎聘列表页还在加载（可能是中间页），继续等待")
+                            for attempt in range(LIST_PATIENCE_POLLS):
+                                if self._wait(hooks, LIST_PATIENCE_INTERVAL_SECONDS):
+                                    return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                                payload = _payload(self.browser.evaluate(target_id, JS_EXTRACT_LIST))
+                                status = str(payload.get("status") or "selector_changed")
+                                if status != "waiting":
+                                    break
+                        if status == "waiting":
+                            hooks.on_event(phase="pacing", keyword=keyword, city=city, page=page,
+                                           message="猎聘列表页仍未加载，刷新一次再试")
+                            self._navigate(hooks, target_id, self.build_search_url(request, city, keyword, page=page), "猎聘列表刷新")
+                            self.browser.wait_for_load(target_id, timeout=15)
+                            for attempt in range(RENDER_POLL_ATTEMPTS):
+                                payload = _payload(self.browser.evaluate(target_id, JS_EXTRACT_LIST))
+                                status = str(payload.get("status") or "selector_changed")
+                                if status != "waiting":
+                                    break
+                                if self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
+                                    return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                         for wait in BLOCK_RECOVERY_WAITS:
                             if status != "blocked":
                                 break

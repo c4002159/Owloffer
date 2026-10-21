@@ -971,3 +971,46 @@ def test_hr_activity_floor_becomes_the_search_pages_recruiter_activity_filter():
     assert "pubTime" not in LiepinCollector.build_search_url(request, "上海", "AI")
     request.filters["pub_time"] = 3
     assert LiepinCollector.build_search_url(request, "上海", "AI").endswith("&pubTime=3")
+
+
+class LiepinListPatienceTests(TestCase):
+    def _run(self, waits_before_ready):
+        polls = []
+        sleeps = []
+
+        def evaluate(_target, script):
+            if "job-detail-job-info" in script:
+                polls.append(1)
+                if len(polls) <= waits_before_ready:
+                    return json.dumps({"status": "waiting", "jobs": []})
+                return json.dumps({"status": "empty", "jobs": []})
+            return json.dumps({"status": "ready"})
+
+        navigations = []
+        browser = LiepinBrowser(
+            new_tab=lambda url, **_kwargs: url,
+            close_tab=lambda _target: True,
+            evaluate=evaluate,
+            scroll=lambda *_args, **_kwargs: True,
+            wait_for_load=lambda *_args, **_kwargs: True,
+            navigate_action=lambda _target, url: navigations.append(url) or True,
+        )
+        hooks = CollectorHooks(
+            stop_event=None, on_list_candidate=lambda _c: True, on_candidate=lambda _c: True,
+            on_parse_failed=lambda _r: None, on_event=lambda **_kw: None,
+        )
+        result = LiepinCollector(browser=browser, sleep=sleeps.append, uniform=lambda _a, _b: 1.0).collect(
+            PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1), hooks,
+        )
+        return result, len(polls), len(navigations)
+
+    def test_a_slow_list_is_waited_for_instead_of_giving_the_keyword_up(self):
+        result, polls, _ = self._run(waits_before_ready=25)           # needs more than the old 10 polls
+        self.assertNotEqual(result.reason_code, "list_not_ready")
+        self.assertEqual(polls, 26)
+
+    def test_a_list_that_never_loads_is_reloaded_once_then_given_up(self):
+        result, polls, navigations = self._run(waits_before_ready=10_000)
+        self.assertEqual(result.reason_code, "list_not_ready")
+        self.assertEqual(polls, 10 + 30 + 10)                          # first poll, patience, after the reload
+        self.assertGreaterEqual(navigations, 2)                        # the search page plus one reload
