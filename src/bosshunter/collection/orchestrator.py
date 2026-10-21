@@ -874,10 +874,11 @@ class CollectionOrchestrator:
         start_total = len(processor.new_job_ids)
         processor.per_keyword = True
         variants: list[str] = []
-        if not intern and request.platform == "liepin":
-            from bosshunter.experience_level import liepin_variants
+        variant_key = ""
+        if not intern:
+            from bosshunter.experience_level import experience_variants
 
-            variants = liepin_variants(self.config, request.filters)
+            variant_key, variants = experience_variants(request.platform, self.config, request.filters)
         for round_no in range(3 if target and not spot_check else 1):              # later rounds top up the keywords that hit their cap
             for word in list(pending):
                 if self.stop_event is not None and self.stop_event.is_set():
@@ -897,7 +898,7 @@ class CollectionOrchestrator:
                     from bosshunter import experience_bandit as bandit
 
                     variant = bandit.choose(conn, request.platform, variants)
-                    word_request = replace(word_request, filters={**request.filters, "work_year": variant})
+                    word_request = replace(word_request, filters={**request.filters, variant_key: variant})
                     processor.event(message=f"「{word}」这次用经验标签 {variant}")
                 try:
                     result = collector.collect(word_request, hooks)

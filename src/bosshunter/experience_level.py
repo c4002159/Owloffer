@@ -34,6 +34,24 @@ PROMPT = """根据下面这份简历，判断候选人的工作经验档位。�
 LIEPIN_VARIANTS = {"fresh": ["1", "0$1"], "under1": ["0$1", "1"], "1-3": ["1$3", "0$1"]}
 
 
+ZHILIAN_VARIANTS = {"fresh": ["-1", "0001"], "under1": ["-1", "0001"], "1-3": ["0001", "0103"]}   # 经验不限 / 一年以下 / 1-3年
+
+
+def experience_variants(platform: str, config: dict, filters: dict | None = None) -> tuple[str, list[str]]:
+    """``(filter name, tags to alternate between)`` for a platform; the list is empty where nothing should alternate."""
+    if platform == "liepin":
+        return "work_year", liepin_variants(config, filters)
+    if platform == "zhilian":
+        if "work_experience" in (filters or {}):
+            return "work_experience", []
+        platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
+        own = ((platforms.get("zhilian") or {}).get("search") or {}).get("filters") or {}
+        if "work_experience" in own:
+            return "work_experience", []
+        return "work_experience", list(ZHILIAN_VARIANTS.get(str(config.get("_experience_level") or ""), []))
+    return "", []
+
+
 def liepin_variants(config: dict, filters: dict | None = None) -> list[str]:
     """The Liepin experience codes to alternate between ([] when one is set explicitly or the level has only one)."""
     if "work_year" in (filters or {}):

@@ -104,3 +104,26 @@ def test_liepin_alternates_only_when_nothing_is_set_explicitly():
     assert liepin_variants({"_experience_level": "fresh"}, {"work_year": "2"}) == []
     own = {"_experience_level": "fresh", "platforms": {"liepin": {"search": {"filters": {"work_year": "1"}}}}}
     assert liepin_variants(own) == []
+
+
+def test_zhilian_alternates_between_no_requirement_and_under_a_year():
+    from bosshunter.experience_level import experience_variants
+
+    assert experience_variants("zhilian", {"_experience_level": "fresh"}) == ("work_experience", ["-1", "0001"])
+    assert experience_variants("zhilian", {"_experience_level": "1-3"}) == ("work_experience", ["0001", "0103"])
+    assert experience_variants("zhilian", {"_experience_level": "5-10"}) == ("work_experience", [])
+    assert experience_variants("zhilian", {"_experience_level": "fresh"}, {"work_experience": "0001"})[1] == []
+    own = {"_experience_level": "fresh", "platforms": {"zhilian": {"search": {"filters": {"work_experience": ""}}}}}
+    assert experience_variants("zhilian", own)[1] == []
+    assert experience_variants("liepin", {"_experience_level": "fresh"}) == ("work_year", ["1", "0$1"])
+    assert experience_variants("51job", {"_experience_level": "fresh"}) == ("", [])
+
+
+def test_zhilian_checkpoints_are_per_experience_tag():
+    from bosshunter.collection.models import PlatformCollectionRequest
+    from bosshunter.collection.platforms.zhilian import ZhilianCollector
+
+    plain = PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"})
+    tagged = PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"}, filters={"work_experience": "0001"})
+    assert ZhilianCollector._ckey(plain, "AI") == "AI"
+    assert ZhilianCollector._ckey(tagged, "AI") == "AI|0001"
