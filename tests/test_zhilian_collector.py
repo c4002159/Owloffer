@@ -365,7 +365,9 @@ class ZhilianFixtureTests(TestCase):
         )
 
         self.assertEqual(result.reason_code, "callback_stopped")
-        self.assertEqual(navigated, ["https://www.zhaopin.com/sou/jl530/"])
+        self.assertEqual(navigated[0], "https://www.zhaopin.com/sou/jl530/")
+        self.assertIn("et=2", navigated[1])                       # then the site's own full-time filter is applied
+        self.assertEqual(len(navigated), 2)
         self.assertEqual(collected[0].storage_id, "zhilian:CC123J40800000001")
         self.assertIn("用户增长", collected[0].jd)
 
@@ -1170,3 +1172,44 @@ class ZhilianCollectApiTests(TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.status, "completed")
         self.assertEqual(len(collected), 0)
+
+
+class ZhilianNativeFilterTests(TestCase):
+    CONFIG = {"platforms": {"boss": {"search": {"filters": {"degree": ["本科", "硕士"]}}}}}
+
+    def test_filters_come_from_the_boss_degrees_and_default_to_full_time(self):
+        from bosshunter.collection.platforms.zhilian import native_filter_params
+
+        self.assertEqual(native_filter_params(self.CONFIG), {"el": "3,4", "et": "2"})
+        self.assertEqual(native_filter_params({}), {"et": "2"})
+
+    def test_explicit_values_win_key_by_key_even_when_empty(self):
+        from bosshunter.collection.platforms.zhilian import native_filter_params
+
+        self.assertEqual(native_filter_params(self.CONFIG, {"employment_type": "4", "education": ""}), {"et": "4"})
+        own = {"platforms": {"zhilian": {"search": {"filters": {"work_experience": "0001"}}}}}
+        self.assertEqual(native_filter_params(own), {"et": "2", "we": "0001"})
+
+    def test_params_are_merged_into_the_search_url(self):
+        from bosshunter.collection.platforms.zhilian import _with_params
+
+        url = _with_params("https://www.zhaopin.com/jobs/?jl=538&kw=Agent", {"el": "3,4", "et": "2"})
+        self.assertIn("jl=538", url)
+        self.assertIn("kw=Agent", url)
+        self.assertIn("el=3%2C4", url)
+        self.assertIn("et=2", url)
+        self.assertEqual(_with_params(url, {"et": "4"}).count("et="), 1)               # replaced, not repeated
+
+    def test_the_filtered_url_is_navigated_to_after_the_keyword_search(self):
+        navigated = []
+        collector = ZhilianCollector(browser=ZhilianBrowser(navigate_action=lambda target, url: navigated.append(url) or True))
+        collector._native_params = {"el": "4", "et": "2"}
+        states = iter([
+            {"url": "https://www.zhaopin.com/jobs/?jl=538&kw=Agent", "signature": "old", "item_count": 3, "input": "Agent"},
+            {"url": "https://www.zhaopin.com/jobs/?jl=538&kw=Agent&el=4&et=2", "signature": "new", "item_count": 2, "input": "Agent"},
+        ])
+        collector._search_state = lambda _target: next(states)
+        collector._apply_native_filters("target", "Agent")
+        self.assertEqual(len(navigated), 1)
+        self.assertIn("el=4", navigated[0])
+        self.assertIn("et=2", navigated[0])

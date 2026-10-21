@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse, urlunparse
 
 from bosshunter.ai.prefilter import salary_filter_result
 from bosshunter.browser import (
@@ -334,6 +334,49 @@ JS_FETCH_API_PAGE = r"""
     }
 })()
 """
+
+
+_EDUCATION_CODES = {"硕士": "3", "本科": "4"}
+
+
+def native_filter_params(config: dict, filters: dict | None = None) -> dict[str, str]:
+    """Zhilian's own filters as URL parameters of its search page (el 学历: 3 硕士, 4 本科; et 类型: 2 全职, 4 实习;
+    we 经验: 0001 一年以下 …). Applied after the keyword search, so the site drops what does not fit.
+
+    ``filters`` (education, employment_type, work_experience) wins key by key, also when empty; otherwise
+    platforms.zhilian.search.filters and then the BOSS degrees decide, and full-time is the default type.
+    """
+    filters = filters or {}
+    platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
+    own = ((platforms.get("zhilian") or {}).get("search") or {}).get("filters") or {}
+    boss = (((platforms.get("boss") or {}).get("search") or {}).get("filters")) or {}
+
+    def pick(key: str, derived: str) -> str:
+        if key in filters:
+            return str(filters[key] or "").strip()
+        if key in own:
+            return str(own[key] or "").strip()
+        return derived
+
+    degrees = [_EDUCATION_CODES[str(item)] for item in boss.get("degree") or [] if str(item) in _EDUCATION_CODES]
+    params = {
+        "el": pick("education", ",".join(sorted(degrees))),
+        "et": pick("employment_type", "2"),
+        "we": pick("work_experience", ""),
+    }
+    return {name: value for name, value in params.items() if value}
+
+
+def _with_params(url: str, params: dict[str, str]) -> str:
+    """``url`` with ``params`` set (replacing the same names); '' values never get here."""
+    parts = urlparse(url)
+    query = {key: values[0] for key, values in parse_qs(parts.query, keep_blank_values=True).items()}
+    query.update(params)
+    return urlunparse(parts._replace(query=urlencode(query)))
+
+
+def url_value(url: str, name: str) -> str:
+    return (parse_qs(urlparse(url).query).get(name) or [""])[0]
 
 
 def _js_literal(value: Any) -> str:
@@ -896,6 +939,7 @@ class ZhilianCollector:
             if submit_payload.get("ok") and submit_payload.get("value") != keyword:
                 raise CollectionError("search_not_applied", "智联搜索框未写入目标关键词")
             self._wait_for_search_results(target_id, keyword, before_state)
+            self._apply_native_filters(target_id, keyword)
             return
 
         # Keep the evaluate seam for unit-test fakes and older Browser Runtime
@@ -908,6 +952,27 @@ class ZhilianCollector:
         if submit_payload.get("ok") and submit_payload.get("value") != keyword:
             raise CollectionError("search_not_applied", "智联搜索框未写入目标关键词")
         self._wait_for_search_results(target_id, keyword, before_state)
+        self._apply_native_filters(target_id, keyword)
+
+    def _apply_native_filters(self, target_id: str, keyword: str) -> None:
+        """Set the site's own filters (学历 / 类型 / 经验) on the search page that is showing the keyword's results."""
+        params = getattr(self, "_native_params", None) or {}
+        navigate = self.browser.navigate_action
+        if not params or navigate is None:
+            return
+        state = self._search_state(target_id)
+        url = str(state.get("url") or "")
+        if "zhaopin.com" not in url or all(url_value(url, name) == value for name, value in params.items()):
+            return
+        if not navigate(target_id, _with_params(url, params)):
+            return                                                    # keep the unfiltered list rather than fail
+        old_signature = str(state.get("signature") or "")
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            current = self._search_state(target_id)
+            if current.get("item_count") and str(current.get("signature") or "") != old_signature:
+                return
 
     @staticmethod
     def _parse_payload(value: Any) -> dict[str, Any]:
@@ -1271,6 +1336,7 @@ class ZhilianCollector:
             pass
 
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        self._native_params = native_filter_params(self.config, request.filters)
         if any(not str(request.city_codes.get(city) or "").strip() for city in request.cities):
             return PlatformCollectionResult(self.platform, "failed", "no_valid_city", "智联城市编码未配置")
 
