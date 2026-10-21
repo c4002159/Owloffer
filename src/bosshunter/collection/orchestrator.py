@@ -798,7 +798,8 @@ class CollectionOrchestrator:
             intern_request = PlatformCollectionRequest(
                 platform=platform,
                 # Liepin's own 经验 filter: 实习生
-                **{**raw, "keywords": intern_words, **({"filters": {"work_year": "2"}} if platform == "liepin" else {})},
+                **{**raw, "keywords": intern_words, **({"filters": {"work_year": "2"}} if platform == "liepin" else
+                    {"filters": {"job_type": "02", "work_year": ""}} if platform == "51job" else {})},
             )
         # About half of the collected jobs survive scoring, so collect roughly twice the quota.
         target = int(quotas.get("internship", 0)) * 2

@@ -178,7 +178,7 @@ JS_FETCH_API_PAGE = r"""
 (async function () {
     try {
         var url = '""" + API_SEARCH_URL + r"""?api_key=51job&timestamp=' + Date.now() +
-            '&keyword=__KW__&searchType=2&jobArea=__AREA__&pageNum=__PAGE__&pageSize=""" + str(API_PAGE_SIZE) + r"""&sortType=0&source=1&scene=7';
+            '&keyword=__KW__&searchType=2&jobArea=__AREA__&pageNum=__PAGE__&pageSize=""" + str(API_PAGE_SIZE) + r"""&sortType=0&source=1&scene=7__FILTERS__';
         var resp = await fetch(url, {
             headers: { 'Accept': 'application/json, text/plain, */*' },
             credentials: 'include'
@@ -194,6 +194,38 @@ JS_FETCH_API_PAGE = r"""
     }
 })()
 """
+
+
+_DEGREE_CODES = {"大专": "03", "本科": "04", "硕士": "05", "博士": "06"}
+
+
+def native_filters_query(config: dict, filters: dict | None = None) -> str:
+    """51job's own filters as API query parameters, set before paging so the site drops what does not fit.
+
+    ``filters`` (work_year, degree, job_type) wins key by key, also when empty; otherwise platforms.51job.search.filters
+    and then the BOSS settings decide: 应届生 -> workYear 01, the BOSS degrees -> degree (04 本科, 05 硕士 ...), and
+    full-time -> jobType 01. The internship pass sets job_type 02 and an empty work_year.
+    """
+    filters = filters or {}
+    platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
+    own = ((platforms.get("51job") or {}).get("search") or {}).get("filters") or {}
+    boss = (((platforms.get("boss") or {}).get("search") or {}).get("filters")) or {}
+
+    def pick(key: str, derived: str) -> str:
+        if key in filters:
+            return str(filters[key] or "").strip()
+        if key in own:
+            return str(own[key] or "").strip()
+        return derived
+
+    experience = [str(item) for item in boss.get("experience") or []]
+    degrees = [_DEGREE_CODES[str(item)] for item in boss.get("degree") or [] if str(item) in _DEGREE_CODES]
+    parts = {
+        "workYear": pick("work_year", "01" if "应届生" in experience else ""),
+        "degree": pick("degree", ",".join(degrees)),
+        "jobType": pick("job_type", "01"),
+    }
+    return "".join(f"&{name}={value}" for name, value in parts.items() if value)
 
 
 def _wait_or_stop(stop_event, seconds: float) -> bool:
@@ -730,7 +762,7 @@ class Job51Collector:
                 if not candidate_target:
                     continue
                 try:
-                    alive_js = JS_FETCH_API_PAGE.replace("__KW__", quote(keyword)).replace("__AREA__", code).replace("__PAGE__", "1")
+                    alive_js = JS_FETCH_API_PAGE.replace("__KW__", quote(keyword)).replace("__AREA__", code).replace("__PAGE__", "1").replace("__FILTERS__", "")
                     alive = self.browser.evaluate(candidate_target, alive_js, timeout=8)
                     if alive and "error" not in str(alive):
                         return str(candidate_target), False
@@ -753,6 +785,7 @@ class Job51Collector:
         """在宿主页上下文发一次 API 请求并分析返回，返回 _analyze_api_response 结果。"""
         js = JS_FETCH_API_PAGE.replace("__KW__", kw_encoded).replace("__AREA__", area).replace("__PAGE__", str(page))
         js = js.replace("sortType=0", f"sortType={getattr(self, '_sort_type', '0')}")
+        js = js.replace("__FILTERS__", getattr(self, "_filters_query", ""))
         raw = self.browser.evaluate(host_target, js, timeout=API_FETCH_TIMEOUT)
         # An empty answer is usually a stalled tab or a dropped CDP call, not risk control. Climb down the ladder
         # (wait, wait longer, slow the collection rhythm and wait, slow it again) before treating it as an L3 stop
@@ -799,6 +832,7 @@ class Job51Collector:
         self, request: PlatformCollectionRequest, hooks: CollectorHooks
     ) -> PlatformCollectionResult:
         self._sort_type = SORT_TYPES.get(str(request.sort), "0")
+        self._filters_query = native_filters_query(self.config, request.filters)
         # 城市编码前置校验（fail-closed，与官方一致）
         for city in request.cities:
             if not request.city_codes.get(city):
