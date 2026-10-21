@@ -129,6 +129,7 @@ interface WorkbenchData {
   approved_unsent: Job[]
   delivery_job_ids?: string[]
   busy_jobs?: Record<string, string>
+  platform_limits_today?: Record<string, string>
   recent_tasks?: TaskSummary[]
   pending_greetings: Job[]
   send_errors: Job[]
@@ -262,7 +263,9 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       const details = Array.isArray(data.messages) ? data.messages.map(String).filter(Boolean).join('；') : ''
-      throw new Error([data.error || '启动失败', details].filter(Boolean).join('：'))
+      const failure = new Error([data.error || '启动失败', details].filter(Boolean).join('：')) as Error & { code?: string }
+      failure.code = data.code
+      throw failure
     }
     const task = await res.json() as WorkbenchTask
     if (task.status !== 'queued') setWorkbench(prev => ({ ...prev, task, last_task: task }))

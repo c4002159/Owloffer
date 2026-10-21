@@ -42,6 +42,7 @@ from bosshunter.config import (
 	save_config,
 	validate_config_send_windows,
 )
+from bosshunter.platform_limits import PLATFORM_NAMES, limits_today
 from bosshunter.db import (
 	GREETING_ALLOWED_STATUSES,
 	REJECT_ALLOWED_STATUSES,
@@ -1313,12 +1314,20 @@ def api_job_search():
 	keyword = (request.query.getunicode("q") or "").strip()
 	status_filters = _query_values("status")
 	queue_view = request.params.get("queue_view", "").strip()
-	if queue_view and queue_view not in {"confirm", "waiting", "failed"}:
+	if queue_view and queue_view not in {"confirm", "waiting", "failed", "manual"}:
 		return _json_response({"error": "queue_view 参数无效"}, 400)
 	if queue_view == "confirm":      # scored and waiting for the user, no greeting prepared yet
 		conditions.append("status IN ('pending', 'scored', 'ready') AND NOT (status = 'ready' AND TRIM(COALESCE(greeting, '')) != '')")
+		conditions.append("COALESCE(source_platform, 'boss') != 'zhilian'")      # 智联岗位在“手动投递”里
 	elif queue_view == "waiting":    # confirmed (or greeting ready) and waiting to be delivered, by the program or by hand
 		conditions.append("(status = 'approved' OR (status = 'ready' AND TRIM(COALESCE(greeting, '')) != ''))")
+		conditions.append("COALESCE(source_platform, 'boss') != 'zhilian'")
+	elif queue_view == "manual":     # 智联：只能手动投递；已投递过的公司和同公司重复岗位不再列出
+		conditions.append("COALESCE(source_platform, 'boss') = 'zhilian' AND status IN ('pending', 'scored', 'ready', 'approved')")
+		excluded = _manual_delivery_duplicates()
+		if excluded:
+			conditions.append(f"id NOT IN ({','.join('?' for _ in excluded)})")
+			params.extend(excluded)
 	elif queue_view == "failed":     # a delivery was tried and failed
 		conditions.append("status = 'error'")
 	if keyword:
@@ -1634,6 +1643,32 @@ def _task_summary(task: dict) -> dict:
 	}
 
 
+def _manual_delivery_duplicates() -> list[str]:
+	"""Zhilian jobs to leave out of the manual list: the company was already applied to (any platform, within the
+	cooldown) or another Zhilian job of the same company with a better score is listed already."""
+	from bosshunter.company_dedup import approved_within, cooldown_days, matching_company, same_company
+
+	db = _get_web_db()
+	try:
+		recent = [item["company"] for item in approved_within(db, cooldown_days(load_config(CONFIG_PATH)))]
+		rows = db.execute(
+			"SELECT id, company, COALESCE(score, 0) AS score FROM jobs WHERE deleted_at IS NULL "
+			"AND COALESCE(source_platform, 'boss') = 'zhilian' AND status IN ('pending', 'scored', 'ready', 'approved') "
+			"ORDER BY score DESC, id"
+		).fetchall()
+	finally:
+		db.close()
+	excluded: list[str] = []
+	kept: list[str] = []
+	for row in rows:
+		company = row["company"]
+		if matching_company(company, recent) or any(same_company(company, other) for other in kept):
+			excluded.append(str(row["id"]))
+		else:
+			kept.append(company)
+	return excluded
+
+
 @app.route("/api/workbench")
 def api_workbench():
 	db = _get_web_db()
@@ -1653,6 +1688,7 @@ def api_workbench():
 		return _json_response({
 			"delivery_job_ids": _active_delivery_job_ids(status),
 			"busy_jobs": _busy_jobs(status),
+			"platform_limits_today": limits_today(db),
 			"queued_tasks": [_task_summary(item) for item in status.get("queued") or []],
 			"recent_tasks": [_task_summary(item) for item in (status.get("tasks") or [])[-8:]][::-1],
 			"funnel": get_funnel_stats(db),
@@ -1955,6 +1991,22 @@ def api_workbench_task_start():
 		messages = _preflight_messages(mode, base_config, collection_options)
 		if messages:
 			return _json_response({"error": "请先处理启动前检查", "messages": messages}, 400)
+		if collection_options is not None and not (options or {}).get("confirm_platform_limit"):
+			limit_db = _get_web_db()
+			try:
+				limited = {
+					platform: reason for platform, reason in limits_today(limit_db).items()
+					if platform in collection_options["platform_order"]
+				}
+			finally:
+				limit_db.close()
+			if limited:
+				names = "、".join(PLATFORM_NAMES.get(platform, platform) for platform in limited)
+				return _json_response({
+					"error": f"今天{names}已达上限或因异常暂停（{'；'.join(limited.values())[:120]}），确定仍要采集吗？",
+					"code": "platform_limit_today",
+					"platforms": limited,
+				}, 409)
 		extra = {"_collection_options": collection_options} if collection_options is not None else {}
 		before_start = None
 		if collection_options is not None and not collection_options.get("resume_run_id"):

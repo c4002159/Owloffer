@@ -611,6 +611,19 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     return true
   }
 
+  // 平台今天已达沟通上限时，采集前要用户确认；确认后带 confirm_platform_limit 重新启动。
+  const startTaskConfirmingLimit = async (mode: WorkbenchMode, options?: Record<string, unknown>) => {
+    try {
+      return await startTask(mode, options)
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'platform_limit_today') throw err
+      if (!window.confirm(`${err instanceof Error ? err.message : '今天该平台已达上限，确定仍要采集吗？'}`)) {
+        throw new Error('已取消：今天该平台已达上限，没有开始采集。')
+      }
+      return await startTask(mode, { ...(options ?? {}), confirm_platform_limit: true })
+    }
+  }
+
   const handleModeClick = async (mode: WorkbenchMode) => {
     try {
       if (activeTask?.mode === mode) {
@@ -641,7 +654,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice(`${target?.title || '任务'}启动前预检中...`)
       if (!(await runPreflight(mode))) return
       setNotice(`${target?.title || '任务'}启动中，请稍候...`)
-      const started = await startTask(mode)
+      const started = await startTaskConfirmingLimit(mode)
       setNotice(started?.status === 'queued' ? `${target?.title || '任务'}已排队，前面的任务结束后自动开始，可在「最近活动」查看。` : `${target?.title || '任务'}已启动，日志会在下方更新。`)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '操作失败')
@@ -688,7 +701,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         return { ok: false, error: '启动前预检未通过：请关闭弹窗后按检查提示修复，再重新启动。' }
       }
       setNotice('启动前预检通过，正在启动任务...')
-      const started = await startTask(mode, options)
+      const started = await startTaskConfirmingLimit(mode, options)
       if (started?.status === 'queued') {
         setNotice('任务已排队，前面的任务结束后自动开始，可在「最近活动」查看。')
         return { ok: true }
@@ -985,6 +998,11 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             )
           })}
         </div>
+        {Object.keys(workbench.platform_limits_today ?? {}).length > 0 && (
+          <div role="alert" className="rounded-xl border border-warning bg-warning-soft px-4 py-3 text-sm font-bold text-warning-strong">
+            {Object.entries(workbench.platform_limits_today ?? {}).map(([platform, reason]) => `${PLATFORM_LABELS[platform] || platform}：${reason || '今天已暂停'}`).join('；')}。已暂停该平台，岗位仍留在「待投递」；今天再次采集会先让你确认，无人值守的定时任务会跳过它。
+          </div>
+        )}
         {!showGettingStarted && notice && <CompactNotice message={notice} />}
         {!showGettingStarted && preflightChecks.some(check => check.status !== 'pass') && (
           <PreflightPanel checks={preflightChecks} checking={Boolean(modePending) || preflightRunning} onRetry={retryPreflight} />
@@ -1794,7 +1812,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [filters, setFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
   const [hideHandled, setHideHandled] = useState(true)
   const [poolView, setPoolView] = useState<PoolView>('pending')
-  const [viewCounts, setViewCounts] = useState<Record<PoolView, number | null>>({ pending: null, waiting: null, failed: null, history: null })
+  const [viewCounts, setViewCounts] = useState<Record<PoolView, number | null>>({ pending: null, waiting: null, failed: null, manual: null, history: null })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [blockedCompanies, setBlockedCompanies] = useState<string[]>([])
@@ -1837,8 +1855,8 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
       const data = await res.json()
       return typeof data.total === 'number' ? data.total : null
     }
-    Promise.all([count('pending'), count('waiting'), count('failed'), count('history')])
-      .then(([pending, waiting, failed, history]) => { if (!controller.signal.aborted) setViewCounts({ pending, waiting, failed, history }) })
+    Promise.all([count('pending'), count('waiting'), count('failed'), count('manual'), count('history')])
+      .then(([pending, waiting, failed, manual, history]) => { if (!controller.signal.aborted) setViewCounts({ pending, waiting, failed, manual, history }) })
       .catch(() => { /* 计数失败只是不显示数字。 */ })
     return () => controller.abort()
   }, [items, total, hideHandled])
@@ -2290,7 +2308,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         </div>
       </div>
       <div className="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="岗位池视图">
-        {(['pending', 'waiting', 'failed', 'history'] as PoolView[]).map(view => (
+        {(['pending', 'waiting', 'failed', 'manual', 'history'] as PoolView[]).map(view => (
           <button
             key={view}
             type="button"
@@ -2313,6 +2331,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
             pending: '等你确认的岗位：待评分、已评分、待确认。',
             waiting: '已确认、等待投递的岗位：可以一键投递，也可以打开平台自己投，再在“修改状态”里标记已投递。',
             failed: '程序投递失败的岗位：可以重试，也可以打开平台自己投，再在“修改状态”里标记已投递（就会进入历史记录）。',
+            manual: '智联招聘只能手动投递：这里是通过筛选的智联岗位（已和数据库去重，近期投过的公司不再出现）。打开岗位链接自己投，再在“修改状态”里标记已投递。',
             history: '已有结果的岗位：已投递、已回复、已拒绝、已过滤、已跳过。',
           }[poolView]}
         </span>

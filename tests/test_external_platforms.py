@@ -329,7 +329,7 @@ def test_a_task_that_cannot_start_now_waits_in_line_and_starts_by_itself():
 
     runner = WorkbenchTaskRunner({"collect": blocking, "deliver": lambda task, config: started.append(("deliver", task.id))})
     first = runner.start("collect", {})
-    second = runner.start("deliver", {"_workbench_job_ids": ["j1"]}, queue_if_busy=True)
+    second = runner.start("deliver", {"_workbench_job_ids": ["j1"], "throttle": {"send_windows": ["00:00-23:59"]}}, queue_if_busy=True)
     assert second["status"] == "queued" and "等待" in second["logs"][0]
     status = runner.status()
     assert [item["mode"] for item in status["queued"]] == ["deliver"] and status["active"]["id"] == first["id"]

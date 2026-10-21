@@ -147,6 +147,7 @@ def test_monitor_cannot_send_after_generation_crosses_window_end():
 def test_popup_detection_crossing_boundary_cannot_confirm_greeting():
     checker = SendWindowChecker(["09:00-12:00"])
     with patch.object(checker, "_current_minutes", return_value=720), \
+            patch.object(sender, "_detect_chat_limit", return_value=""), \
             patch.object(sender, "_detect_greet_popup", return_value={"success": True}), \
             patch.object(sender, "_is_preset_greeting_popup", return_value=True), \
             patch.object(sender, "_confirm_preset_greeting") as confirm:

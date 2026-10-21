@@ -69,6 +69,9 @@ def _hr_floor(config: dict) -> int:
 RENDER_POLL_INTERVAL_SECONDS = 0.75
 RENDER_POLL_ATTEMPTS = 10
 HR_RENDER_POLLS = 6
+# 页面出现验证/限流字样时的兜底阶梯：每一步先把采集节奏放慢一档、等一等再重试；用完仍被拦才停止整个平台。
+# 只是等待和降速，不会去点击或绕过验证。
+BLOCK_RECOVERY_WAITS = (60, 180)
 
 _INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
 
@@ -292,6 +295,43 @@ class LiepinCollector:
         self.sleep(max(0.0, seconds))
         return False
 
+    def _back_off(self, hooks: CollectorHooks, seconds: float, why: str) -> bool:
+        """Slow the collection rhythm one notch (delays x2) and wait. True when the user stopped meanwhile."""
+        self.detail_delay_range = tuple(v * 2 for v in self.detail_delay_range)
+        self.page_delay_range = tuple(v * 2 for v in self.page_delay_range)
+        hooks.on_event(phase="pacing", message=f"{why}，已降低采集频率，等待 {int(seconds)} 秒后重试")
+        return self._wait(hooks, seconds)
+
+    def _read_detail(self, hooks: CollectorHooks, url: str) -> tuple[str, dict[str, Any], str]:
+        """Open a detail page and read it. Returns (status, detail, problem) with problem in
+        '', 'no_tab', 'navigation', 'stopped'."""
+        initial_url = "about:blank" if self.browser.navigate_action is not None else url
+        target = self.browser.new_tab(initial_url, background=True)
+        if not target:
+            return "selector_changed", {}, "no_tab"
+        if not self._navigate(hooks, target, url, "猎聘详情页"):
+            self.browser.close_tab(target)
+            return "selector_changed", {}, "navigation"
+        detail: dict[str, Any] = {}
+        status = "selector_changed"
+        try:
+            self.browser.wait_for_load(target, timeout=15)
+            self.browser.scroll(target, y=1200)
+            for attempt in range(RENDER_POLL_ATTEMPTS):
+                detail = _payload(self.browser.evaluate(target, JS_EXTRACT_DETAIL))
+                status = str(detail.get("status") or "selector_changed")
+                if status in {"blocked", "offline", "login_required"}:
+                    break
+                # The HR card renders after the JD; give it a few more polls before
+                # treating the HR activity as unknown.
+                if status == "ready" and (detail.get("hr_active") or attempt >= HR_RENDER_POLLS):
+                    break
+                if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
+                    return status, detail, "stopped"
+        finally:
+            self.browser.close_tab(target)
+        return status, detail, ""
+
     def _navigate(self, hooks: CollectorHooks, target_id: str, url: str, label: str) -> bool:
         """Navigate with bounded retries so a transient CDP/page hiccup does not
         abort the entire platform run. Returns True when navigation commits."""
@@ -427,8 +467,17 @@ class LiepinCollector:
                                 break
                             if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                        for wait in BLOCK_RECOVERY_WAITS:
+                            if status != "blocked":
+                                break
+                            if self._back_off(hooks, wait, "猎聘列表页出现验证或限流字样"):
+                                return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                            self._navigate(hooks, target_id, self.build_search_url(request, city, keyword, page=page), "猎聘列表重试")
+                            self.browser.wait_for_load(target_id, timeout=15)
+                            payload = _payload(self.browser.evaluate(target_id, JS_EXTRACT_LIST))
+                            status = str(payload.get("status") or "selector_changed")
                         if status == "blocked":
-                            return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘出现验证或限流信号，已停止整个平台任务")
+                            return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘出现验证或限流信号，已降速重试仍被拦截，已暂停猎聘采集")
                         if status == "empty":
                             break
                         if status == "waiting":
@@ -459,37 +508,25 @@ class LiepinCollector:
                             if self._wait(hooks, detail_req):
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                             hooks.on_event(phase="loading_detail", keyword=keyword, city=city, page=page)
-                            detail_initial_url = "about:blank" if self.browser.navigate_action is not None else candidate.url
-                            detail_target = self.browser.new_tab(detail_initial_url, background=True)
-                            if not detail_target:
-                                hooks.on_parse_failed("无法打开猎聘详情页")
+                            detail_status, detail, problem = self._read_detail(hooks, candidate.url)
+                            if problem == "stopped":
+                                return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                            if problem:
+                                hooks.on_parse_failed("无法打开猎聘详情页" if problem == "no_tab" else "猎聘详情页导航失败")
                                 page_had_transient_failure = True
                                 continue
-                            if not self._navigate(hooks, detail_target, candidate.url, "猎聘详情页"):
-                                self.browser.close_tab(detail_target)
-                                hooks.on_parse_failed("猎聘详情页导航失败")
-                                page_had_transient_failure = True
-                                continue
-                            try:
-                                self.browser.wait_for_load(detail_target, timeout=15)
-                                self.browser.scroll(detail_target, y=1200)
-                                detail: dict[str, Any] = {}
-                                detail_status = "selector_changed"
-                                for attempt in range(RENDER_POLL_ATTEMPTS):
-                                    detail = _payload(self.browser.evaluate(detail_target, JS_EXTRACT_DETAIL))
-                                    detail_status = str(detail.get("status") or "selector_changed")
-                                    if detail_status in {"blocked", "offline", "login_required"}:
-                                        break
-                                    # The HR card renders after the JD; give it a few more polls before
-                                    # treating the HR activity as unknown.
-                                    if detail_status == "ready" and (detail.get("hr_active") or attempt >= HR_RENDER_POLLS):
-                                        break
-                                    if attempt + 1 < RENDER_POLL_ATTEMPTS and self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
-                                        return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                            finally:
-                                self.browser.close_tab(detail_target)
+                            # A verification/limit wording may be a one-off: slow down, wait and read the page again
+                            # before stopping the whole platform. Nothing is clicked or bypassed.
+                            for wait in BLOCK_RECOVERY_WAITS:
+                                if detail_status != "blocked":
+                                    break
+                                if self._back_off(hooks, wait, "猎聘详情页出现验证或限流字样"):
+                                    return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                                detail_status, detail, problem = self._read_detail(hooks, candidate.url)
+                                if problem == "stopped":
+                                    return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                             if detail_status == "blocked":
-                                return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘详情页出现验证或限流，已停止整个平台任务")
+                                return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "猎聘详情页出现验证或限流，已降速重试仍被拦截，已暂停猎聘采集")
                             if detail_status == "offline":
                                 hooks.on_parse_failed("猎聘岗位已下线")
                                 continue

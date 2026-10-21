@@ -27,6 +27,7 @@ from bosshunter.collection_run_store import (
 )
 from bosshunter.ai.prefilter import freshness_filter_result
 from bosshunter.employment import internship_search_config
+from bosshunter.platform_limits import mark_limit_reached
 from bosshunter.company_dedup import approved_within, cooldown_days, matching_company, pool_companies
 from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.db import (
@@ -608,6 +609,13 @@ class CollectionOrchestrator:
                         f"解析失败 {processor.progress.parse_failed} 条，保存失败 {processor.progress.save_failed} 条"
                     )
                 platform_results.append(result)
+                if result.status in {"blocked", "failed"} and result.reason_code not in {"login_required", "user_stopped"}:
+                    # The platform stopped collecting because of an error: pause it for the rest of the day, so
+                    # unattended runs skip it and a manual run has to be confirmed.
+                    try:
+                        mark_limit_reached(conn, platform, f"采集异常已暂停（{result.reason_code}）：{result.message}"[:300])
+                    except Exception:
+                        pass
                 states[platform].update({
                     "status": result.status,
                     "new": len(result.new_job_ids),

@@ -20,6 +20,7 @@ from bosshunter.browser import (
     type_text,
     wait_for_load,
 )
+from bosshunter.platform_limits import mark_limit_reached
 from bosshunter.db import (
     get_db, get_jobs_ready_to_send, update_job_status, update_job_last_error,
     add_history, add_risk_event, set_platform_safety_lock,
@@ -216,6 +217,21 @@ def _detect_greet_popup(target_id: str) -> dict:
     return _parse_js_result(evaluate(target_id, detect_popup_js))
 
 
+def _detect_chat_limit(target_id: str) -> str:
+    """Text of BOSS's "您已达到沟通上限 / 今天已与N位BOSS沟通" dialog when it is showing, else ''."""
+    result = _parse_js_result(evaluate(target_id, r"""
+    (() => {
+        const visible = (element) => element && !!(
+            element.offsetWidth || element.offsetHeight || element.getClientRects().length
+        );
+        const dialog = Array.from(document.querySelectorAll('.dialog-wrap, .boss-popup__wrapper, [class*=dialog]'))
+            .find((element) => visible(element) && /沟通上限|已与\d+位BOSS沟通/.test(element.innerText || ''));
+        return JSON.stringify({success: true, text: dialog ? (dialog.innerText || '').replace(/\s+/g, ' ').trim() : ''});
+    })()
+    """))
+    return str(result.get("text") or "")
+
+
 def _is_preset_greeting_popup(state: dict) -> bool:
     if state.get("action") == "no_popup":
         return False
@@ -371,6 +387,13 @@ def _handle_greet_popup(
     target_id: str, greeting: str, click_result: dict | None = None,
     window_checker: SendWindowChecker | None = None,
 ) -> dict:
+    if limit_text := _detect_chat_limit(target_id):
+        return {
+            "success": False,
+            "error": "chat_limit_reached",
+            "history_detail": f"BOSS 今日沟通已达上限：{limit_text[:80]}",
+            "skip_backoff": True,
+        }
     state = _detect_greet_popup(target_id)
     if not state.get("success"):
         return {
@@ -1333,6 +1356,16 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
                     backoff.record_success()
                 else:
                     error = result_data.get("error", "unknown")
+                    if error == "chat_limit_reached":
+                        # The platform will take no more contacts today: remember it, keep this job waiting, stop.
+                        mark_limit_reached(db, "boss", str(result_data.get("history_detail") or ""))
+                        add_risk_event(db, "chat_limit_reached", str(result_data.get("history_detail") or ""))
+                        if failed_target_id:
+                            close_tab(failed_target_id)
+                            failed_target_id = None
+                        send_report["stop_reason"] = "platform_chat_limit"
+                        console.print("[yellow]BOSS 今日沟通已达上限，停止投递，明天再继续[/yellow]")
+                        break
                     if error in {"daily_platform_page_limit", "persistent_risk_lock"}:
                         send_report["stop_reason"] = error
                         console.print("[yellow]为了账户安全，已达到平台页面访问上限或仍处于风险冷却，停止投递[/yellow]")

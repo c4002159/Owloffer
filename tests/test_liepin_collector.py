@@ -151,12 +151,47 @@ class LiepinCollectorTests(TestCase):
             on_parse_failed=lambda _reason: None,
             on_event=lambda **_kwargs: None,
         )
-        result = LiepinCollector(browser=browser).collect(
+        sleeps = []
+        collector = LiepinCollector(browser=browser, sleep=sleeps.append, uniform=lambda _a, _b: 1.0)
+        result = collector.collect(
             PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
             hooks,
         )
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason_code, "rate_limit")
+        self.assertEqual([s for s in sleeps if s >= 60], [60, 180])        # waited and retried before giving up
+        self.assertEqual(collector.page_delay_range[0], LiepinCollector(browser=browser).page_delay_range[0] * 4)
+
+    def test_a_one_off_verification_wording_recovers_after_backing_off(self):
+        calls = []
+
+        def evaluate(_target, _script):
+            calls.append(1)
+            if len(calls) == 1:                                            # the first read looks like a verification page
+                return json.dumps({"status": "blocked", "jobs": []})
+            return json.dumps({"status": "empty", "jobs": []})
+
+        browser = LiepinBrowser(
+            new_tab=lambda url, **_kwargs: url,
+            close_tab=lambda _target: True,
+            evaluate=evaluate,
+            scroll=lambda *_args, **_kwargs: True,
+            wait_for_load=lambda *_args, **_kwargs: True,
+        )
+        hooks = CollectorHooks(
+            stop_event=None,
+            on_list_candidate=lambda _candidate: True,
+            on_candidate=lambda _candidate: True,
+            on_parse_failed=lambda _reason: None,
+            on_event=lambda **_kwargs: None,
+        )
+        sleeps = []
+        result = LiepinCollector(browser=browser, sleep=sleeps.append, uniform=lambda _a, _b: 1.0).collect(
+            PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1),
+            hooks,
+        )
+        self.assertNotEqual(result.status, "blocked")
+        self.assertIn(60, sleeps)
 
     def test_collection_waits_for_spa_list_render(self):
         evaluations = 0

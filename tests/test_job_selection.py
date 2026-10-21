@@ -150,7 +150,7 @@ class JobSelectionTests(unittest.TestCase):
 
     def test_startchat_popup_reuses_chat_redirect_without_foreground_input(self):
         click_result = {"redirectUrl": "/web/geek/chat?jobId=first-contact"}
-        with patch(
+        with patch("bosshunter.executor.sender._detect_chat_limit", return_value=""), patch(
             "bosshunter.executor.sender._detect_greet_popup",
             return_value={"success": True, "popup": True, "kind": "startchat_dialog"},
         ), patch(
@@ -242,6 +242,7 @@ class JobSelectionTests(unittest.TestCase):
 
         with patch("bosshunter.executor.sender.new_tab", return_value="target-1"), \
              patch("bosshunter.executor.sender.evaluate", side_effect=evaluate_results) as evaluate_mock, \
+             patch("bosshunter.executor.sender._detect_chat_limit", return_value=""), \
              patch("bosshunter.executor.sender._detect_greet_popup", return_value={"success": True, "popup": False}), \
              patch("bosshunter.executor.sender._wait_for_chat_page", return_value={"success": True, "target_id": "target-1"}), \
              patch("bosshunter.executor.sender._message_delivery_state", side_effect=["missing", "delivered", "delivered"]), \
