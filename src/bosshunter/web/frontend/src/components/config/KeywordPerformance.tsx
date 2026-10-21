@@ -20,7 +20,9 @@ export function KeywordPerformance({ refreshKey }: { refreshKey?: unknown }) {
   const load = useCallback(() => {
     fetch('/api/keywords/strategy', { cache: 'no-store' })
       .then(res => res.json())
-      .then((next: Strategy) => setData(next))
+      .then((next: Partial<Strategy> | null) => {
+        if (next && next.tiers && next.scores) setData({ pinned: [], paused: {}, log: [], ...next } as Strategy)
+      })
       .catch(() => { /* 没有数据时不显示这个面板 */ })
   }, [])
   useEffect(load, [load, refreshKey])
@@ -34,7 +36,7 @@ export function KeywordPerformance({ refreshKey }: { refreshKey?: unknown }) {
   }
 
   if (!data) return null
-  const rows = (['core', 'expand', 'explore', 'paused'] as const).flatMap(tier => (data.tiers[tier] ?? []).map(word => ({ word, tier })))
+  const rows = (['core', 'expand', 'explore', 'paused'] as const).flatMap(tier => (data.tiers?.[tier] ?? []).map(word => ({ word, tier })))
   if (!rows.length) return null
 
   return (
