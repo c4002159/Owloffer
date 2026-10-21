@@ -209,7 +209,8 @@ export default function ConfigPage() {
       ...legacy,
       ...specific,
       filters: { ...(legacy.filters || {}), ...(specific.filters || {}) },
-      keywords: specific.keywords?.length ? specific.keywords : legacy.keywords,
+      // A platform without keywords of its own searches the shared ones (the same fallback as the collect dialog).
+      keywords: specific.keywords?.length ? specific.keywords : (legacy.keywords ?? config?.search?.keywords),
       cities: specific.cities?.length ? specific.cities : legacy.cities,
       city_codes: Object.keys(specific.city_codes || {}).length ? specific.city_codes : legacy.city_codes,
       max_pages: specific.max_pages || legacy.max_pages || (platform === 'boss' ? 3 : 1),
@@ -461,13 +462,13 @@ export default function ConfigPage() {
                     <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
                   </div>
                   {enabled && <div className="mt-4 space-y-3">
-                    <Field label="搜索关键词" dataTour={platform === guidePlatform ? 'search-keywords' : undefined} hint={platform === 'boss' ? '每个岗位是一个独立词条：输入后回车添加，或点下方推荐词条。' : undefined}>
-                      {platform === 'boss' && <KeywordRecommendations
+                    <Field label="搜索关键词" dataTour={platform === guidePlatform ? 'search-keywords' : undefined} hint="每个岗位是一个独立词条：输入后回车添加，或点下方推荐词条。">
+                      <KeywordRecommendations
                         keywords={Array.isArray(search.keywords) ? search.keywords : []}
                         onChange={value => updatePlatformSearch(platform, 'keywords', value)}
                         internKeywords={Array.isArray(config.search?.intern_keywords) ? config.search.intern_keywords : []}
                         onInternChange={value => updateConfig('search.intern_keywords', value)}
-                      />}
+                      />
                       {platform === 'boss' && <KeywordPerformance />}
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
                     </Field>
