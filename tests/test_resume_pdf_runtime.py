@@ -4,6 +4,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _never_open_a_real_browser_tab():
+    """generate_tailored_resume also renders a PNG preview; without this the tests open tabs in the developer's Chrome."""
+    with patch("bosshunter.ai.resume.new_tab", return_value=None):
+        yield
+
 
 class ResumeArtifactTests(unittest.TestCase):
     def test_prompt_forbids_resume_tailoring_artifacts(self):
