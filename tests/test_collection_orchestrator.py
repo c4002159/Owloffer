@@ -973,3 +973,95 @@ class UnconfiguredPlatformDefaultsTests(TestCase):
         }}
         options = normalize_collection_options(config, {"platform_order": ["liepin"]})
         self.assertEqual(options["platforms"]["liepin"]["keywords"], ["RAG工程师"])
+
+
+class KeywordRotationTests(TestCase):
+    """A platform stops at its target of new jobs; a later run carries on with the keywords not done today."""
+
+    CONFIG = {"automation": {"keyword_budget": True}}
+
+    @staticmethod
+    def _collector(calls, per_keyword=3, platform="51job"):
+        class Collector:
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                calls.append(word)
+                for index in range(per_keyword):
+                    candidate = JobCandidate(**{**_candidate(platform, f"{word}-{index}", f"{word}岗位{index}").__dict__,
+                                                "company": f"{word}公司{index}号", "city": "上海"})
+                    if not hooks.on_list_candidate(candidate):
+                        continue
+                    if not hooks.on_candidate(candidate):
+                        return PlatformCollectionResult(platform, "completed", "callback_stopped", "stopped")
+                return PlatformCollectionResult(platform, "completed", "search_exhausted", "ok")
+
+        return Collector
+
+    def _run(self, db_path, calls, words, target, per_keyword=3):
+        registry = CollectorRegistry({"51job": self._collector(calls, per_keyword)})
+        options = _options(order=["51job"])
+        options["platforms"]["51job"].update(cities=["上海"], keywords=words)
+        options["quotas"] = {"fulltime": 10, "internship": 0}
+        options["target_new"] = target
+        return CollectionOrchestrator(self.CONFIG, db_path=db_path, registry=registry).run(options)
+
+    def test_the_platform_stops_at_its_target_and_the_next_run_starts_with_the_keyword_that_was_cut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            first = []
+            result = self._run(db_path, first, ["甲", "乙", "丙"], target=5)
+            self.assertEqual(len(result["collected_job_ids"]), 5)           # stopped at the target
+            self.assertNotIn("丙", first)                                    # the third keyword was not needed
+            second = []
+            self._run(db_path, second, ["甲", "乙", "丙"], target=5)
+            self.assertEqual(second[0], "乙")                                # 甲 was searched to its end, 乙 was cut
+
+    def test_once_every_keyword_is_done_only_a_few_are_looked_at_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            words = ["甲", "乙", "丙", "丁", "戊"]
+            self._run(db_path, [], words, target=100)                        # everything searched to its end
+            again = []
+            self._run(db_path, again, words, target=100)
+            self.assertEqual(len(again), 3)                                  # a spot check of three keywords
+            self.assertTrue(set(again) <= set(words))
+
+    def test_the_marks_are_per_day(self):
+        from bosshunter import keyword_progress as kp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = get_db(Path(tmp) / "c.db")
+            kp.mark_done(conn, "51job", "fulltime", "甲")
+            self.assertEqual(kp.done_today(conn, "51job", "fulltime"), {"甲"})
+            conn.execute("UPDATE keyword_progress SET day = '2000-01-01'")
+            conn.commit()
+            self.assertEqual(kp.done_today(conn, "51job", "fulltime"), set())      # tomorrow everything starts over
+            conn.close()
+
+    def test_a_keyword_that_only_lists_known_jobs_is_given_up_for_the_next_one(self):
+        calls, listed = [], []
+
+        class Repeats:
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                calls.append(word)
+                if word == "甲":
+                    for index in range(60):
+                        listed.append(index)
+                        candidate = JobCandidate(**{**_candidate("51job", f"known-{index}").__dict__, "city": "上海"})
+                        hooks.on_list_candidate(candidate)
+                    return PlatformCollectionResult("51job", "completed", "search_exhausted", "ok")
+                return PlatformCollectionResult("51job", "completed", "search_exhausted", "ok")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            conn = get_db(db_path)
+            for index in range(60):
+                insert_job(conn, {**JobCandidate(**{**_candidate("51job", f"known-{index}").__dict__, "city": "上海"}).as_job_record()})
+            conn.close()
+            options = _options(order=["51job"])
+            options["platforms"]["51job"].update(cities=["上海"], keywords=["甲", "乙"])
+            options["quotas"] = {"fulltime": 10, "internship": 0}
+            CollectionOrchestrator(self.CONFIG, db_path=db_path, registry=CollectorRegistry({"51job": Repeats})).run(options)
+        self.assertEqual(calls, ["甲", "乙"])                                 # 乙 still got its turn
+        self.assertLess(len(listed), 60)                                      # 甲 was cut short after two repeated pages

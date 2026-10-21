@@ -155,6 +155,8 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
     }
     if supplied.get("resume_run_id"):
         options["resume_run_id"] = supplied["resume_run_id"]
+    if supplied.get("target_new") not in (None, "", 0):
+        options["target_new"] = supplied["target_new"]
     normalized = validate_collection_options(options)
     if "boss" in normalized["platform_order"]:
         effective = {"profile": config.get("profile", {}), "platforms": {
@@ -260,6 +262,14 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("全职和实习名额范围为 0-1000")
         parsed_quotas[kind] = amount
     normalized["quotas"] = parsed_quotas
+    if options.get("target_new") not in (None, "", 0):
+        try:
+            target_new = int(options["target_new"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("每个平台的目标新增数必须是整数") from exc
+        if not 1 <= target_new <= 1000:
+            raise ValueError("每个平台的目标新增数范围为 1-1000")
+        normalized["target_new"] = target_new
     return normalized
 
 
@@ -313,14 +323,36 @@ class _SharedProcessor:
         self.stale_block = int(automation.get("stale_block_size", 10) or 10)
         self.stale_ratio = float(automation.get("stale_ratio", 0.6) or 0.6)
         self.stale_strikes_limit = int(automation.get("stale_strikes", 2) or 2)
+        self.repeat_ratio = float(automation.get("repeat_ratio", 0.8) or 0.8)
+        self.repeat_strikes_limit = int(automation.get("repeat_strikes", 2) or 2)
         self.abandoned_keyword = False
         self.reset_keyword_window()
 
     def reset_keyword_window(self) -> None:
-        """Start counting stale postings afresh for the next keyword."""
+        """Start counting stale / repeated postings afresh for the next keyword."""
         self._stale_samples: list[bool] = []
         self._stale_strikes = 0
+        self._repeat_samples: list[bool] = []
+        self._repeat_strikes = 0
         self.abandoned_keyword = False
+
+    def _note_repeat(self, repeated: bool) -> None:
+        """Move on to the next keyword when almost everything it lists is already in the database.
+
+        Same block logic as for stale postings: a block of about one page with at least ``repeat_ratio`` known postings
+        is a strike, a block with new ones clears the strikes, ``repeat_strikes`` in a row end the keyword.
+        """
+        self._repeat_samples.append(repeated)
+        if len(self._repeat_samples) < self.stale_block:
+            return
+        block, self._repeat_samples = self._repeat_samples, []
+        if sum(block) / len(block) >= self.repeat_ratio:
+            self._repeat_strikes += 1
+            if self._repeat_strikes >= self.repeat_strikes_limit and not self.abandoned_keyword:
+                self.abandoned_keyword = True
+                self.event(message=f"关键词「{self.progress.keyword}」连续 {self._repeat_strikes} 页几乎都是已采过的岗位，换下一个关键词")
+        else:
+            self._repeat_strikes = 0
 
     def _note_staleness(self, candidate: JobCandidate, stale: bool) -> None:
         """Give up on a keyword whose results keep being stale.
@@ -386,7 +418,13 @@ class _SharedProcessor:
                 record_sighting(self.conn, known_id)
             self.progress.duplicate += 1
             self.event()
+            self._note_repeat(True)
+            if self.abandoned_keyword:
+                from bosshunter.collection.base import CollectionBlockedError
+
+                raise CollectionBlockedError("callback_stopped", "关键词里几乎都是已采过的岗位，已换下一个")
             return False
+        self._note_repeat(False)
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         if reason := self._city_mismatch(candidate):
             self.event(message=reason, increment_filtered=True, filtered_candidate=candidate)
@@ -502,6 +540,7 @@ class CollectionOrchestrator:
             except Exception:
                 self._budget_plan = None
         self._platform_count = len(order)
+        self._target_new = int(options.get("target_new") or 0) or None      # stop each platform at this many new jobs
         states: dict[str, dict[str, Any]] = {
             platform: {"status": "queued", "new": 0, "target": None, "percent": None}
             for platform in order
@@ -725,9 +764,12 @@ class CollectionOrchestrator:
 
         from bosshunter import keyword_strategy as ks
 
+        from bosshunter import keyword_progress as kp
+
         words = list(words if words is not None else request.keywords)
-        raw = math.ceil(max(quota, 0) * 2 / 0.9)            # about half survive scoring; 10% is reserve
-        share = ks.platform_share(raw, getattr(self, "_platform_count", 1))
+        target = None if intern else getattr(self, "_target_new", None)
+        raw = target or math.ceil(max(quota, 0) * 2 / 0.9)  # about half survive scoring; 10% is reserve
+        share = raw if target else ks.platform_share(raw, getattr(self, "_platform_count", 1))
         if intern:
             tiers = {"core": words, "expand": [], "explore": [], "paused": []}
         else:
@@ -738,27 +780,51 @@ class CollectionOrchestrator:
         ordered = [word for tier in ks.TIERS for word in tiers[tier]]
         results: list[PlatformCollectionResult] = []
         ok = {"completed", "completed_with_shortage"}
-        for word in ordered:
-            if self.stop_event is not None and self.stop_event.is_set():
+        # Carry on where the last run today ended; once every keyword is done only a few earlier ones are looked at again.
+        done = kp.done_today(conn, request.platform, kind)
+        pending = kp.pending_words(ordered, done)
+        spot_check = not pending and bool(ordered)
+        if spot_check:
+            pending = kp.spot_check_words(ordered)
+            request = replace(request, max_pages=min(request.max_pages, kp.SPOT_CHECK_PAGES))
+            processor.event(message=f"今天的关键词都采完了，抽检 {len(pending)} 个：{'、'.join(pending)}")
+        start_total = len(processor.new_job_ids)
+        for round_no in range(3 if target and not spot_check else 1):              # later rounds top up the keywords that hit their cap
+            for word in list(pending):
+                if self.stop_event is not None and self.stop_event.is_set():
+                    break
+                got = len(processor.new_job_ids) - start_total
+                if target and got >= target:
+                    break
+                before, seen0, filtered0 = len(processor.new_job_ids), processor.progress.seen, processor.progress.filtered
+                cap = caps.get(word, ks.MIN_SLICE) if round_no == 0 else (target - got if target else ks.MIN_SLICE)
+                if target:
+                    cap = max(1, min(cap, target - got))
+                processor.cap_total = before + cap
+                processor.reset_keyword_window()
+                try:
+                    result = collector.collect(replace(request, keywords=[word]), hooks)
+                except CollectionError as exc:
+                    if exc.code != "callback_stopped":
+                        raise
+                    result = PlatformCollectionResult(request.platform, "completed", "callback_stopped", "采集回调已停止")
+                capped = result.reason_code == "callback_stopped" and not processor.abandoned_keyword
+                processor.cap_total = None
+                ks.record_run(
+                    conn, request.platform, word, kind,
+                    seen=processor.progress.seen - seen0, new=len(processor.new_job_ids) - before,
+                    filtered=processor.progress.filtered - filtered0,
+                )
+                results.append(result)
+                if result.status not in ok and result.reason_code != "callback_stopped":
+                    return result                               # a safety stop ends the whole platform
+                finished = (result.status == "completed" and result.reason_code != "callback_stopped") or processor.abandoned_keyword
+                if finished and not capped and not spot_check:  # searched to its end (or given up as stale / repeated)
+                    kp.mark_done(conn, request.platform, kind, word)
+                    pending.remove(word)
+            got = len(processor.new_job_ids) - start_total
+            if not target or got >= target or not pending or (self.stop_event is not None and self.stop_event.is_set()):
                 break
-            before, seen0, filtered0 = len(processor.new_job_ids), processor.progress.seen, processor.progress.filtered
-            processor.cap_total = before + caps.get(word, ks.MIN_SLICE)
-            processor.reset_keyword_window()
-            try:
-                result = collector.collect(replace(request, keywords=[word]), hooks)
-            except CollectionError as exc:
-                if exc.code != "callback_stopped":
-                    raise
-                result = PlatformCollectionResult(request.platform, "completed", "callback_stopped", "采集回调已停止")
-            processor.cap_total = None
-            ks.record_run(
-                conn, request.platform, word, kind,
-                seen=processor.progress.seen - seen0, new=len(processor.new_job_ids) - before,
-                filtered=processor.progress.filtered - filtered0,
-            )
-            results.append(result)
-            if result.status not in ok and result.reason_code != "callback_stopped":
-                return result                                   # a safety stop ends the whole platform
         if not results:
             return PlatformCollectionResult(request.platform, "completed", "search_exhausted", "没有可采集的关键词")
         merged = results[-1]
