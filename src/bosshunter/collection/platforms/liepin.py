@@ -45,6 +45,7 @@ from bosshunter.db import (
     prune_page_progress,
     upsert_page_progress,
 )
+from bosshunter.collection.platforms.job51 import _is_relevant_to_keyword, _terms_match_title, resume_terms
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
@@ -56,6 +57,18 @@ PAGE_DELAY_MIN_SECONDS = 20.0
 PAGE_DELAY_MAX_SECONDS = 35.0
 # hr_active_min_level (3 online, 2 within 3 days, 1 within a month) -> Liepin's pubTime filter in days.
 PUB_TIME_BY_LEVEL = {3: 1, 2: 3, 1: 30}
+
+
+def _work_year_code(config: dict) -> str:
+    """Liepin's own 经验 filter, set before paging so the site drops what does not fit: the explicit
+    platforms.liepin.search.filters.work_year, else 应届生 when the BOSS experience filter asks for it."""
+    platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
+    own = ((platforms.get("liepin") or {}).get("search") or {}).get("filters") or {}
+    if "work_year" in own:
+        return str(own.get("work_year") or "").strip()
+    boss_filters = (((platforms.get("boss") or {}).get("search") or {}).get("filters")) or {}
+    experience = boss_filters.get("experience") or []
+    return "1" if "应届生" in [str(item) for item in experience] else ""
 
 
 def _hr_floor(config: dict) -> int:
@@ -289,6 +302,9 @@ class LiepinCollector:
         pub_time = (request.filters or {}).get("pub_time")
         if pub_time:
             url += f"&pubTime={int(pub_time)}"       # the page's 招聘者活跃 filter
+        work_year = str((request.filters or {}).get("work_year") or "").strip()
+        if work_year:
+            url += f"&workYearCode={quote(work_year)}"   # the page's 经验 filter: 1 应届生, 2 实习生, 0$1 一年以内
         return url
 
     def _wait(self, hooks: CollectorHooks, seconds: float) -> bool:
@@ -365,6 +381,14 @@ class LiepinCollector:
         allow_internship = bool(profile.get("allow_internship", False))
         if not allow_internship and _is_internship(candidate.title):
             return "当前设置不接受实习岗位"
+        # The search is fuzzy (跟单员, 酒店前台 …): keep what speaks of the searched words or of the resume.
+        keyword = candidate.source_keyword
+        if keyword and not _is_relevant_to_keyword(candidate.title, candidate.jd, keyword):
+            terms = getattr(self, "_resume_terms_cache", None)
+            if terms is None:
+                terms = self._resume_terms_cache = resume_terms(self.config, self.safety_conn)
+            if not _terms_match_title(candidate.title, terms):
+                return "职位与搜索关键词、简历关键词都不相关"
         return ""
 
     def _salary_block_reason(self, candidate: JobCandidate) -> str | None:
@@ -396,6 +420,9 @@ class LiepinCollector:
             days = PUB_TIME_BY_LEVEL.get(_hr_floor(self.config))
             if days:
                 request.filters["pub_time"] = days      # the request is frozen, its filters dict is not
+        if "work_year" not in request.filters:
+            if work_year := _work_year_code(self.config):
+                request.filters["work_year"] = work_year
         for city in request.cities:
             if not request.city_codes.get(city):
                 return PlatformCollectionResult(self.platform, "failed", "no_valid_city", f"猎聘城市编码未配置：{city}")

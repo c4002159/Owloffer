@@ -760,7 +760,11 @@ class CollectionOrchestrator:
         else:
             profile = {**(self.config.get("profile") or {}), "allow_internship": True}
             intern_config = {**self.config, "profile": profile}
-            intern_request = PlatformCollectionRequest(platform=platform, **{**raw, "keywords": intern_words})
+            intern_request = PlatformCollectionRequest(
+                platform=platform,
+                # Liepin's own 经验 filter: 实习生
+                **{**raw, "keywords": intern_words, **({"filters": {"work_year": "2"}} if platform == "liepin" else {})},
+            )
         # About half of the collected jobs survive scoring, so collect roughly twice the quota.
         target = int(quotas.get("internship", 0)) * 2
         before = len(processor.new_job_ids)

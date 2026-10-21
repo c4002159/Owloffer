@@ -1014,3 +1014,39 @@ class LiepinListPatienceTests(TestCase):
         self.assertEqual(result.reason_code, "list_not_ready")
         self.assertEqual(polls, 10 + 30 + 10)                          # first poll, patience, after the reload
         self.assertGreaterEqual(navigations, 2)                        # the search page plus one reload
+
+
+class LiepinSiteFilterTests(TestCase):
+    def test_the_sites_own_experience_filter_is_in_the_search_url(self):
+        request = PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, filters={"pub_time": 3, "work_year": "1"})
+        url = LiepinCollector.build_search_url(request, "上海", "AI")
+        self.assertIn("pubTime=3", url)
+        self.assertIn("workYearCode=1", url)
+        request.filters["work_year"] = "0$1"
+        self.assertIn("workYearCode=0%241", LiepinCollector.build_search_url(request, "上海", "AI"))
+        self.assertNotIn("workYearCode", LiepinCollector.build_search_url(
+            PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}), "上海", "AI"))
+
+    def test_work_year_comes_from_the_boss_experience_filter_unless_set_explicitly(self):
+        from bosshunter.collection.platforms.liepin import _work_year_code
+
+        boss = {"platforms": {"boss": {"search": {"filters": {"experience": ["经验不限", "应届生"]}}}}}
+        self.assertEqual(_work_year_code(boss), "1")
+        self.assertEqual(_work_year_code({}), "")
+        explicit = {"platforms": {**boss["platforms"], "liepin": {"search": {"filters": {"work_year": "0$1"}}}}}
+        self.assertEqual(_work_year_code(explicit), "0$1")
+        none_wanted = {"platforms": {**boss["platforms"], "liepin": {"search": {"filters": {"work_year": ""}}}}}
+        self.assertEqual(_work_year_code(none_wanted), "")
+
+    def test_unrelated_titles_from_the_fuzzy_search_are_dropped_before_any_detail_page(self):
+        from bosshunter.collection.models import JobCandidate
+
+        collector = LiepinCollector(config={"search": {"keywords": ["AI Agent开发", "Java后端"]}})
+
+        def candidate(title):
+            return JobCandidate(platform="liepin", source_job_id="1", title=title, company="某公司X", source_keyword="Agent工程师")
+
+        self.assertEqual(collector._filter_reason(candidate("跟单员")), "职位与搜索关键词、简历关键词都不相关")
+        self.assertEqual(collector._filter_reason(candidate("酒店前台")), "职位与搜索关键词、简历关键词都不相关")
+        self.assertEqual(collector._filter_reason(candidate("Agent工程师（上海）")), "")
+        self.assertEqual(collector._filter_reason(candidate("Java后端开发")), "")             # speaks of the resume
