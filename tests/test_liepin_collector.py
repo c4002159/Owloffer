@@ -1001,7 +1001,7 @@ class LiepinListPatienceTests(TestCase):
             stop_event=None, on_list_candidate=lambda _c: True, on_candidate=lambda _c: True,
             on_parse_failed=lambda _r: None, on_event=lambda **_kw: None,
         )
-        result = LiepinCollector(browser=browser, sleep=sleeps.append, uniform=lambda _a, _b: 1.0).collect(
+        result = LiepinCollector(browser=browser, config={"throttle": {"collect_windows": ["00:00-23:59"], "day_off_probability": 0}}, sleep=sleeps.append, uniform=lambda _a, _b: 1.0).collect(
             PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1), hooks,
         )
         return result, len(polls), len(navigations)

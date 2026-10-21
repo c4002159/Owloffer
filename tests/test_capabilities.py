@@ -30,7 +30,7 @@ class PlatformCapabilitiesTests(unittest.TestCase):
     def test_capability_map_keys(self):
         self.assertEqual(
             set(PLATFORM_CAPABILITIES),
-            {"boss", "zhilian", "51job", "liepin"},
+            {"boss", "zhilian", "zhilian_campus", "51job", "liepin"},
         )
 
 
