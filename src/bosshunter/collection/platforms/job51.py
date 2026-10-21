@@ -55,6 +55,7 @@ from bosshunter.throttle import SendWindowChecker, should_take_day_off
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={area}&keyword={keyword}"
 API_SEARCH_URL = "https://we.51job.com/api/job/search-pc"
 API_PAGE_SIZE = 20        # 每页条数（API 上限 20，实测稳定）
+EMPTY_RESULT_RETRY_WAITS = (8, 20)  # 接口调用返回空时的重试等待（秒），仍为空才按 L3 处理
 API_FETCH_TIMEOUT = 25.0  # 单次 fetch 超时（秒）
 
 # ---- 速率四层防护（共享一个 60s 窗口，堵「多阶段独立计数叠加」漏洞）----
@@ -740,6 +741,13 @@ class Job51Collector:
         js = JS_FETCH_API_PAGE.replace("__KW__", kw_encoded).replace("__AREA__", area).replace("__PAGE__", str(page))
         js = js.replace("sortType=0", f"sortType={getattr(self, '_sort_type', '0')}")
         raw = self.browser.evaluate(host_target, js, timeout=API_FETCH_TIMEOUT)
+        # An empty answer is usually a stalled tab or a dropped CDP call, not risk control: wait and ask again before
+        # treating it as an L3 stop that ends the whole platform.
+        for wait in EMPTY_RESULT_RETRY_WAITS:
+            if raw is not None:
+                break
+            self.sleep(wait)
+            raw = self.browser.evaluate(host_target, js, timeout=API_FETCH_TIMEOUT)
         if raw is None:
             return {"ok": False, "level": 3, "signal": "empty_result",
                     "note": "evaluate 返回空（超时/断连）", "jobs": [], "total": 0}

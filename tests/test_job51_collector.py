@@ -660,12 +660,23 @@ class PassesCollectorFiltersTests(TestCase):
 class FetchPageTests(TestCase):
     """_fetch_page — API 页面获取与分析。"""
 
-    def test_none_evaluate_returns_l3_empty(self):
-        collector = Job51Collector(browser=Job51Browser(evaluate=Mock(return_value=None)))
+    def test_none_evaluate_returns_l3_empty_after_retrying(self):
+        evaluate, sleep = Mock(return_value=None), Mock()
+        collector = Job51Collector(browser=Job51Browser(evaluate=evaluate), sleep=sleep)
         result = collector._fetch_page("host", "kw", "020000", 1)
         self.assertFalse(result["ok"])
         self.assertEqual(result["level"], 3)
         self.assertEqual(result["signal"], "empty_result")
+        self.assertEqual(evaluate.call_count, 3)                       # first try + two retries
+
+    def test_a_stalled_call_that_recovers_is_not_a_risk_stop(self):
+        body = _ok_body([{"jobName": "AI"}], total=100)
+        raw = json.dumps({"http_status": 200, "content_type": "application/json", "body": body})
+        evaluate, sleep = Mock(side_effect=[None, raw]), Mock()
+        collector = Job51Collector(browser=Job51Browser(evaluate=evaluate), sleep=sleep)
+        result = collector._fetch_page("host", "kw", "020000", 1)
+        self.assertTrue(result["ok"])
+        sleep.assert_called_once_with(8)
 
     def test_error_wrapper_returns_l3_fetch_error(self):
         raw = json.dumps({"error": "NetworkError"})
