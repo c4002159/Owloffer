@@ -19,7 +19,7 @@ from bosshunter.ai.credentials import (
 	get_ai_key_source,
 	get_ai_service,
 )
-from bosshunter.browser.diagnostics import run_browser_diagnostics
+from bosshunter.browser.diagnostics import probe_zhilian_search_page, run_browser_diagnostics
 from bosshunter.collection.orchestrator import normalize_collection_options
 
 VALID_MODES = {"full", "collect", "rescore", "monitor", "fill"}
@@ -419,6 +419,11 @@ def check_browser_connection(config: dict, collection_options: dict | None = Non
 			zhilian_tab = result.get("zhilian_tab")
 			page_state = result.get("zhilian_page") or {}
 			state = str(page_state.get("status") or "unknown") if zhilian_tab else "missing"
+			if result.get("runtime") and result.get("chrome") and state not in {"ready", "login_required", "blocked"}:
+				# No usable Zhilian search page is open (e.g. only the campus home): look at the search page ourselves.
+				page_state = probe_zhilian_search_page()
+				state = str(page_state.get("status") or "unknown")
+				zhilian_tab = zhilian_tab or {"probe": True}
 			if state == "ready":
 				checks.append(_check("zhilian_tab", "智联招聘页面", "pass", "智联搜索页可用，未发现登录墙", "采集不会点击投递或申请按钮。"))
 			elif state == "login_required":

@@ -57,6 +57,34 @@ def inspect_zhilian_page(target: dict[str, Any] | None) -> dict[str, str]:
     return {"status": "unknown", "message": "智联页面状态检查未返回有效结果"}
 
 
+def probe_zhilian_search_page(city_code: str = "538") -> dict[str, str]:
+    """Open Zhilian's search page in a background tab, read its state and close it again.
+
+    Used when no Zhilian search page happens to be open (a campus-site or home tab does not count): the session is
+    shared by every tab of the same Chrome, so a short read-only visit tells whether Zhilian is usable and logged in.
+    """
+    import time
+
+    from bosshunter.browser import close_tab, new_tab, wait_for_load
+
+    target_id = None
+    try:
+        target_id = new_tab(f"https://www.zhaopin.com/sou/jl{city_code}/", background=True)
+        if not target_id:
+            return {"status": "unknown", "message": "无法打开智联搜索页进行检查"}
+        wait_for_load(target_id, timeout=15)
+        state = {"status": "unknown", "message": "智联页面状态检查未返回有效结果"}
+        for _ in range(6):
+            state = inspect_zhilian_page({"targetId": target_id})
+            if state.get("status") != "selector_changed":
+                break
+            time.sleep(1.0)
+        return state
+    finally:
+        if target_id:
+            close_tab(target_id)
+
+
 def run_browser_diagnostics(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Collect Browser Runtime readiness state."""
     node = check_node_available()

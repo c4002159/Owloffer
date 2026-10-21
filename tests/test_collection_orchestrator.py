@@ -905,3 +905,23 @@ class StaleKeywordTests(TestCase):
         jia = [index for word, index in seen if word == "甲"]
         self.assertEqual(len(jia), 20)                                   # two stale pages, then it gave up
         self.assertGreater(len([1 for word, _ in seen if word == "乙"]), 20)   # the next keyword went on past that point
+
+
+class UnconfiguredPlatformDefaultsTests(TestCase):
+    def test_a_platform_without_its_own_keywords_and_cities_uses_the_ones_of_boss(self):
+        config = {"platforms": {
+            "boss": {"search": {"keywords": ["AI Agent开发"], "cities": ["上海"], "city_codes": {"上海": "101020100"}}},
+            "zhilian": {"enabled": False, "search": {"keywords": [], "cities": [], "city_codes": {}}},
+        }}
+        options = normalize_collection_options(config, {"platform_order": ["zhilian"], "auto_score": True})
+        self.assertEqual(options["platforms"]["zhilian"]["keywords"], ["AI Agent开发"])
+        self.assertEqual(options["platforms"]["zhilian"]["cities"], ["上海"])
+        self.assertTrue(options["platforms"]["zhilian"]["city_codes"].get("上海"))   # resolved from the built-in snapshot
+
+    def test_a_platform_with_its_own_keywords_keeps_them(self):
+        config = {"platforms": {
+            "boss": {"search": {"keywords": ["AI Agent开发"], "cities": ["上海"]}},
+            "liepin": {"search": {"keywords": ["RAG工程师"], "cities": ["上海"], "city_codes": {"上海": "020"}}},
+        }}
+        options = normalize_collection_options(config, {"platform_order": ["liepin"]})
+        self.assertEqual(options["platforms"]["liepin"]["keywords"], ["RAG工程师"])

@@ -97,6 +97,11 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
         base.update(search)
         if platform == "boss" and not base.get("cities"):
             base["cities"] = config.get("profile", {}).get("target_cities", ["北京"])
+        if platform != "boss":
+            # A platform that was never configured searches the same words and cities as BOSS.
+            for key in ("keywords", "cities"):
+                if key not in search and not _clean_strings(base.get(key)):
+                    base[key] = platforms["boss"][key]
         platforms[platform] = {
             "keywords": _clean_strings(base.get("keywords")),
             "cities": _clean_strings(base.get("cities")),

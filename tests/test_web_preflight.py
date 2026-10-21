@@ -278,6 +278,40 @@ class BrowserPreflightTests(unittest.TestCase):
 		self.assertEqual(login_check["status"], "error")
 		self.assertIn("要求登录", login_check["message"])
 
+	@patch("bosshunter.web.preflight.probe_zhilian_search_page")
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_zhilian_without_a_search_tab_is_probed_instead_of_demanding_one(self, diagnostics, probe):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"},
+			"runtime": True,
+			"chrome": True,
+			"browser_name": "Google Chrome",
+			"browser_product": "Chrome/138.0",
+			"boss_tab": None,
+			"zhilian_tab": {"targetId": "2", "url": "https://xiaoyuan.zhaopin.com/"},      # a campus home is no search page
+			"zhilian_page": {"status": "selector_changed", "message": "未识别到智联搜索页结构"},
+			"errors": [],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+		probe.return_value = {"status": "ready"}
+
+		checks = check_browser_connection({}, {"platform_order": ["zhilian"]})
+
+		self.assertEqual(next(check for check in checks if check["id"] == "zhilian_tab")["status"], "pass")
+		probe.assert_called_once()
+
+	@patch("bosshunter.web.preflight.probe_zhilian_search_page")
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_a_ready_zhilian_tab_is_not_probed(self, diagnostics, probe):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"}, "runtime": True, "chrome": True,
+			"browser_name": "Google Chrome", "browser_product": "Chrome/138.0", "boss_tab": None,
+			"zhilian_tab": {"targetId": "2"}, "zhilian_page": {"status": "ready"}, "errors": [],
+			"runtime_url": "http://127.0.0.1:3456",
+		}
+		check_browser_connection({}, {"platform_order": ["zhilian"]})
+		probe.assert_not_called()
+
 
 if __name__ == "__main__":
 	unittest.main()
