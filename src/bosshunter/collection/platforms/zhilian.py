@@ -405,6 +405,8 @@ def update_age_reason(config: dict, detail: dict[str, Any]) -> str:
     ``campus_update_days`` (30) ago, any other one at most ``max_update_days`` (5) ago.
     """
     days = _updated_days(detail.get("updated"))
+    if days is None and isinstance(detail.get("published_days"), (int, float)):
+        days = float(detail["published_days"])        # no update date on the page: the list's publish date stands in
     if days is None:
         return ""
     platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
@@ -1277,7 +1279,8 @@ class ZhilianCollector:
             hooks.on_parse_failed("智联详情页没有读到岗位描述")
             return 1
         final = self._candidate_from_detail(detail, candidate)
-        reason = update_age_reason(self.config, detail) or self._salary_block_reason(final) or self._filter_reason(final)
+        reason = (update_age_reason(self.config, {**detail, "published_days": candidate.updated_days})
+                  or self._salary_block_reason(final) or self._filter_reason(final))
         if reason:
             hooks.on_event(message=f"智联 {reason}", increment_filtered=True, filtered_candidate=final)
             return 1
@@ -1921,5 +1924,6 @@ class ZhilianCollector:
             salary=str(detail.get("salary") or base.salary).strip(), city=str(detail.get("city") or base.city).strip(),
             experience=str(detail.get("experience") or "").strip(), education=str(detail.get("education") or "").strip(),
             jd=str(detail.get("jd") or "").strip(), hr_active=str(detail.get("hr_active") or "").strip(), url=detail_url,
-            source_keyword=base.source_keyword, updated_days=_updated_days(detail.get("updated")),
+            source_keyword=base.source_keyword,
+            updated_days=_updated_days(detail.get("updated")) if detail.get("updated") else base.updated_days,
         )

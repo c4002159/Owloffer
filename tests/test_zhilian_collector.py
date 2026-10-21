@@ -1427,3 +1427,13 @@ class ZhilianListRequestTests(TestCase):
         self.assertEqual((candidate.source_job_id, candidate.hr_active, candidate.city), ("CCA9J9", "刚刚在线", "上海·浦东·金桥"))
         self.assertEqual(candidate.url, "http://jobs.zhaopin.com/CCA9J9.htm")
         self.assertIsNone(parse_position({"number": "", "name": "x"}, "k"))
+
+
+class ZhilianPublishDateFallbackTests(TestCase):
+    def test_without_an_update_date_the_publish_date_of_the_list_decides(self):
+        from bosshunter.collection.platforms.zhilian import update_age_reason
+
+        self.assertIn("普通岗位上限 5 天", update_age_reason({}, {"updated": "", "campus": False, "published_days": 52.0}))
+        self.assertEqual(update_age_reason({}, {"updated": "", "campus": False, "published_days": 2.0}), "")
+        self.assertEqual(update_age_reason({}, {"updated": "", "campus": True, "published_days": 20.0}), "")
+        self.assertEqual(update_age_reason({}, {"updated": "", "campus": False}), "")
