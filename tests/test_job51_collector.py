@@ -1019,7 +1019,7 @@ class NativeFilterTests(TestCase):
     def test_filters_come_from_the_boss_settings(self):
         from bosshunter.collection.platforms.job51 import native_filters_query
 
-        self.assertEqual(native_filters_query(self.CONFIG), "&workYear=01&jobType=01")          # the degree is left open
+        self.assertEqual(native_filters_query(self.CONFIG), "&workYear=01,06&jobType=01")          # 应届生 + 无需经验, the degree is left open
         self.assertEqual(native_filters_query({}), "&jobType=01")
 
     def test_explicit_values_win_key_by_key_even_when_empty(self):

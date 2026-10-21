@@ -365,10 +365,12 @@ def native_filter_params(config: dict, filters: dict | None = None) -> dict[str,
             return str(own[key] or "").strip()
         return derived
 
+    # -1 经验不限, 0001 一年以下, 0103 1-3年: what the level of the uploaded resume can take.
+    derived_we = {"fresh": "-1,0001", "under1": "-1,0001", "1-3": "-1,0001,0103"}.get(str(config.get("_experience_level") or ""), "")
     params = {
         "el": pick("education", ""),
         "et": pick("employment_type", "2"),
-        "we": pick("work_experience", ""),
+        "we": pick("work_experience", derived_we),
     }
     return {name: value for name, value in params.items() if value}
 

@@ -203,7 +203,8 @@ def native_filters_query(config: dict, filters: dict | None = None) -> str:
     """51job's own filters as API query parameters, set before paging so the site drops what does not fit.
 
     ``filters`` (work_year, degree, job_type) wins key by key, also when empty; otherwise platforms.51job.search.filters
-    and then the BOSS settings decide: 应届生 -> workYear 01 and full-time -> jobType 01. The degree is left open (a
+    and then the experience level of the uploaded resume (else the BOSS settings) decide: a fresh graduate or someone with
+    under a year of work -> workYear 01,06 (应届生 and 无需经验), and full-time -> jobType 01. The degree is left open (a
     degree filter can be set explicitly: 03 大专, 04 本科, 05 硕士 ...). The internship pass sets job_type 02 and an empty
     work_year. The city is not a filter here: it is the jobArea of every request.
     """
@@ -220,8 +221,11 @@ def native_filters_query(config: dict, filters: dict | None = None) -> str:
         return derived
 
     experience = [str(item) for item in boss.get("experience") or []]
+    # 01 在校生/应届生 and 06 无需经验 suit a fresh graduate and anyone with under a year of work.
+    level = str(config.get("_experience_level") or "")
+    derived_year = "01,06" if level in {"fresh", "under1"} else "" if level else "01,06" if "应届生" in experience else ""
     parts = {
-        "workYear": pick("work_year", "01" if "应届生" in experience else ""),
+        "workYear": pick("work_year", derived_year),
         "degree": pick("degree", ""),
         "jobType": pick("job_type", "01"),
     }

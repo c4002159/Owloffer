@@ -540,6 +540,7 @@ class CollectionOrchestrator:
             except Exception:
                 self._budget_plan = None
         self._platform_count = len(order)
+        self._tell_experience_level()
         self._target_new = int(options.get("target_new") or 0) or None      # stop each platform at this many new jobs
         states: dict[str, dict[str, Any]] = {
             platform: {"status": "queued", "new": 0, "target": None, "percent": None}
@@ -753,6 +754,20 @@ class CollectionOrchestrator:
             "results": [result.__dict__ for result in platform_results],
             "keyword_moves": list(getattr(self, "keyword_moves", [])),
         }
+
+    def _tell_experience_level(self) -> None:
+        """Put the experience level the uploaded resume shows into the config the collectors read."""
+        if "_experience_level" in self.config:
+            return
+        if not str((self.config.get("profile") or {}).get("resume_path") or "").strip():
+            self.config["_experience_level"] = ""                   # no resume configured: nothing to read
+            return
+        try:
+            from bosshunter.experience_level import resume_experience_level
+
+            self.config["_experience_level"] = resume_experience_level(self.config, self.db_path.parent)
+        except Exception:
+            self.config["_experience_level"] = ""
 
     def _collect_with_budget(self, collector, request, processor, hooks, conn, quota, kind, *, intern, words=None):
         """One collect() per keyword, in tier order, each capped by its share of the platform's budget.

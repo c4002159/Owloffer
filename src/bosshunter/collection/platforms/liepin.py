@@ -59,13 +59,19 @@ PAGE_DELAY_MAX_SECONDS = 35.0
 PUB_TIME_BY_LEVEL = {3: 1, 2: 3, 1: 30}
 
 
+_WORK_YEAR_BY_LEVEL = {"fresh": "1", "under1": "0$1", "1-3": "1$3", "3-5": "3$5", "5-10": "5$10", "10+": "10$999"}
+
+
 def _work_year_code(config: dict) -> str:
     """Liepin's own 经验 filter, set before paging so the site drops what does not fit: the explicit
-    platforms.liepin.search.filters.work_year, else 应届生 when the BOSS experience filter asks for it."""
+    platforms.liepin.search.filters.work_year, else the level the uploaded resume shows (应届生, 一年以内, 1-3年 ...; the
+    site takes only one value), else 应届生 when the BOSS experience filter asks for it."""
     platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
     own = ((platforms.get("liepin") or {}).get("search") or {}).get("filters") or {}
     if "work_year" in own:
         return str(own.get("work_year") or "").strip()
+    if code := _WORK_YEAR_BY_LEVEL.get(str(config.get("_experience_level") or "")):
+        return code
     boss_filters = (((platforms.get("boss") or {}).get("search") or {}).get("filters")) or {}
     experience = boss_filters.get("experience") or []
     return "1" if "应届生" in [str(item) for item in experience] else ""
