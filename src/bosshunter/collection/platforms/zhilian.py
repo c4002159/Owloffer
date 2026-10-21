@@ -350,7 +350,8 @@ def native_filter_params(config: dict, filters: dict | None = None) -> dict[str,
     we 经验: 0001 一年以下 …). Applied after the keyword search, so the site drops what does not fit.
 
     ``filters`` (education, employment_type, work_experience) wins key by key, also when empty; otherwise
-    platforms.zhilian.search.filters and then the BOSS degrees decide, and full-time is the default type.
+    platforms.zhilian.search.filters decides; full-time is the default type and the education is left open. The city is not
+    a filter here: the search page is the city's page (jl).
     """
     filters = filters or {}
     platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
@@ -364,9 +365,8 @@ def native_filter_params(config: dict, filters: dict | None = None) -> dict[str,
             return str(own[key] or "").strip()
         return derived
 
-    degrees = [_EDUCATION_CODES[str(item)] for item in boss.get("degree") or [] if str(item) in _EDUCATION_CODES]
     params = {
-        "el": pick("education", ",".join(sorted(degrees))),
+        "el": pick("education", ""),
         "et": pick("employment_type", "2"),
         "we": pick("work_experience", ""),
     }

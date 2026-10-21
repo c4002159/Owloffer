@@ -1019,15 +1019,15 @@ class NativeFilterTests(TestCase):
     def test_filters_come_from_the_boss_settings(self):
         from bosshunter.collection.platforms.job51 import native_filters_query
 
-        self.assertEqual(native_filters_query(self.CONFIG), "&workYear=01&degree=04,05&jobType=01")
+        self.assertEqual(native_filters_query(self.CONFIG), "&workYear=01&jobType=01")          # the degree is left open
         self.assertEqual(native_filters_query({}), "&jobType=01")
 
     def test_explicit_values_win_key_by_key_even_when_empty(self):
         from bosshunter.collection.platforms.job51 import native_filters_query
 
-        self.assertEqual(native_filters_query(self.CONFIG, {"job_type": "02", "work_year": ""}), "&degree=04,05&jobType=02")
-        own = {"platforms": {**self.CONFIG["platforms"], "51job": {"search": {"filters": {"work_year": "02", "degree": ""}}}}}
-        self.assertEqual(native_filters_query(own), "&workYear=02&jobType=01")
+        self.assertEqual(native_filters_query(self.CONFIG, {"job_type": "02", "work_year": ""}), "&jobType=02")
+        own = {"platforms": {**self.CONFIG["platforms"], "51job": {"search": {"filters": {"work_year": "02", "degree": "04,05"}}}}}
+        self.assertEqual(native_filters_query(own), "&workYear=02&degree=04,05&jobType=01")
 
     def test_the_query_reaches_the_api_request(self):
         evaluate = Mock(return_value=None)

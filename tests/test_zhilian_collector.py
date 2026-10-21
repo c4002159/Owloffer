@@ -1177,11 +1177,13 @@ class ZhilianCollectApiTests(TestCase):
 class ZhilianNativeFilterTests(TestCase):
     CONFIG = {"platforms": {"boss": {"search": {"filters": {"degree": ["本科", "硕士"]}}}}}
 
-    def test_filters_come_from_the_boss_degrees_and_default_to_full_time(self):
+    def test_filters_default_to_full_time_and_leave_the_education_open(self):
         from bosshunter.collection.platforms.zhilian import native_filter_params
 
-        self.assertEqual(native_filter_params(self.CONFIG), {"el": "3,4", "et": "2"})
+        self.assertEqual(native_filter_params(self.CONFIG), {"et": "2"})                 # the education is left open
         self.assertEqual(native_filter_params({}), {"et": "2"})
+        explicit = {"platforms": {"zhilian": {"search": {"filters": {"education": "3,4"}}}}}
+        self.assertEqual(native_filter_params(explicit), {"el": "3,4", "et": "2"})
 
     def test_explicit_values_win_key_by_key_even_when_empty(self):
         from bosshunter.collection.platforms.zhilian import native_filter_params

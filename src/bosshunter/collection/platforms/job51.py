@@ -203,8 +203,9 @@ def native_filters_query(config: dict, filters: dict | None = None) -> str:
     """51job's own filters as API query parameters, set before paging so the site drops what does not fit.
 
     ``filters`` (work_year, degree, job_type) wins key by key, also when empty; otherwise platforms.51job.search.filters
-    and then the BOSS settings decide: 应届生 -> workYear 01, the BOSS degrees -> degree (04 本科, 05 硕士 ...), and
-    full-time -> jobType 01. The internship pass sets job_type 02 and an empty work_year.
+    and then the BOSS settings decide: 应届生 -> workYear 01 and full-time -> jobType 01. The degree is left open (a
+    degree filter can be set explicitly: 03 大专, 04 本科, 05 硕士 ...). The internship pass sets job_type 02 and an empty
+    work_year. The city is not a filter here: it is the jobArea of every request.
     """
     filters = filters or {}
     platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
@@ -219,10 +220,9 @@ def native_filters_query(config: dict, filters: dict | None = None) -> str:
         return derived
 
     experience = [str(item) for item in boss.get("experience") or []]
-    degrees = [_DEGREE_CODES[str(item)] for item in boss.get("degree") or [] if str(item) in _DEGREE_CODES]
     parts = {
         "workYear": pick("work_year", "01" if "应届生" in experience else ""),
-        "degree": pick("degree", ",".join(degrees)),
+        "degree": pick("degree", ""),
         "jobType": pick("job_type", "01"),
     }
     return "".join(f"&{name}={value}" for name, value in parts.items() if value)
