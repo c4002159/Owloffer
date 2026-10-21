@@ -73,26 +73,38 @@ def test_manual_sent_supports_liepin_jobs():
     ]
 
 
-def test_manual_sent_rejects_boss_and_does_not_partially_update_external_jobs():
+def test_manual_sent_rejects_unknown_platforms_and_does_not_partially_update_other_jobs():
     with tempfile.TemporaryDirectory() as temporary:
         db = get_db(Path(temporary) / "jobs.db")
         try:
             insert_job(db, _job("external", "51job"))
-            insert_job(db, _job("boss", "boss"))
+            insert_job(db, _job("other", "somewhere"))
             with pytest.raises(JobManualSentConflictError) as captured:
-                mark_external_jobs_sent(db, ["external", "boss"], confirmed=True)
+                mark_external_jobs_sent(db, ["external", "other"], confirmed=True)
             statuses = {
                 row["id"]: row["status"]
-                for row in db.execute("SELECT id, status FROM jobs WHERE id IN ('external', 'boss')").fetchall()
+                for row in db.execute("SELECT id, status FROM jobs WHERE id IN ('external', 'other')").fetchall()
             }
         finally:
             db.close()
 
     assert captured.value.blocked == [{
-        "job_id": "boss",
-        "reasons": ["仅智联招聘、前程无忧和猎聘支持手动标记已发送"],
+        "job_id": "other",
+        "reasons": ["仅 BOSS 直聘、智联招聘、前程无忧和猎聘支持手动标记已发送"],
     }]
-    assert statuses == {"boss": "pending", "external": "pending"}
+    assert statuses == {"other": "pending", "external": "pending"}
+
+
+def test_a_boss_job_can_be_marked_as_sent_by_hand():
+    with tempfile.TemporaryDirectory() as temporary:
+        db = get_db(Path(temporary) / "jobs.db")
+        try:
+            insert_job(db, _job("boss-job", "boss"))
+            result = mark_external_jobs_sent(db, ["boss-job"], confirmed=True)
+            status = db.execute("SELECT status FROM jobs WHERE id = 'boss-job'").fetchone()["status"]
+        finally:
+            db.close()
+    assert result["affected_count"] == 1 and status == "sent"
 
 
 def test_manual_sent_requires_explicit_confirmation():
@@ -111,13 +123,13 @@ def test_manual_sent_falls_back_to_platform_code_when_label_missing(monkeypatch)
 
     monkeypatch.setattr(
         db_module,
-        "EXTERNAL_MANUAL_SEND_PLATFORMS",
-        db_module.EXTERNAL_MANUAL_SEND_PLATFORMS | {"boss"},
+        "MANUAL_SENT_PLATFORMS",
+        db_module.MANUAL_SENT_PLATFORMS | {"newsite"},
     )
     with tempfile.TemporaryDirectory() as temporary:
         db = get_db(Path(temporary) / "jobs.db")
         try:
-            insert_job(db, _job("boss-extra", "boss"))
+            insert_job(db, _job("boss-extra", "newsite"))
             result = mark_external_jobs_sent(db, ["boss-extra"], confirmed=True)
             history = db.execute(
                 "SELECT action, detail FROM history WHERE job_id = ? ORDER BY id",
@@ -128,5 +140,5 @@ def test_manual_sent_falls_back_to_platform_code_when_label_missing(monkeypatch)
 
     assert result["affected_count"] == 1
     assert [(row["action"], row["detail"]) for row in history] == [
-        ("manual_sent", "用户在boss完成投递后手动标记"),
+        ("manual_sent", "用户在newsite完成投递后手动标记"),
     ]

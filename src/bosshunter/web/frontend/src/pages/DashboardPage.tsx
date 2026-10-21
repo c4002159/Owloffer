@@ -2048,8 +2048,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   }
 
   const markManuallySent = async (job: Job) => {
-    if (job.source_platform !== 'zhilian' && job.source_platform !== '51job' && job.source_platform !== 'liepin') return
-    const platformLabel = PLATFORM_LABELS[job.source_platform]
+    const platformLabel = PLATFORM_LABELS[job.source_platform || 'boss'] || 'BOSS 直聘'
     if (!window.confirm(`请确认：你已经在${platformLabel}完成了这个岗位的投递。此操作只更新 BossHunter 本地记录，不会向平台发送任何内容。`)) return
     try {
       const result = await postJobAction('/api/jobs/manual-sent', {

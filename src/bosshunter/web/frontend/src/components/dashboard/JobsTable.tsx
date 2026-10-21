@@ -225,10 +225,10 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                             )}
                             {!isExternalPlatform && jobUrl && (
                               <a href={jobUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-card-border px-2 py-1.5 text-[11px] font-bold text-primary hover:bg-secondary">
-                                <ExternalLink className="h-3.5 w-3.5" />跳转岗位
+                                <ExternalLink className="h-3.5 w-3.5" />打开平台
                               </a>
                             )}
-                            {isExternalPlatform && onMarkManuallySent && (
+                            {onMarkManuallySent && (
                               <button
                                 type="button"
                                 disabled={alreadySent}
