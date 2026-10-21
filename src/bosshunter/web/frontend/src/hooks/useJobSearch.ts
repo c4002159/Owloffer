@@ -34,20 +34,8 @@ export function useJobSearch(
   const [revision, setRevision] = useState(0)
   const refresh = useCallback(() => setRevision(value => value + 1), [])
 
-  useEffect(() => {
-    if (hasInvalidSalaryRange(filters)) {
-      setItems([])
-      setTotal(0)
-      setLoading(false)
-      setError('')
-      return
-    }
-
-    const controller = new AbortController()
-    const params = new URLSearchParams({
-      limit: String(pageSize),
-      offset: String(page * pageSize),
-    })
+  const buildParams = (limit: number, offset: number) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim())
     if (filters.minScore) params.set('min_score', filters.minScore)
     if (filters.minActivity) params.set('min_activity', filters.minActivity)
@@ -63,6 +51,20 @@ export function useJobSearch(
     if (queueView) params.set('queue_view', queueView)
     params.set('sort_by', sortBy)
     params.set('sort_order', sortOrder)
+    return params
+  }
+
+  useEffect(() => {
+    if (hasInvalidSalaryRange(filters)) {
+      setItems([])
+      setTotal(0)
+      setLoading(false)
+      setError('')
+      return
+    }
+
+    const controller = new AbortController()
+    const params = buildParams(pageSize, page * pageSize)
 
     setLoading(true)
     fetch(`/api/jobs/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
@@ -90,5 +92,18 @@ export function useJobSearch(
     return () => controller.abort()
   }, [debouncedQuery, filters.minScore, filters.minActivity, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, viewStatuses, queueView, revision])
 
-  return { items, total, allTotal, cityOptions, loading, error, refresh }
+  // Every job id matching the current filters (not only the current page), for “选择全部”.
+  const fetchAllIds = async (): Promise<string[]> => {
+    const ids: string[] = []
+    for (let offset = 0; offset < 100000; offset += 500) {
+      const response = await fetch(`/api/jobs/search?${buildParams(500, offset).toString()}`, { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || '岗位筛选失败')
+      ids.push(...(data.items as Job[]).map(job => job.id))
+      if (!data.items.length || ids.length >= data.total) break
+    }
+    return ids
+  }
+
+  return { items, total, allTotal, cityOptions, loading, error, refresh, fetchAllIds }
 }

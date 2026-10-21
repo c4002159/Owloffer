@@ -1828,7 +1828,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [recycleLoading, setRecycleLoading] = useState(false)
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
-  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled && poolView === 'pending', POOL_VIEW_STATUSES[poolView], POOL_VIEW_QUEUE[poolView])
+  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs, fetchAllIds } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled && poolView === 'pending', POOL_VIEW_STATUSES[poolView], POOL_VIEW_QUEUE[poolView])
   const { workbench: deliveryWorkbench } = useDashboard('workbench')
   const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
     ? deliveryWorkbench.task
@@ -1909,11 +1909,23 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
 
   const selectableItems = items.filter(job => !busyIds.includes(job.id))
   const allPageSelected = selectableItems.length > 0 && selectableItems.every(job => selectedIds.includes(job.id))
-  const toggleCurrentPage = () => {
-    const pageIds = new Set(selectableItems.map(job => job.id))
-    setSelectedIds(previous => allPageSelected
-      ? previous.filter(id => !pageIds.has(id))
-      : [...new Set([...previous, ...pageIds])])
+  // “选择全部”：当前筛选条件下的所有岗位（跨页），不含正在被任务处理的岗位。
+  const [allMatchingIds, setAllMatchingIds] = useState<string[]>([])
+  const allMatchingSelected = allMatchingIds.length > 0 && allMatchingIds.every(id => selectedIds.includes(id))
+  const toggleAllMatching = async () => {
+    try {
+      if (allMatchingSelected) {
+        const drop = new Set(allMatchingIds)
+        setSelectedIds(previous => previous.filter(id => !drop.has(id)))
+        return
+      }
+      const ids = (await fetchAllIds()).filter(id => !busyIds.includes(id))
+      setAllMatchingIds(ids)
+      setSelectedIds(previous => [...new Set([...previous, ...ids])])
+      setNotice(`已选择当前筛选条件下的全部 ${ids.length} 条岗位（不止本页）。`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '选择全部失败')
+    }
   }
 
   const changeSort = (nextSortBy: JobSortKey) => {
@@ -2353,8 +2365,8 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
           <input type="checkbox" className="accent-primary" checked={hideHandled} onChange={event => { setHideHandled(event.target.checked); setPage(0) }} />
           隐藏已处理公司的其他岗位
         </label>}
-        <Button variant="secondary" size="sm" disabled={!items.length} onClick={toggleCurrentPage}>
-          {allPageSelected ? '取消选择本页' : '选择本页'}
+        <Button variant="secondary" size="sm" disabled={!items.length} onClick={() => void toggleAllMatching()}>
+          {allMatchingSelected ? '取消选择全部' : `选择全部${total ? `（${total}）` : ''}`}
         </Button>
         <span className="rounded-full bg-secondary px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
