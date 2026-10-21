@@ -914,8 +914,10 @@ class LiepinResumeCheckpointTests(TestCase):
         self.assertEqual(collector_high._resume_ttl_hours(), 720)
 
     def test_resume_ttl_hours_default_when_missing(self):
+        from bosshunter.collection.base import hours_since_midnight
+
         collector = LiepinCollector()
-        self.assertEqual(collector._resume_ttl_hours(), 24)
+        self.assertEqual(collector._resume_ttl_hours(), hours_since_midnight())      # checkpoints count for today only
 
     def test_resume_ttl_hours_invalid_falls_back_to_default(self):
         collector = LiepinCollector(

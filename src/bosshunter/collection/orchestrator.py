@@ -325,7 +325,10 @@ class _SharedProcessor:
         self.stale_strikes_limit = int(automation.get("stale_strikes", 2) or 2)
         self.repeat_ratio = float(automation.get("repeat_ratio", 0.8) or 0.8)
         self.repeat_strikes_limit = int(automation.get("repeat_strikes", 2) or 2)
+        self.min_yield = float(automation.get("min_yield", 0.2) if automation.get("min_yield") is not None else 0.2)
+        self.yield_strikes_limit = int(automation.get("yield_strikes", 2) or 2)
         self.abandoned_keyword = False
+        self.per_keyword = False          # the give-up rules only apply where every keyword is collected on its own
         self.active_new = 0
         self.reset_keyword_window()
 
@@ -335,7 +338,31 @@ class _SharedProcessor:
         self._stale_strikes = 0
         self._repeat_samples: list[bool] = []
         self._repeat_strikes = 0
+        self._yield_samples: list[bool] = []
+        self._yield_strikes = 0
         self.abandoned_keyword = False
+
+    def _note_yield(self, useful: bool) -> None:
+        """Move on to the next keyword when almost nothing it lists is of use.
+
+        Every posting a keyword lists counts: saved ones are useful, repeats and anything filtered (company already in the
+        pool or applied to, city, inactive or stale, excluded words ...) are not. A block of about one page with fewer than
+        ``min_yield`` useful ones is a strike, a better block clears the strikes, ``yield_strikes`` in a row end the keyword.
+        All platforms report through the same processor, so they all follow the same rule.
+        """
+        if self.min_yield <= 0 or not self.per_keyword:
+            return
+        self._yield_samples.append(useful)
+        if len(self._yield_samples) < self.stale_block:
+            return
+        block, self._yield_samples = self._yield_samples, []
+        if sum(block) / len(block) < self.min_yield:
+            self._yield_strikes += 1
+            if self._yield_strikes >= self.yield_strikes_limit and not self.abandoned_keyword:
+                self.abandoned_keyword = True
+                self.event(message=f"关键词「{self.progress.keyword}」连续 {self._yield_strikes} 页几乎没有可用的新岗位，换下一个关键词")
+        else:
+            self._yield_strikes = 0
 
     def _note_repeat(self, repeated: bool) -> None:
         """Move on to the next keyword when almost everything it lists is already in the database.
@@ -343,6 +370,8 @@ class _SharedProcessor:
         Same block logic as for stale postings: a block of about one page with at least ``repeat_ratio`` known postings
         is a strike, a block with new ones clears the strikes, ``repeat_strikes`` in a row end the keyword.
         """
+        if not self.per_keyword:
+            return
         self._repeat_samples.append(repeated)
         if len(self._repeat_samples) < self.stale_block:
             return
@@ -362,6 +391,8 @@ class _SharedProcessor:
         strike, a good block clears the strikes, and ``stale_strikes`` in a row end the keyword (the search order
         puts the freshest first, so the following pages are only going to be worse).
         """
+        if not self.per_keyword:
+            return
         self._stale_samples.append(stale)
         if len(self._stale_samples) < self.stale_block:
             return
@@ -381,6 +412,7 @@ class _SharedProcessor:
         candidate = values.pop("filtered_candidate", None)
         if values.pop("increment_filtered", False):
             self.progress.filtered += 1
+            self._note_yield(False)
             if isinstance(candidate, JobCandidate):
                 self.filter_records.append({
                     "title": candidate.title[:300], "company": candidate.company[:300],
@@ -404,6 +436,10 @@ class _SharedProcessor:
         self.error_records = self.error_records[-200:]
 
     def inspect(self, candidate: JobCandidate) -> bool:
+        if self.abandoned_keyword:
+            # Let the next posting through: save() answers False for it, which every collector understands as "stop
+            # this keyword" (an exception from here would be swallowed by some collectors' parse-error handling).
+            return True
         self.progress.seen += 1
         if job_identity_exists(
             self.conn,
@@ -420,10 +456,7 @@ class _SharedProcessor:
             self.progress.duplicate += 1
             self.event()
             self._note_repeat(True)
-            if self.abandoned_keyword:
-                from bosshunter.collection.base import CollectionBlockedError
-
-                raise CollectionBlockedError("callback_stopped", "关键词里几乎都是已采过的岗位，已换下一个")
+            self._note_yield(False)
             return False
         self._note_repeat(False)
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
@@ -459,6 +492,8 @@ class _SharedProcessor:
         return f"工作地点不在目标城市：{where}（目标：{'、'.join(wanted)}）"
 
     def save(self, candidate: JobCandidate) -> bool:
+        if self.abandoned_keyword:
+            return False
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         if matched := matching_deal_breaker(candidate.jd, profile.get("jd_deal_breakers") or []):
             self.event(message=f"JD 命中排除词：{matched}", increment_filtered=True, filtered_candidate=candidate)
@@ -489,8 +524,10 @@ class _SharedProcessor:
             if (hr_active_level(candidate.hr_active) or 0) >= 2:        # active within about three days
                 self.active_new += 1
             record_sighting(self.conn, candidate.storage_id)
+            self._note_yield(True)
         else:
             self.progress.duplicate += 1
+            self._note_yield(False)
         self.event(phase="saving")
         if self.stop_event is not None and self.stop_event.is_set():
             return False
@@ -809,6 +846,7 @@ class CollectionOrchestrator:
             request = replace(request, max_pages=min(request.max_pages, kp.SPOT_CHECK_PAGES))
             processor.event(message=f"今天的关键词都采完了，抽检 {len(pending)} 个：{'、'.join(pending)}")
         start_total = len(processor.new_job_ids)
+        processor.per_keyword = True
         variants: list[str] = []
         if not intern and request.platform == "liepin":
             from bosshunter.experience_level import liepin_variants
@@ -855,6 +893,7 @@ class CollectionOrchestrator:
                         new=len(processor.new_job_ids) - before, active=processor.active_new - active0,
                     )
                 if result.status not in ok and result.reason_code != "callback_stopped":
+                    processor.per_keyword = False
                     return result                               # a safety stop ends the whole platform
                 finished = (
                     result.status == "completed" and result.reason_code not in {"callback_stopped", "day_off", "outside_window"}
@@ -865,6 +904,7 @@ class CollectionOrchestrator:
             got = len(processor.new_job_ids) - start_total
             if not target or got >= target or not pending or (self.stop_event is not None and self.stop_event.is_set()):
                 break
+        processor.per_keyword = False
         if not results:
             return PlatformCollectionResult(request.platform, "completed", "search_exhausted", "没有可采集的关键词")
         merged = results[-1]

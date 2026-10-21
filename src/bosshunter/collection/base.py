@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from datetime import datetime
 from threading import Event
 from typing import Callable, Protocol
 
@@ -24,6 +26,13 @@ class CollectionError(RuntimeError):
 
 class CollectionBlockedError(CollectionError):
     """The platform requires user action or has blocked the session."""
+
+
+def hours_since_midnight() -> int:
+    """Hours since local midnight, rounded up (at least 1): how far back "today's" checkpoints reach."""
+    now = datetime.now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, math.ceil((now - midnight).total_seconds() / 3600))
 
 
 @dataclass

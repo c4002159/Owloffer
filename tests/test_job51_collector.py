@@ -850,9 +850,11 @@ class ItemToCandidateEdgeTests(TestCase):
 class ResumeTtlHoursTests(TestCase):
     """_resume_ttl_hours — 断点续采有效期配置解析。"""
 
-    def test_default_24h(self):
+    def test_default_is_today_only(self):
+        from bosshunter.collection.base import hours_since_midnight
+
         collector = Job51Collector()
-        self.assertEqual(collector._resume_ttl_hours(), 24)
+        self.assertEqual(collector._resume_ttl_hours(), hours_since_midnight())
 
     def test_from_platforms_config(self):
         collector = Job51Collector(config={"platforms": {"51job": {"search": {"resume_ttl_hours": 48}}}})

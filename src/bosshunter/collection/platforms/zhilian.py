@@ -30,7 +30,7 @@ from bosshunter.browser import (
     type_text as browser_type_text,
     wait_for_load,
 )
-from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks
+from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks, hours_since_midnight
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.db import (
     delete_page_progress,
@@ -934,7 +934,9 @@ class ZhilianCollector:
                 search_cfg = pf["search"]
         elif isinstance(self.config.get("search"), dict):
             search_cfg = self.config["search"]
-        raw = search_cfg.get("resume_ttl_hours", 24)
+        raw = search_cfg.get("resume_ttl_hours")
+        if raw in (None, ""):
+            return hours_since_midnight()       # default: checkpoints count for today only
         try:
             return max(1, min(int(raw or 24), 720))
         except (TypeError, ValueError):
@@ -1258,7 +1260,7 @@ class ZhilianCollector:
                         self._log(hooks, f"智联 {kw} 断点续采：已完成后跳过",
                                   phase="completed_keyword", keyword=kw, city=city)
                         continue
-                    saved_page = get_page_progress(self.safety_conn, "zhilian", city, kw) if self.safety_conn is not None else 0
+                    saved_page = get_page_progress(self.safety_conn, "zhilian", city, kw, within_hours=self._resume_ttl_hours()) if self.safety_conn is not None else 0
                     start_page = saved_page + 1 if saved_page > 0 else 1
                     if start_page > max_pages:
                         if self.safety_conn is not None:
@@ -1415,7 +1417,7 @@ class ZhilianCollector:
                                    message=f"智联 {keyword} 断点续采：{self._resume_ttl_hours()}h 内已完成，整词跳过")
                     continue
                 # 页级断点：从上次采到页码的下一页继续
-                saved_page = get_page_progress(self.safety_conn, "zhilian", city, keyword) if self.safety_conn is not None else 0
+                saved_page = get_page_progress(self.safety_conn, "zhilian", city, keyword, within_hours=self._resume_ttl_hours()) if self.safety_conn is not None else 0
                 start_page = saved_page + 1 if saved_page > 0 else 1
                 if start_page > request.max_pages:
                     if self.safety_conn is not None:

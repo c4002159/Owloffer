@@ -1049,7 +1049,8 @@ class KeywordRotationTests(TestCase):
                     for index in range(60):
                         listed.append(index)
                         candidate = JobCandidate(**{**_candidate("51job", f"known-{index}").__dict__, "city": "上海"})
-                        hooks.on_list_candidate(candidate)
+                        if hooks.on_list_candidate(candidate) and not hooks.on_candidate(candidate):
+                            return PlatformCollectionResult("51job", "completed", "callback_stopped", "stopped")
                     return PlatformCollectionResult("51job", "completed", "search_exhausted", "ok")
                 return PlatformCollectionResult("51job", "completed", "search_exhausted", "ok")
 
@@ -1099,3 +1100,50 @@ class ExperienceTagAlternationTests(TestCase):
         self.assertEqual(set(used), {"1", "0$1"})                                  # both tags were tried
         self.assertEqual(sum(entry["new"] for entry in recorded.values()), 24)     # 12 keywords x 2 new jobs
         self.assertEqual(sum(entry["active"] for entry in recorded.values()), 24)  # all of them had an active HR
+
+
+class LowYieldKeywordTests(TestCase):
+    def test_a_keyword_whose_postings_are_mostly_filtered_is_given_up_whatever_the_reason(self):
+        listed = []
+
+        class Mostly:
+            platform = "zhilian"
+
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                if word != "甲":
+                    return PlatformCollectionResult("zhilian", "completed", "search_exhausted", "ok")
+                for index in range(80):
+                    listed.append(index)
+                    candidate = JobCandidate(**{**_candidate("zhilian", f"m-{index}").__dict__, "city": "上海",
+                                                "company": "屏蔽公司"})        # every posting is filtered
+                    if hooks.on_list_candidate(candidate) and not hooks.on_candidate(candidate):
+                        return PlatformCollectionResult("zhilian", "completed", "callback_stopped", "stopped")
+                return PlatformCollectionResult("zhilian", "completed", "search_exhausted", "ok")
+
+        options = _options(order=["zhilian"])
+        options["platforms"]["zhilian"].update(cities=["上海"], keywords=["甲", "乙"])
+        options["quotas"] = {"fulltime": 10, "internship": 0}
+        config = {"automation": {"keyword_budget": True}, "profile": {"blocked_companies": ["屏蔽公司"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator(config, db_path=Path(tmp) / "c.db",
+                                            registry=CollectorRegistry({"zhilian": Mostly})).run(options)
+        self.assertLess(len(listed), 80)                                      # given up after two poor pages
+        self.assertGreaterEqual(len(listed), 20)
+        self.assertEqual(result["status"], "completed")
+
+
+class CheckpointLifetimeTests(TestCase):
+    def test_checkpoints_default_to_today_only_and_every_platform_agrees(self):
+        from bosshunter.collection.base import hours_since_midnight
+        from bosshunter.collection.platforms.job51 import Job51Collector
+        from bosshunter.collection.platforms.liepin import LiepinCollector
+        from bosshunter.collection.platforms.zhilian import ZhilianCollector
+
+        today = hours_since_midnight()
+        self.assertTrue(1 <= today <= 24)
+        for collector in (Job51Collector(), LiepinCollector(), ZhilianCollector()):
+            self.assertEqual(collector._resume_ttl_hours(), today)
+        explicit = {"platforms": {name: {"search": {"resume_ttl_hours": 48}} for name in ("51job", "liepin", "zhilian")}}
+        for collector in (Job51Collector(config=explicit), LiepinCollector(config=explicit), ZhilianCollector(config=explicit)):
+            self.assertEqual(collector._resume_ttl_hours(), 48)

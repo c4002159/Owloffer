@@ -36,7 +36,7 @@ from urllib.parse import quote
 
 from bosshunter.ai.prefilter import salary_filter_result
 from bosshunter.browser import close_tab, evaluate, get_page_targets, new_tab
-from bosshunter.collection.base import CollectionBlockedError, CollectorHooks
+from bosshunter.collection.base import CollectionBlockedError, CollectorHooks, hours_since_midnight
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.db import (
     delete_page_progress,
@@ -826,7 +826,9 @@ class Job51Collector:
             search_cfg = pf["search"]
         elif isinstance(self.config.get("search"), dict):
             search_cfg = self.config["search"]
-        raw = search_cfg.get("resume_ttl_hours", 24)
+        raw = search_cfg.get("resume_ttl_hours")
+        if raw in (None, ""):
+            return hours_since_midnight()       # default: checkpoints count for today only
         try:
             return max(1, min(int(raw or 24), 720))
         except (TypeError, ValueError):
@@ -936,7 +938,7 @@ class Job51Collector:
         kw_encoded = quote(kw)
 
         # 页级断点续采：读上次采到页码，从 N+1 页继续（中途停止→续采不重翻）
-        saved_page = get_page_progress(self.safety_conn, "51job", city, kw) if self.safety_conn is not None else 0
+        saved_page = get_page_progress(self.safety_conn, "51job", city, kw, within_hours=self._resume_ttl_hours()) if self.safety_conn is not None else 0
         start_page = saved_page + 1 if saved_page > 0 else 1
         # 边界守卫：续采起点已超过最大页（理论上该词已采完），直接标记完成并跳过
         if start_page > max_pages:
