@@ -24,6 +24,8 @@ MODE_LABELS = {
 
 TERMINAL_STATUSES = {"completed", "failed", "stopped"}
 ACTIVE_STATUSES = {"running", "stopping"}
+QUEUED = "queued"          # waiting for the running task to end; starts by itself afterwards
+MAX_QUEUED = 5
 DEADLINE_MODES = {"full", "monitor", "deliver"}
 
 
@@ -96,6 +98,7 @@ class WorkbenchTaskRunner:
         self._threads: dict[str, Thread] = {}
         self._deadline_timers: dict[str, Timer] = {}
         self._lock = Lock()
+        self._queue: list[tuple[WorkbenchTask, dict, Callable[[], None] | None]] = []
 
     def start(
         self,
@@ -103,16 +106,29 @@ class WorkbenchTaskRunner:
         config: dict,
         *,
         before_start: Callable[[], None] | None = None,
+        queue_if_busy: bool = False,
     ) -> dict:
         if mode not in MODE_LABELS:
             raise ValueError(f"Unsupported workbench mode: {mode}")
 
         with self._lock:
             active = self._active_task_locked()
-            if active:
-                raise TaskAlreadyRunningError(
-                    f"当前已有后台任务「{active.label}」正在运行或停止中，请等待其完全结束"
-                )
+            if active or self._queue:
+                if not queue_if_busy:
+                    raise TaskAlreadyRunningError(
+                        f"当前已有后台任务「{active.label if active else self._queue[0][0].label}」正在运行或停止中，请等待其完全结束"
+                    )
+                if len(self._queue) >= MAX_QUEUED:
+                    raise TaskAlreadyRunningError(f"排队的任务已有 {MAX_QUEUED} 个，请等前面的任务完成后再添加")
+                ahead = active.label if active else self._queue[-1][0].label
+                task = WorkbenchTask(id=str(uuid4()), mode=mode, label=MODE_LABELS[mode], status=QUEUED)
+                task.logs.append(f"等待「{ahead}」完成，之后自动开始")
+                for key in ("_workbench_job_ids",):
+                    if config.get(key):
+                        task.context["queued_job_ids"] = [str(job_id) for job_id in config[key]]
+                self._tasks[task.id] = task
+                self._queue.append((task, config, before_start))
+                return task.snapshot()
 
             task = WorkbenchTask(id=str(uuid4()), mode=mode, label=MODE_LABELS[mode])
             deadline = _deadline_from_config(mode, config)
@@ -151,6 +167,7 @@ class WorkbenchTaskRunner:
                 "active": active.snapshot() if active else None,
                 "last_task": tasks[-1] if tasks else None,
                 "tasks": tasks,
+                "queued": [task.snapshot() for task, _config, _before in self._queue],
             }
 
     def stop(self, task_id: str, reason: str = "用户已请求停止") -> dict:
@@ -159,6 +176,14 @@ class WorkbenchTaskRunner:
             if not task:
                 raise KeyError(task_id)
             if task.status in TERMINAL_STATUSES:
+                return task.snapshot()
+            if task.status == QUEUED:                      # cancelled before it ever started
+                self._queue = [item for item in self._queue if item[0].id != task_id]
+                task.stop_requested.set()
+                task.status = "stopped"
+                task.stop_reason = "已取消排队"
+                task.logs.append(task.stop_reason)
+                task.updated_at = datetime.now().isoformat(timespec="seconds")
                 return task.snapshot()
             task.stop_requested.set()
             task.status = "stopping"
@@ -204,6 +229,44 @@ class WorkbenchTaskRunner:
                 timer = self._deadline_timers.pop(task.id, None)
             if timer:
                 timer.cancel()
+            self._start_next()
+
+    def _start_next(self) -> None:
+        """Start the first queued task once nothing is running any more."""
+        with self._lock:
+            while self._queue and not self._active_task_locked():
+                task, config, before_start = self._queue.pop(0)
+                if task.stop_requested.is_set():
+                    continue
+                deadline = _deadline_from_config(task.mode, config)
+                if deadline and deadline <= datetime.now():
+                    task.stop_requested.set()
+                    task.status = "stopped"
+                    task.stop_reason = "今日发送时间窗口已截止，排队的任务未启动"
+                    task.logs.append(task.stop_reason)
+                    task.updated_at = datetime.now().isoformat(timespec="seconds")
+                    continue
+                try:
+                    if before_start is not None:
+                        before_start()
+                except Exception as exc:
+                    task.status = "failed"
+                    task.error = str(exc)
+                    task.updated_at = datetime.now().isoformat(timespec="seconds")
+                    continue
+                task.status = "running"
+                task.logs.append("前面的任务已结束，开始执行")
+                task.updated_at = datetime.now().isoformat(timespec="seconds")
+                if deadline:
+                    task.deadline_at = deadline.isoformat(timespec="seconds")
+                    timer = Timer(max((deadline - datetime.now()).total_seconds(), 0), self._stop_at_deadline, args=(task.id,))
+                    timer.daemon = True
+                    self._deadline_timers[task.id] = timer
+                    timer.start()
+                thread = Thread(target=self._run, args=(task, config), daemon=True)
+                self._threads[task.id] = thread
+                thread.start()
+                return
 
     def _stop_at_deadline(self, task_id: str) -> None:
         try:

@@ -54,7 +54,7 @@ def base_dir(monkeypatch):
         server.set_base_dir(base)
         started = []
 
-        def fake_start(mode, config, before_start=None):
+        def fake_start(mode, config, before_start=None, **_):
             started.append((mode, list(config.get("_workbench_job_ids", []))))
             return {"id": "task-1", "mode": mode, "status": "running", "logs": []}
 

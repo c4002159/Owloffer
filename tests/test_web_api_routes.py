@@ -2212,7 +2212,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(active_task.context["confirmed_job_ids"], ["ready-job"])
         self.assertEqual(json.loads(response_body)["id"], "active-full-task")
 
-    def test_web_api_deliver_conflict_does_not_change_job_or_history(self):
+    def test_web_api_deliver_while_another_task_runs_waits_in_line(self):
         active_task = WorkbenchTask(id="active-delivery", mode="deliver", label="确认投递")
         runner = WorkbenchTaskRunner()
         runner._tasks[active_task.id] = active_task
@@ -2247,9 +2247,11 @@ class WebApiRouteTests(unittest.TestCase):
             finally:
                 verify_db.close()
 
-        self.assertTrue(response_status.startswith("409"), response_body)
-        self.assertEqual(job_status, "ready")
-        self.assertEqual(approved_history, 0)
+        # The delivery no longer bounces off the running task: it waits in line and starts when that one ends.
+        self.assertTrue(response_status.startswith("200"), response_body)
+        self.assertEqual(json.loads(response_body)["status"], "queued")
+        self.assertEqual(job_status, "approved")
+        self.assertEqual(approved_history, 1)
 
     def test_web_api_full_task_continues_delivery_and_monitoring_after_confirmation(self):
         # Arrange
@@ -2692,7 +2694,7 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertTrue(callable(seen_configs[0].get("_workbench_log")))
         self.assertIn("开始为 1 个岗位生成招呼语", result["logs"][0])
 
-    def test_web_api_greeting_generation_rejected_while_task_running(self):
+    def test_web_api_greeting_generation_waits_in_line_while_a_task_runs(self):
         started = Event()
         release = Event()
 
@@ -2725,8 +2727,9 @@ class WebApiRouteTests(unittest.TestCase):
             runner.wait(timeout=2)
 
         payload = json.loads(body)
-        self.assertTrue(status.startswith("409"), body)
-        self.assertIn("正在运行", payload["error"])
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(payload["task"]["status"], "queued")        # it waits behind the collection, which is untouched
+        self.assertIn("等待", payload["task"]["logs"][0])
         self.assertEqual(task["mode"], "collect")
 
     def test_greet_task_failure_keeps_jobs_retryable(self):

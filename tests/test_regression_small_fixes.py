@@ -71,8 +71,7 @@ class VersionMetadataTests(unittest.TestCase):
         self.assertEqual(lock["version"], version)
         self.assertEqual(lock["packages"][""]["version"], version)
         self.assertIn(f"v{version} · 本地控制台", sidebar_source)
-        self.assertIn(f"BossHunter v{version}</h1>", readme)
-        self.assertIn(f"version-v{version}-", readme)
+        self.assertIn(f"v{version}", readme)  # README names the upstream release it builds on
         self.assertIn(f"## v{version}\n", changelog)
         self.assertNotIn("v1.1.0", sidebar_source)
 

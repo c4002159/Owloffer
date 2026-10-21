@@ -826,3 +826,82 @@ class KeywordBudgetInRunsTests(TestCase):
     def test_budget_is_off_without_the_switch(self):
         calls, runs, _ = self._run({"甲": "core", "乙": "core"}, {"fulltime": 10, "internship": 0}, {"keyword_budget": False})
         self.assertEqual(runs, {})
+
+
+class RaisingCallbackStopTests(TestCase):
+    """51job raises CollectionBlockedError('callback_stopped') when a keyword reaches its budget; that must end the
+    keyword, not the platform and not the whole queue."""
+
+    def test_a_keyword_that_reaches_its_budget_by_raising_does_not_block_the_platform_or_the_queue(self):
+        from bosshunter.collection.base import CollectionBlockedError
+
+        calls = []
+
+        class Raising:
+            platform = "51job"
+
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                calls.append(("51job", word))
+                for index in range(10):
+                    candidate = JobCandidate(**{**_candidate("51job", f"{word}-{index}", f"{word}岗位{index}").__dict__,
+                                                "company": f"{word}公司{index}号", "city": "上海"})
+                    if not hooks.on_list_candidate(candidate):
+                        continue
+                    if not hooks.on_candidate(candidate):
+                        raise CollectionBlockedError("callback_stopped", "采集回调已停止")
+                return PlatformCollectionResult("51job", "completed", "search_exhausted", "ok")
+
+        class Next:
+            platform = "liepin"
+
+            def collect(self, request, hooks):
+                calls.append(("liepin", request.keywords[0]))
+                return PlatformCollectionResult("liepin", "completed", "search_exhausted", "ok")
+
+        registry = CollectorRegistry({"51job": Raising, "liepin": Next})
+        options = _options(order=["51job", "liepin"])
+        options["platforms"]["51job"].update(cities=["上海"], keywords=["甲", "乙"])
+        options["platforms"]["liepin"].update(cities=["上海"], keywords=["丙"])
+        options["quotas"] = {"fulltime": 10, "internship": 0}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = CollectionOrchestrator({"automation": {"keyword_budget": True}}, db_path=Path(tmp) / "c.db", registry=registry).run(options)
+        self.assertEqual([c for c in calls if c[0] == "51job"], [("51job", "甲"), ("51job", "乙")])   # both keywords ran
+        self.assertEqual(calls[-1], ("liepin", "丙"))                                                # the queue went on
+        self.assertEqual(result["platforms"]["51job"]["status"], "completed")
+        self.assertEqual(result["status"], "completed")
+
+
+class StaleKeywordTests(TestCase):
+    """A keyword whose pages keep being mostly inactive HR is dropped and the next keyword starts."""
+
+    def test_keyword_with_mostly_inactive_pages_is_abandoned_for_the_next_one(self):
+        seen = []
+
+        class Stale:
+            platform = "51job"
+
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                for index in range(40):
+                    stale = word == "甲" and index % 10 < 6              # 6 of every 10 postings: inactive
+                    candidate = JobCandidate(**{**_candidate("51job", f"{word}-{index}", f"{word}岗位{index}").__dict__,
+                                                "company": f"{word}公司{index}号", "city": "上海",
+                                                "hr_active": "3月前活跃" if stale else "刚刚活跃"})
+                    seen.append((word, index))
+                    if not hooks.on_list_candidate(candidate):
+                        continue
+                    if not hooks.on_candidate(candidate):
+                        return PlatformCollectionResult("51job", "completed", "callback_stopped", "stopped")
+                return PlatformCollectionResult("51job", "completed", "search_exhausted", "ok")
+
+        registry = CollectorRegistry({"51job": Stale})
+        options = _options(order=["51job"])
+        options["platforms"]["51job"].update(cities=["上海"], keywords=["甲", "乙"])
+        options["quotas"] = {"fulltime": 100, "internship": 0}
+        config = {"automation": {"keyword_budget": True}, "profile": {"hr_active_min_level": 2}}
+        with tempfile.TemporaryDirectory() as tmp:
+            CollectionOrchestrator(config, db_path=Path(tmp) / "c.db", registry=registry).run(options)
+        jia = [index for word, index in seen if word == "甲"]
+        self.assertEqual(len(jia), 20)                                   # two stale pages, then it gave up
+        self.assertGreater(len([1 for word, _ in seen if word == "乙"]), 20)   # the next keyword went on past that point

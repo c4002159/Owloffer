@@ -109,12 +109,27 @@ export interface CollectionProgress {
   collected_job_ids?: string[]
 }
 
+export interface TaskSummary {
+  id: string
+  mode: string
+  label: string
+  status: string
+  created_at: string
+  updated_at: string
+  stop_reason?: string | null
+  error?: string | null
+  last_log: string
+  metrics: Record<string, number>
+}
+
 interface WorkbenchData {
   funnel: FunnelData
   funnel_today: FunnelData
   pending_confirmation: Job[]
   approved_unsent: Job[]
   delivery_job_ids?: string[]
+  busy_jobs?: Record<string, string>
+  recent_tasks?: TaskSummary[]
   pending_greetings: Job[]
   send_errors: Job[]
   needs_resume: Job[]
@@ -250,7 +265,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
       throw new Error([data.error || '启动失败', details].filter(Boolean).join('：'))
     }
     const task = await res.json() as WorkbenchTask
-    setWorkbench(prev => ({ ...prev, task, last_task: task }))
+    if (task.status !== 'queued') setWorkbench(prev => ({ ...prev, task, last_task: task }))
     void fetchAll()
     return task
   }
@@ -262,7 +277,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
       throw new Error(data.error || '停止失败')
     }
     const task = await res.json() as WorkbenchTask
-    setWorkbench(prev => ({ ...prev, task, last_task: task }))
+    if (task.status !== 'queued') setWorkbench(prev => ({ ...prev, task, last_task: task }))
     void fetchAll()
     return task
   }

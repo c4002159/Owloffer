@@ -302,6 +302,37 @@ class _SharedProcessor:
         self.new_job_ids: list[str] = []
         self.filter_records: list[dict[str, str]] = []
         self.error_records: list[dict[str, Any]] = []
+        self.stale_block = int(automation.get("stale_block_size", 10) or 10)
+        self.stale_ratio = float(automation.get("stale_ratio", 0.6) or 0.6)
+        self.stale_strikes_limit = int(automation.get("stale_strikes", 2) or 2)
+        self.abandoned_keyword = False
+        self.reset_keyword_window()
+
+    def reset_keyword_window(self) -> None:
+        """Start counting stale postings afresh for the next keyword."""
+        self._stale_samples: list[bool] = []
+        self._stale_strikes = 0
+        self.abandoned_keyword = False
+
+    def _note_staleness(self, candidate: JobCandidate, stale: bool) -> None:
+        """Give up on a keyword whose results keep being stale.
+
+        Postings are judged in blocks of about one page; a block with at least ``stale_ratio`` stale postings is a
+        strike, a good block clears the strikes, and ``stale_strikes`` in a row end the keyword (the search order
+        puts the freshest first, so the following pages are only going to be worse).
+        """
+        self._stale_samples.append(stale)
+        if len(self._stale_samples) < self.stale_block:
+            return
+        block, self._stale_samples = self._stale_samples, []
+        if sum(block) / len(block) >= self.stale_ratio:
+            self._stale_strikes += 1
+            if self._stale_strikes >= self.stale_strikes_limit:
+                self.abandoned_keyword = True
+                self.event(message=f"关键词「{self.progress.keyword}」连续 {self._stale_strikes} 页不活跃岗位占 "
+                                   f"{sum(block)}/{len(block)} 以上，放弃该词，换下一个")
+        else:
+            self._stale_strikes = 0
 
     def event(self, *, phase: str | None = None, **values: Any) -> None:
         if phase:
@@ -391,9 +422,10 @@ class _SharedProcessor:
         fresh_score, fresh_reason = freshness_filter_result(
             {"hr_active": candidate.hr_active, "updated_days": candidate.updated_days}, profile
         )
+        self._note_staleness(candidate, fresh_score <= 0)
         if fresh_score <= 0:
             self.event(message=fresh_reason, increment_filtered=True, filtered_candidate=candidate)
-            return True
+            return not self.abandoned_keyword
         try:
             inserted = insert_job_if_new(self.conn, candidate.as_job_record(), rules=self.outsourcing_rules)
         except Exception as exc:
@@ -412,6 +444,8 @@ class _SharedProcessor:
         if self.stop_event is not None and self.stop_event.is_set():
             return False
         if self.cap_total is not None and len(self.new_job_ids) >= self.cap_total:
+            return False
+        if self.abandoned_keyword:
             return False
         return self.stop_event is None or not self.stop_event.is_set()
 
@@ -661,7 +695,13 @@ class CollectionOrchestrator:
                 break
             before, seen0, filtered0 = len(processor.new_job_ids), processor.progress.seen, processor.progress.filtered
             processor.cap_total = before + caps.get(word, ks.MIN_SLICE)
-            result = collector.collect(replace(request, keywords=[word]), hooks)
+            processor.reset_keyword_window()
+            try:
+                result = collector.collect(replace(request, keywords=[word]), hooks)
+            except CollectionError as exc:
+                if exc.code != "callback_stopped":
+                    raise
+                result = PlatformCollectionResult(request.platform, "completed", "callback_stopped", "采集回调已停止")
             processor.cap_total = None
             ks.record_run(
                 conn, request.platform, word, kind,
@@ -738,6 +778,8 @@ class CollectionOrchestrator:
                 )
             return collector.collect(intern_request, intern_hooks)
         except CollectionError as exc:
+            if exc.code == "callback_stopped":            # the internship cap was reached: the pass is done
+                return PlatformCollectionResult(platform, "completed", "callback_stopped", "实习名额已采满")
             return PlatformCollectionResult(platform, "blocked", exc.code, exc.message, error=str(exc))
         except Exception as exc:
             return PlatformCollectionResult(platform, "failed", "network_error", f"{platform} 实习采集失败", error=str(exc)[:500])

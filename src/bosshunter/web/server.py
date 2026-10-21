@@ -947,6 +947,11 @@ def _refresh_greeting_settings(config: dict) -> dict:
 	return config
 
 
+def _start_queued(mode, config, **kwargs):
+	"""Start a task, or put it in line behind the running one (it starts by itself when that one ends)."""
+	return task_runner.start(mode, config, queue_if_busy=True, **kwargs)
+
+
 def _release_scheduled(task: WorkbenchTask, job_id: str) -> None:
 	"""A job whose turn in the delivery queue is over (sent or failed) is no longer queued: it stops being grey and
 	can be queued again."""
@@ -1617,6 +1622,18 @@ def _active_delivery_job_ids(status: dict) -> list[str]:
 	return sorted(ids)
 
 
+def _task_summary(task: dict) -> dict:
+	"""A task for the activity list: what it is, where it stands and its last log line."""
+	logs = task.get("logs") or []
+	return {
+		"id": task.get("id"), "mode": task.get("mode"), "label": task.get("label"), "status": task.get("status"),
+		"created_at": task.get("created_at"), "updated_at": task.get("updated_at"),
+		"stop_reason": task.get("stop_reason"), "error": task.get("error"),
+		"last_log": logs[-1] if logs else "", "metrics": task.get("metrics") or {},
+		"progress": {key: (task.get("progress") or {}).get(key) for key in ("phase", "platform", "platform_index", "platform_total") if (task.get("progress") or {}).get(key) is not None},
+	}
+
+
 @app.route("/api/workbench")
 def api_workbench():
 	db = _get_web_db()
@@ -1635,6 +1652,9 @@ def api_workbench():
 		status = task_runner.status()
 		return _json_response({
 			"delivery_job_ids": _active_delivery_job_ids(status),
+			"busy_jobs": _busy_jobs(status),
+			"queued_tasks": [_task_summary(item) for item in status.get("queued") or []],
+			"recent_tasks": [_task_summary(item) for item in (status.get("tasks") or [])[-8:]][::-1],
 			"funnel": get_funnel_stats(db),
 			"funnel_today": get_funnel_stats(db, today=True),
 			"pending_confirmation": [
@@ -1787,7 +1807,7 @@ def api_scoring_start():
 		runtime_options = {"job_ids": job_ids, "force_rescore": options["force_rescore"]}
 		with job_mutation_lock:
 			update_scoring_run(db_path, run_id, status="running")
-			task = task_runner.start("score", _task_config({
+			task = _start_queued("score", _task_config({
 				"_score_run_id": run_id,
 				"_score_options": runtime_options,
 			}))
@@ -1860,7 +1880,7 @@ def api_scoring_resume(run_id):
 	try:
 		with job_mutation_lock:
 			update_scoring_run(db_path, run_id, status="running", remaining_job_ids=remaining)
-			task = task_runner.start("score", _task_config({
+			task = _start_queued("score", _task_config({
 				"_score_run_id": run_id,
 				"_score_options": {"job_ids": remaining, "force_rescore": force_rescore},
 			}))
@@ -1972,7 +1992,7 @@ def api_workbench_task_start():
 				}
 			before_start = lambda: _write_config(base_config)
 		with job_mutation_lock:
-			task = task_runner.start(mode, {**base_config, **extra, "_workbench_live_greeting_settings": True}, before_start=before_start)
+			task = _start_queued(mode, {**base_config, **extra, "_workbench_live_greeting_settings": True}, before_start=before_start)
 		return _json_response(task)
 	except TaskAlreadyRunningError as e:
 		return _json_response({"error": str(e)}, 409)
@@ -2194,11 +2214,6 @@ def api_workbench_deliver():
 				and not active_runtime_task.context.get("confirmation_complete")
 			):
 				waiting_task = active_runtime_task
-			if active_task and not waiting_task and not monitoring_task and not delivery_task:
-				raise TaskAlreadyRunningError(
-					f"当前已有后台任务「{active_task.get('label', '未知任务')}」正在运行或停止中，请等待其完全结束"
-				)
-
 			queued_payload = None
 			status_job_ids = job_ids
 			if delivery_task:
@@ -2244,7 +2259,7 @@ def api_workbench_deliver():
 				# send separate from generation so a click cannot replace the text or
 				# move the job back into greeting review.
 				deliver_options["_workbench_skip_greeting"] = True
-			task = task_runner.start("deliver", _task_config(deliver_options))
+			task = _start_queued("deliver", _task_config(deliver_options))
 			return respond(task)
 	except TaskAlreadyRunningError as e:
 		return _json_response({"error": str(e)}, 409)
@@ -2335,7 +2350,7 @@ def api_workbench_generate_greetings():
 					"error": "招呼语已人工确认，请使用手动编辑修改最终版本",
 					"code": "greeting_reviewed", "invalid_ids": reviewed_ids,
 				}, 409)
-			task = task_runner.start("greet", _task_config({
+			task = _start_queued("greet", _task_config({
 				"_workbench_job_ids": job_ids,
 				"_workbench_regenerate": body.get("regenerate") is True,
 			}))
@@ -3540,6 +3555,44 @@ def _job_action_error(exc: ValueError):
 	return _json_response(payload, 409 if isinstance(exc, (JobDeletionConflictError, JobManualSentConflictError)) else 400)
 
 
+SCORING_STATUSES = {
+	"score": ("pending",), "collect": ("pending",), "fill": ("pending",), "full": ("pending",),
+	"rescore": ("pending", "scored", "ready", "filtered"),
+}
+
+
+def _busy_jobs(status: dict, only=None) -> dict[str, str]:
+	"""``{job_id: reason}`` for jobs a task is working on or has waiting: delivering, waiting for delivery, scoring.
+
+	Everything else can be edited while a task runs. ``only`` restricts the (database) scoring lookup to those ids.
+	"""
+	busy: dict[str, str] = {job_id: "delivering" for job_id in _active_delivery_job_ids(status)}
+	for item in status.get("queued") or []:
+		if item.get("mode") == "deliver":
+			queued = task_runner._tasks.get(item.get("id"))
+			for job_id in (queued.context.get("queued_job_ids") if queued else None) or []:
+				busy.setdefault(str(job_id), "waiting")
+	active = status.get("active") or {}
+	runtime = task_runner._tasks.get(active.get("id"))
+	statuses = SCORING_STATUSES.get(active.get("mode") or "")
+	if runtime and statuses and runtime.status in {"running", "stopping"}:
+		db = _get_web_db()
+		try:
+			marks = ",".join("?" for _ in statuses)
+			query, params = f"SELECT id FROM jobs WHERE deleted_at IS NULL AND status IN ({marks})", list(statuses)
+			if only is not None:
+				ids = [str(job_id) for job_id in only]
+				if not ids:
+					return busy
+				query += f" AND id IN ({','.join('?' for _ in ids)})"
+				params += ids
+			for row in db.execute(query, params).fetchall():
+				busy.setdefault(str(row["id"]), "scoring")
+		finally:
+			db.close()
+	return busy
+
+
 def _active_task_mutation_error(job_ids=None):
 	"""Block edits while a background task runs - except database-only edits of jobs that are not queued for delivery,
 	which may run alongside a delivery queue (the queued jobs are grey and locked until their turn is over)."""
@@ -3548,17 +3601,19 @@ def _active_task_mutation_error(job_ids=None):
 	if not active:
 		return None
 	if job_ids is not None:
-		runtime = task_runner._tasks.get(active.get("id"))
-		if runtime and runtime.status in {"running", "stopping"} and (runtime.mode == "deliver" or runtime.context.get("delivering")):
-			queued = set(_active_delivery_job_ids(status))
-			clash = [str(job_id) for job_id in job_ids if str(job_id) in queued]
-			if not clash:
-				return None
-			return _json_response({
-				"error": f"所选岗位里有 {len(clash)} 个正在投递队列中（已变灰），等它们投递完或停止队列后再改；其余岗位可以直接改",
-				"code": "jobs_in_delivery_queue",
-				"job_ids": clash,
-			}, 409)
+		# Edits that only touch the database of jobs no task is working on run alongside any running task.
+		wanted = [str(job_id) for job_id in job_ids]
+		busy = _busy_jobs(status, only=wanted)
+		clash = [job_id for job_id in wanted if job_id in busy]
+		if not clash:
+			return None
+		reasons = {"delivering": "正在投递", "waiting": "排队等待投递", "scoring": "等待评分"}
+		names = "、".join(sorted({reasons.get(busy[job_id], "任务处理中") for job_id in clash}))
+		return _json_response({
+			"error": f"所选岗位里有 {len(clash)} 个{names}（已变灰），等任务处理完再改；其余岗位可以直接改",
+			"code": "jobs_in_delivery_queue",
+			"job_ids": clash,
+		}, 409)
 	return _json_response({
 		"error": f"当前后台任务「{active.get('label', '未知任务')}」仍在运行，请停止或等待结束后再修改岗位状态",
 		"code": "active_task_conflict",

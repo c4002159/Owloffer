@@ -546,7 +546,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     }
   }, [view])
 
-  const queuedIds = useMemo(() => new Set(workbench.delivery_job_ids ?? []), [workbench.delivery_job_ids])
+  const queuedIds = useMemo(() => new Set([...(workbench.delivery_job_ids ?? []), ...Object.keys(workbench.busy_jobs ?? {})]), [workbench.delivery_job_ids, workbench.busy_jobs])
   useEffect(() => {
     if (!queuedIds.size) return
     setSelected(previous => (previous.some(id => queuedIds.has(id)) ? previous.filter(id => !queuedIds.has(id)) : previous))
@@ -641,8 +641,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice(`${target?.title || '任务'}启动前预检中...`)
       if (!(await runPreflight(mode))) return
       setNotice(`${target?.title || '任务'}启动中，请稍候...`)
-      await startTask(mode)
-      setNotice(`${target?.title || '任务'}已启动，日志会在下方更新。`)
+      const started = await startTask(mode)
+      setNotice(started?.status === 'queued' ? `${target?.title || '任务'}已排队，前面的任务结束后自动开始，可在「最近活动」查看。` : `${target?.title || '任务'}已启动，日志会在下方更新。`)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '操作失败')
     } finally {
@@ -688,7 +688,11 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         return { ok: false, error: '启动前预检未通过：请关闭弹窗后按检查提示修复，再重新启动。' }
       }
       setNotice('启动前预检通过，正在启动任务...')
-      await startTask(mode, options)
+      const started = await startTask(mode, options)
+      if (started?.status === 'queued') {
+        setNotice('任务已排队，前面的任务结束后自动开始，可在「最近活动」查看。')
+        return { ok: true }
+      }
       setNotice(mode === 'full' ? '全流程已启动，进度会在下方更新。' : '岗位采集已启动，进度会在下方更新。')
       return { ok: true }
     } catch (err) {
@@ -1150,7 +1154,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
 
 
       {/* 数据可视化概览：7日趋势 + 高分公司 + 最近活动 */}
-      {(activityData.length > 0 || topCompanies.length > 0 || recentActivity.length > 0) ? (
+      {(activityData.length > 0 || topCompanies.length > 0 || recentActivity.length > 0 || (workbench.recent_tasks?.length ?? 0) > 0) ? (
         <section>
           <div className="mb-3">
             <h3 className="text-lg font-black">求职数据概览</h3>
@@ -1162,7 +1166,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             <TopCompanies data={topCompanies} />
           </div>
           <div className="mt-3">
-            <RecentActivity data={recentActivity} />
+            <RecentActivity data={recentActivity} tasks={workbench.recent_tasks ?? []} />
           </div>
         </section>
       ) : (
@@ -1870,7 +1874,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     setPage(0)
   }, [filters.query, filters.minScore, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType])
 
-  const busyIds = useMemo(() => deliveryWorkbench.delivery_job_ids ?? [], [deliveryWorkbench.delivery_job_ids])
+  const busyIds = useMemo(() => [...new Set([...(deliveryWorkbench.delivery_job_ids ?? []), ...Object.keys(deliveryWorkbench.busy_jobs ?? {})])], [deliveryWorkbench.delivery_job_ids, deliveryWorkbench.busy_jobs])
   useEffect(() => {
     // 刚进入投递队列的岗位从已选里去掉，避免重复投递。
     if (!busyIds.length) return
@@ -2409,6 +2413,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         blockedCompanies={blockedCompanies}
         blockingJobId={blockingJobId}
         busyIds={busyIds}
+        busyReasons={deliveryWorkbench.busy_jobs ?? {}}
         loading={loading}
         sortBy={sortBy}
         sortOrder={sortOrder}

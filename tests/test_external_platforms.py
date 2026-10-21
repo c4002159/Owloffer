@@ -137,7 +137,7 @@ def mixed(monkeypatch):
         started = []
         monkeypatch.setattr(
             server.task_runner, "start",
-            lambda mode, config, before_start=None: started.append(list(config.get("_workbench_job_ids", [])))
+            lambda mode, config, before_start=None, **_: started.append(list(config.get("_workbench_job_ids", [])))
             or {"id": "t", "mode": mode, "status": "running", "logs": []},
         )
         monkeypatch.setattr(server.task_runner, "status", lambda: {"active": None, "last_task": None, "tasks": []})
@@ -293,12 +293,13 @@ def test_pool_views_split_confirm_waiting_and_failed(tmp_path):
     assert _request("/api/jobs/search?queue_view=nope")[0].startswith("400")
 
 
-def test_database_edits_of_jobs_outside_the_delivery_queue_run_alongside_it(tmp_path, monkeypatch):
+def test_database_edits_of_jobs_no_task_is_working_on_run_alongside_the_running_task(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    _pool(tmp_path, [("queued", "ready", "您好"), ("free", "ready", "您好"), ("other", "ready", "您好")])
+    _pool(tmp_path, [("queued", "ready", "您好"), ("free", "ready", "您好"), ("other", "ready", "您好"), ("fresh", "pending", "")])
     runtime = SimpleNamespace(mode="deliver", status="running", context={"delivering": True, "delivery_scheduled_ids": {"queued"}})
-    monkeypatch.setattr(server.task_runner, "status", lambda: {"active": {"id": "t1", "label": "确认投递"}, "last_task": None})
+    active = {"id": "t1", "label": "确认投递", "mode": "deliver"}
+    monkeypatch.setattr(server.task_runner, "status", lambda: {"active": active, "last_task": None, "queued": []})
     monkeypatch.setitem(server.task_runner._tasks, "t1", runtime)
 
     status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["free"], "confirmed": True})
@@ -307,6 +308,58 @@ def test_database_edits_of_jobs_outside_the_delivery_queue_run_alongside_it(tmp_
     status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["queued", "other"], "confirmed": True})
     assert status.startswith("409") and payload["code"] == "jobs_in_delivery_queue" and payload["job_ids"] == ["queued"]
 
-    runtime.mode, runtime.context = "collect", {}                                      # any other task still blocks edits
+    # A collection (with scoring) is running: jobs it is not working on are free, the ones waiting to be scored are not.
+    runtime.mode, runtime.context, active["mode"] = "collect", {}, "collect"
     status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["other"], "confirmed": True})
-    assert status.startswith("409") and payload["code"] == "active_task_conflict"
+    assert status.startswith("200") and payload["affected_count"] == 1
+    status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["fresh"], "confirmed": True})
+    assert status.startswith("409") and payload["code"] == "jobs_in_delivery_queue" and payload["job_ids"] == ["fresh"]
+
+
+def test_a_task_that_cannot_start_now_waits_in_line_and_starts_by_itself():
+    from threading import Event
+
+    from bosshunter.web.tasks import WorkbenchTaskRunner
+
+    release, started = Event(), []
+
+    def blocking(task, config):
+        started.append(("collect", task.id))
+        release.wait(timeout=5)
+
+    runner = WorkbenchTaskRunner({"collect": blocking, "deliver": lambda task, config: started.append(("deliver", task.id))})
+    first = runner.start("collect", {})
+    second = runner.start("deliver", {"_workbench_job_ids": ["j1"]}, queue_if_busy=True)
+    assert second["status"] == "queued" and "等待" in second["logs"][0]
+    status = runner.status()
+    assert [item["mode"] for item in status["queued"]] == ["deliver"] and status["active"]["id"] == first["id"]
+    try:
+        runner.start("deliver", {})                                                # without the flag it is still refused
+        assert False, "should have been refused"
+    except Exception as exc:
+        assert "正在运行" in str(exc)
+    release.set()
+    runner.wait(timeout=5)
+    import time
+    for _ in range(50):
+        if any(kind == "deliver" for kind, _id in started):
+            break
+        time.sleep(0.1)
+    runner.wait(timeout=5)
+    assert [kind for kind, _id in started] == ["collect", "deliver"]               # the queued one ran after the first ended
+    assert runner.status()["queued"] == []
+
+
+def test_a_queued_task_can_be_cancelled():
+    from threading import Event
+
+    from bosshunter.web.tasks import WorkbenchTaskRunner
+
+    release = Event()
+    runner = WorkbenchTaskRunner({"collect": lambda task, config: release.wait(timeout=5), "greet": lambda task, config: None})
+    runner.start("collect", {})
+    queued = runner.start("greet", {}, queue_if_busy=True)
+    cancelled = runner.stop(queued["id"])
+    assert cancelled["status"] == "stopped" and cancelled["stop_reason"] == "已取消排队" and runner.status()["queued"] == []
+    release.set()
+    runner.wait(timeout=5)

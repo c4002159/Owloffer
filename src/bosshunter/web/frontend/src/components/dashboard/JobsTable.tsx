@@ -24,6 +24,7 @@ interface JobsTableProps {
   blockedCompanies?: string[]
   blockingJobId?: string | null
   busyIds?: string[]
+  busyReasons?: Record<string, string>
   loading?: boolean
   sortBy: JobSortKey
   sortOrder: JobSortOrder
@@ -71,7 +72,7 @@ function statusVariant(status: string) {
   return variants.has(status) ? status : 'default'
 }
 
-export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, onMarkManuallySent, onStatusChange, onBlockCompany, blockedCompanies = [], blockingJobId = null, busyIds = [], loading = false, sortBy, sortOrder, onSortChange }: JobsTableProps) {
+export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedIds, onToggleSelected, onSoftDelete, onMarkManuallySent, onStatusChange, onBlockCompany, blockedCompanies = [], blockingJobId = null, busyIds = [], busyReasons = {}, loading = false, sortBy, sortOrder, onSortChange }: JobsTableProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [pageInput, setPageInput] = useState(String(page + 1))
   const totalPages = Math.ceil(total / pageSize)
@@ -160,7 +161,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                   <Fragment key={job.id}>
                     <tr
                       aria-disabled={inDelivery || undefined}
-                      title={inDelivery ? '正在投递或在投递队列中，完成前不能操作' : undefined}
+                      title={inDelivery ? '有任务正在处理或排队处理这个岗位，处理完前不能操作' : undefined}
                       className={`border-b border-card-border bg-card transition-colors ${inDelivery ? 'pointer-events-none opacity-45 grayscale' : 'cursor-pointer hover:bg-surface'}`}
                       onClick={() => setExpanded(isExpanded ? null : job.id)}
                     >
@@ -202,7 +203,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         <span className={`font-mono font-black ${job.recruit_score == null ? 'text-muted' : getScoreColor(job.recruit_score)}`}>{job.recruit_score ?? '-'}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusVariant(job.status) as any}>{inDelivery ? '投递队列中' : getStatusLabel(job.status)}</Badge>
+                        <Badge variant={statusVariant(job.status) as any}>{inDelivery ? ({ delivering: '投递中', waiting: '排队投递', scoring: '评分中' } as Record<string, string>)[busyReasons[job.id]] || '任务处理中' : getStatusLabel(job.status)}</Badge>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted">{job.hr_active || '活跃度未知'}</td>
                       <td className="px-4 py-3 text-xs text-muted">

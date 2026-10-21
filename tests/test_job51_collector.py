@@ -977,3 +977,14 @@ def test_51job_sort_options_map_to_the_sites_own_sort_types():
 
     assert SORT_OPTIONS["51job"] == {"default", "newest", "active"}
     assert SORT_TYPES == {"default": "0", "newest": "1", "active": "5"}
+
+
+class ResumeKeywordRelevanceTests(TestCase):
+    def test_title_matching_the_resume_is_relevant_even_if_it_misses_the_search_keyword(self):
+        from bosshunter.collection.platforms.job51 import _terms_match_title, resume_terms
+
+        config = {"search": {"keywords": ["AI Agent开发", "RAG工程师", "FDE工程师"]}}
+        terms = resume_terms(config)
+        self.assertTrue(_terms_match_title("AI应用算法工程师", terms))
+        self.assertFalse(_is_relevant_to_keyword("AI应用算法工程师", "", "FDE工程师"))
+        self.assertFalse(_terms_match_title("会计", terms))

@@ -296,6 +296,50 @@ def _is_relevant_to_keyword(title: str, jd: str, kw: str) -> bool:
     return False
 
 
+def _terms_match_title(title: str, terms: list[str]) -> bool:
+    """Whether the title contains one of ``terms`` (English words on word boundaries, Chinese as substrings)."""
+    import re
+
+    t = (title or "").lower()
+    squeezed = re.sub(r"\s+", "", t)
+    for term in terms:
+        low = term.lower()
+        if len(low) < 2:
+            continue
+        if low.isascii() and any(c.isalpha() for c in low):
+            if re.search(rf"(?<![a-z0-9]){re.escape(low)}(?![a-z0-9])", t):
+                return True
+        elif low in squeezed:
+            return True
+    return False
+
+
+def resume_terms(config: dict, conn=None, limit: int = 12) -> list[str]:
+    """Words that describe the candidate: the roots of every configured search keyword plus the top tags of the
+    resumes remembered from the platform. A job is relevant when its title speaks of any of them."""
+    words: list[str] = []
+    search = config.get("search") if isinstance(config.get("search"), dict) else {}
+    words += [str(w) for w in (search.get("keywords") or []) + (search.get("intern_keywords") or [])]
+    for entry in (config.get("platforms") or {}).values():
+        if isinstance(entry, dict):
+            words += [str(w) for w in ((entry.get("search") or {}).get("keywords") or [])]
+    if conn is not None:
+        try:
+            import json as _json
+
+            for (tags_json,) in conn.execute("SELECT tags_json FROM platform_resumes").fetchall():
+                tags = _json.loads(tags_json or "{}")
+                words += [tag for tag, _ in sorted(tags.items(), key=lambda kv: -kv[1])[:limit]]
+        except Exception:
+            pass
+    terms: list[str] = []
+    for word in words:
+        for core in _extract_core_terms(word):
+            if core and core not in terms:
+                terms.append(core)
+    return terms
+
+
 # 51job's own sort buttons: 综合 = 0, 最新优先 = 1, 活跃职位优先 = 5 (read from the site's own requests).
 SORT_TYPES = {"default": "0", "newest": "1", "active": "5"}
 
@@ -580,12 +624,22 @@ class Job51Collector:
         if not allow_internship and _is_internship(candidate.title, candidate.experience):
             return False
         # collector 增值层：关键词相关性（方案 C）
-        if not _is_relevant_to_keyword(candidate.title, candidate.jd, kw):
+        if not self._is_relevant(candidate, kw):
             return False
         # collector 增值层：薪资范围
         if not _salary_within_range(candidate.salary, salary_min, salary_max, self.config.get("profile")):
             return False
         return True
+
+    def _is_relevant(self, candidate, kw: str) -> bool:
+        """Relevant to the keyword being searched, or to the candidate's resume (a job found through one keyword may
+        well fit the resume even when its title does not repeat that keyword)."""
+        if _is_relevant_to_keyword(candidate.title, candidate.jd, kw):
+            return True
+        terms = getattr(self, "_resume_terms_cache", None)
+        if terms is None:
+            terms = self._resume_terms_cache = resume_terms(self.config, self.safety_conn)
+        return _terms_match_title(candidate.title, terms)
 
     def _passes_collector_filters(self, candidate, kw, *, allow_internship, salary_min, salary_max) -> bool:
         return not self._collector_filter_reason(candidate, kw, allow_internship=allow_internship,
@@ -607,8 +661,8 @@ class Job51Collector:
         """
         if not allow_internship and _is_internship(candidate.title, candidate.experience):
             return "当前设置不接受实习岗位"
-        if not _is_relevant_to_keyword(candidate.title, candidate.jd, kw):
-            return "职位与搜索关键词不相关"
+        if not self._is_relevant(candidate, kw):
+            return "职位与搜索关键词、简历关键词都不相关"
         if not _salary_within_range(candidate.salary, salary_min, salary_max, self.config.get("profile")):
             return "薪资不符合设置范围"
         return ""
