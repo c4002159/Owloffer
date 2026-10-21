@@ -49,6 +49,10 @@ class CollectorHooks:
     # Checkpoints belong to one explicitly selected run, never to global searches.
     completed_page: Callable[[str, str], int] = lambda city, keyword: 0
     on_page_complete: Callable[[str, str, int], None] = lambda city, keyword, page: None
+    # (company, city, title) -> reason a posting of this company is not wanted ("" = go on). Lets a collector skip a list
+    # card whose company is blocked, rejected, already in the pool, applied to recently or in another city, without
+    # opening its detail page first. The reason is already counted as filtered.
+    on_list_company: Callable[[str, str, str], str] | None = None
 
 
 class Collector(Protocol):

@@ -1091,6 +1091,39 @@ class ZhilianCollector:
             raise CollectionError("search_not_applied", "智联搜索框关键词未生效，已停止采集以避免采到无关岗位")
         raise CollectionError("search_not_applied", "智联搜索结果未按目标关键词刷新，已停止采集以避免采到无关岗位")
 
+    def _direct_search_url(self, request: PlatformCollectionRequest, city: str, keyword: str) -> str:
+        """The search page with the city, the keyword and the site's own filters already in its address, so the first
+        results are already the filtered ones (jl 城市, kw 关键词, et 职位类型, we 经验, el 学历)."""
+        code = str(request.city_codes.get(city) or "").strip()
+        if not code:
+            raise CollectionError("no_valid_city", f"未配置智联城市编码：{city}")
+        params = {"jl": code, "kw": keyword, **(getattr(self, "_native_params", None) or {})}
+        return "https://www.zhaopin.com/jobs/?" + urlencode(params, quote_via=quote)
+
+    def _direct_results_ready(self, target_id: str, keyword: str, timeout: float = 12.0) -> bool:
+        """True when the page shows the keyword's results (search box filled, cards listed)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self._search_state(target_id)
+            if not state:
+                return False
+            if str(state.get("input") or "") == keyword and int(state.get("item_count") or 0) > 0:
+                return True
+            time.sleep(0.5)
+        return False
+
+    def _load_more(self, target_id: str, before: int, timeout: float = 10.0) -> bool:
+        """Scroll the list down so the next batch loads (the page has no page numbers: it keeps loading as you scroll).
+        True when more cards than ``before`` are there."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.browser.scroll(target_id, y=100000)
+            time.sleep(1.0)
+            count = self._parse_payload(self.browser.evaluate(target_id, "JSON.stringify({n: document.querySelectorAll('div.joblist-box__item, div.joblist-item, article.job-card, div.job-card').length})"))
+            if int(count.get("n") or 0) > before:
+                return True
+        return False
+
     @staticmethod
     def build_search_url(request: PlatformCollectionRequest, city: str, keyword: str, page: int) -> str:
         code = str(request.city_codes.get(city) or "").strip()
@@ -1436,8 +1469,12 @@ class ZhilianCollector:
                     target_id = self.browser.new_tab(initial_url, background=True)
                     if not target_id:
                         return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "无法打开智联搜索页")
-                    if self.browser.navigate_action is not None and not self.browser.navigate_action(target_id, search_url):
+                    direct = self.browser.navigate_action is not None
+                    first_url = self._direct_search_url(request, city, keyword) if direct else search_url
+                    if self.browser.navigate_action is not None and not self.browser.navigate_action(target_id, first_url):
                         return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "智联搜索页导航失败")
+                    scroll_mode = False                     # the page keeps loading as it is scrolled (no page numbers)
+                    seen_cards = 0
                     for page in range(start_page, request.max_pages + 1):
                         if hooks.stop_event is not None and hooks.stop_event.is_set():
                             return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
@@ -1445,9 +1482,18 @@ class ZhilianCollector:
                         try:
                             self.browser.wait_for_load(target_id, timeout=10)
                             if page == start_page:
-                                self._submit_keyword(target_id, keyword)
-                                if start_page > 1:
-                                    self.browser.evaluate(target_id, _build_page_script(page))
+                                if direct and self._direct_results_ready(target_id, keyword):
+                                    scroll_mode = True      # city, keyword and filters came with the address
+                                else:
+                                    if direct:              # the address did not give the results: the old way
+                                        self.browser.navigate_action(target_id, search_url)
+                                        self.browser.wait_for_load(target_id, timeout=10)
+                                    self._submit_keyword(target_id, keyword)
+                                    if start_page > 1:
+                                        self.browser.evaluate(target_id, _build_page_script(page))
+                            elif scroll_mode:
+                                if not self._load_more(target_id, seen_cards):
+                                    break                   # nothing more to load: the keyword is through
                             else:
                                 self.browser.evaluate(target_id, _build_page_script(page))
                             self.browser.wait_for_load(target_id, timeout=10)
@@ -1482,11 +1528,20 @@ class ZhilianCollector:
                             code = exc.code if isinstance(exc, CollectionError) else "selector_changed"
                             message = str(exc) or "智联列表解析失败，可能是页面结构变化"
                             return PlatformCollectionResult(self.platform, "blocked", code, message)
+                        if scroll_mode:
+                            items, seen_cards = items[seen_cards:], len(items)   # only the cards this scroll brought in
                         if not items:
                             break
                         for raw_item in items:
                             card_index = raw_item.get("card_index") if isinstance(raw_item, dict) else None
                             if card_index is not None:
+                                # What the card already tells (company, city) can rule it out before its page is opened.
+                                if hooks.on_list_company is not None and (raw_item.get("company") or "").strip():
+                                    if hooks.on_list_company(
+                                        str(raw_item.get("company")).strip(), str(raw_item.get("city") or "").strip(),
+                                        str(raw_item.get("title") or "").strip(),
+                                    ):
+                                        continue
                                 if detail_requests:
                                     delay = max(0.0, self.uniform(*self.delay_range))
                                     hooks.on_event(
@@ -1543,6 +1598,10 @@ class ZhilianCollector:
                                     continue
                                 if reason := update_age_reason(self.config, detail):
                                     hooks.on_event(message=reason, increment_filtered=True, filtered_candidate=final)
+                                    continue
+                                reason = self._salary_block_reason(final) or self._filter_reason(final)
+                                if reason:
+                                    hooks.on_event(message=f"智联 预筛：{reason}", increment_filtered=True, filtered_candidate=final)
                                     continue
                                 if not hooks.on_candidate(final):
                                     return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")

@@ -481,6 +481,31 @@ class _SharedProcessor:
         self.event()
         return True
 
+    def precheck_company(self, company: str, city: str, title: str = "") -> str:
+        """The company-level part of inspect(): why a posting of this company is not wanted ('' = fine).
+
+        Collectors that only see a company name and a city on their list cards ask this before opening a detail page.
+        """
+        profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
+        stub = JobCandidate(
+            platform=self.request.platform, source_job_id=f"card:{company}:{city}", title=title or "（详情页未读取）",
+            company=company, city=city,
+        )
+        reason = ""
+        if reason_city := self._city_mismatch(stub):
+            reason = reason_city
+        elif matched := matching_blocked_company(company, profile.get("blocked_companies") or []):
+            reason = f"公司命中屏蔽规则：{matched}"
+        elif matched := is_rejected_company(company, self.rejected_companies):
+            reason = f"公司已拒绝过：{matched}"
+        elif self.company_dedup and (matched := matching_company(company, self.recent_companies)):
+            reason = f"公司近期已投递过（任一平台）：{matched}"
+        elif self.company_dedup and (matched := matching_company(company, self.pool_companies)):
+            reason = f"公司已有岗位在岗位池中：{matched}"
+        if reason:
+            self.event(message=reason, increment_filtered=True, filtered_candidate=stub)
+        return reason
+
     def _city_mismatch(self, candidate: JobCandidate) -> str:
         """Reason when a non-BOSS posting is located outside the searched cities ('' = fine or unknown)."""
         wanted = [str(c).strip().removesuffix("市") for c in self.request.cities if str(c).strip()]
@@ -657,6 +682,7 @@ class CollectionOrchestrator:
                     can_checkpoint=lambda p=processor, baseline=prior_save_failures: p.progress.save_failed == baseline,
                     completed_page=(lambda city, keyword: checkpoint_pages.get(boss_combo_key(city, keyword), 0)),
                     on_page_complete=checkpoint if order == ["boss"] else lambda *_: None,
+                    on_list_company=processor.precheck_company,
                 )
                 try:
                     collector = (

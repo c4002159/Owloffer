@@ -1147,3 +1147,31 @@ class CheckpointLifetimeTests(TestCase):
         explicit = {"platforms": {name: {"search": {"resume_ttl_hours": 48}} for name in ("51job", "liepin", "zhilian")}}
         for collector in (Job51Collector(config=explicit), LiepinCollector(config=explicit), ZhilianCollector(config=explicit)):
             self.assertEqual(collector._resume_ttl_hours(), 48)
+
+
+class CompanyPrecheckTests(TestCase):
+    def test_a_company_can_be_ruled_out_from_its_list_card_alone(self):
+        answers = {}
+
+        class Cards:
+            platform = "zhilian"
+
+            def collect(self, request, hooks):
+                for company, city in (("已在池里的公司", "上海 浦东"), ("屏蔽公司", "上海 静安"), ("新公司", "深圳 南山"), ("新公司", "上海 徐汇")):
+                    answers[(company, city)] = hooks.on_list_company(company, city, "")
+                return PlatformCollectionResult("zhilian", "completed", "search_exhausted", "ok")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            conn = get_db(db_path)
+            insert_job(conn, {**_candidate("boss", "x").as_job_record(), "company": "已在池里的公司"})
+            conn.close()
+            config = {"automation": {"collect_company_dedup": True}, "profile": {"blocked_companies": ["屏蔽公司"]}}
+            options = _options(order=["zhilian"])
+            options["platforms"]["zhilian"].update(cities=["上海"], keywords=["AI"])
+            result = CollectionOrchestrator(config, db_path=db_path, registry=CollectorRegistry({"zhilian": Cards})).run(options)
+        self.assertIn("岗位池", answers[("已在池里的公司", "上海 浦东")])
+        self.assertIn("屏蔽", answers[("屏蔽公司", "上海 静安")])
+        self.assertIn("不在目标城市", answers[("新公司", "深圳 南山")])
+        self.assertEqual(answers[("新公司", "上海 徐汇")], "")
+        self.assertEqual(result["platforms"]["zhilian"]["filtered"], 3)           # the three refusals are counted as filtered

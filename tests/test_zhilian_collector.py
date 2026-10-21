@@ -312,18 +312,12 @@ class ZhilianFixtureTests(TestCase):
         ])
 
     def test_collector_reads_current_split_page_by_clicking_job_card(self):
-        search_state_calls = 0
-
         def evaluate_current(_target, script):
-            nonlocal search_state_calls
             if "item_count" in script:
-                search_state_calls += 1
-                if search_state_calls == 1:
-                    return json.dumps({"url": "https://www.zhaopin.com/jobs?jl=530", "input": "", "signature": "old"})
+                # The address carries the city, the keyword and the filters: the results are there at once.
                 return json.dumps({
-                    "url": "https://www.zhaopin.com/jobs?jl=530&pageMode=search&kw=AI运营",
-                    "input": "AI运营",
-                    "signature": "new",
+                    "url": "https://www.zhaopin.com/jobs/?jl=530&kw=AI%E8%BF%90%E8%90%A5&et=2",
+                    "input": "AI运营", "item_count": 1, "signature": "new",
                 })
             if "submitted_by" in script:
                 return json.dumps({"ok": True, "value": "AI运营", "submitted_by": "button"})
@@ -365,9 +359,9 @@ class ZhilianFixtureTests(TestCase):
         )
 
         self.assertEqual(result.reason_code, "callback_stopped")
-        self.assertEqual(navigated[0], "https://www.zhaopin.com/sou/jl530/")
-        self.assertIn("et=2", navigated[1])                       # then the site's own full-time filter is applied
-        self.assertEqual(len(navigated), 2)
+        self.assertEqual(len(navigated), 1)                       # straight to the filtered search page
+        self.assertTrue(navigated[0].startswith("https://www.zhaopin.com/jobs/?jl=530&kw="))
+        self.assertIn("et=2", navigated[0])                       # city, keyword and the full-time filter in the address
         self.assertEqual(collected[0].storage_id, "zhilian:CC123J40800000001")
         self.assertIn("用户增长", collected[0].jd)
 
@@ -1254,3 +1248,64 @@ class ZhilianUpdateAgeTests(TestCase):
         base = JobCandidate(platform="zhilian", source_job_id="1", title="t", company="c")
         candidate = ZhilianCollector._candidate_from_detail({"jd": "x", "updated": self._days_ago(3)}, base)
         self.assertEqual(candidate.updated_days, 3.0)
+
+
+class ZhilianScrollPagingTests(TestCase):
+    def test_the_direct_address_has_city_keyword_and_filters(self):
+        collector = ZhilianCollector(config={})
+        collector._native_params = {"et": "2", "we": "-1,0001"}
+        url = collector._direct_search_url(
+            PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"}), "上海", "Agent工程师")
+        self.assertTrue(url.startswith("https://www.zhaopin.com/jobs/?"))
+        for part in ("jl=538", "kw=Agent%E5%B7%A5%E7%A8%8B%E5%B8%88", "et=2", "we=-1%2C0001"):
+            self.assertIn(part, url)
+
+    def test_more_cards_are_loaded_by_scrolling_not_by_a_page_address(self):
+        counts = iter([20, 20, 40])
+        scrolls = []
+        browser = ZhilianBrowser(
+            evaluate=lambda _t, _s: json.dumps({"n": next(counts)}), scroll=lambda *_a, **kw: scrolls.append(kw) or True,
+        )
+        collector = ZhilianCollector(browser=browser)
+        self.assertTrue(collector._load_more("t", 20, timeout=5))
+        self.assertEqual(len(scrolls), 3)                          # it scrolled until the third look found more cards
+        stuck = ZhilianCollector(browser=ZhilianBrowser(evaluate=lambda _t, _s: json.dumps({"n": 20}),
+                                                        scroll=lambda *_a, **_kw: True))
+        self.assertFalse(stuck._load_more("t", 20, timeout=1.2))   # nothing more to load: the keyword is through
+
+    def test_a_card_of_an_unwanted_company_is_skipped_before_its_page_is_opened(self):
+        clicks = []
+        reasons = []
+
+        def evaluate(_target, script):
+            if "item_count" in script:
+                return json.dumps({"url": "u", "input": "AI", "item_count": 2, "signature": "s"})
+            if "card.click()" in script:
+                clicks.append(script)
+                return json.dumps({"ok": True})
+            if "descriptionCard" in script:
+                return json.dumps({"status": "selector_changed"})
+            return json.dumps({"status": "ready", "items": [
+                {"card_index": 0, "company": "已投过的公司", "city": "上海 浦东", "salary": "1-2万"},
+                {"card_index": 1, "company": "新公司", "city": "深圳 南山", "salary": "1-2万"},
+            ]})
+
+        browser = ZhilianBrowser(
+            new_tab=lambda *_a, **_k: "tab", close_tab=lambda _t: True, evaluate=evaluate, scroll=lambda *_a, **_k: True,
+            wait_for_load=lambda *_a, **_k: True, navigate_action=lambda *_a: True,
+        )
+
+        def precheck(company, city, title):
+            reason = "公司近期已投递过" if company == "已投过的公司" else "工作地点不在目标城市" if "深圳" in city else ""
+            if reason:
+                reasons.append(reason)
+            return reason
+
+        hooks = CollectorHooks(
+            stop_event=None, on_list_candidate=lambda c: True, on_candidate=lambda c: False,
+            on_parse_failed=lambda r: None, on_event=lambda **_kw: None, on_list_company=precheck,
+        )
+        ZhilianCollector(browser=browser, sleep=lambda _s: None).collect(
+            PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"}, max_pages=1), hooks)
+        self.assertEqual(reasons, ["公司近期已投递过", "工作地点不在目标城市"])
+        self.assertEqual(clicks, [])                              # neither card was opened
