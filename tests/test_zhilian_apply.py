@@ -67,8 +67,8 @@ def _apply(fake, greeting="", **config):
     return result
 
 
-def test_delivery_stays_locked_until_a_real_application_has_been_verified():
-    assert not platform_supports("zhilian", "deliver")          # flip this (capabilities.py) after the first verified send
+def test_ordinary_zhilian_delivery_is_enabled_but_campus_stays_manual():
+    assert platform_supports("zhilian", "deliver")          # verified on the live site: apply + customized greeting
     assert not platform_supports("zhilian_campus", "deliver")
 
 

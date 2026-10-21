@@ -23,6 +23,7 @@ IM_URL_PART = "i.zhaopin.com/im"
 
 PAGE_STATE_JS = r"""
 (() => {
+  const shown = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };  // fixed elements have no offsetParent
   const body = document.body ? document.body.innerText : '';
   const point = (el) => {
     if (!el) return {x: 0, y: 0, clickable: false};
@@ -32,10 +33,10 @@ PAGE_STATE_JS = r"""
     const top = document.elementFromPoint(x, y);
     return {x, y, clickable: !!(top && (el === top || el.contains(top)) && x > 0 && y > 0 && x < innerWidth && y < innerHeight)};
   };
-  const apply = [...document.querySelectorAll('button.job-detail-summary__apply')].find((b) => b.offsetParent !== null);
-  const modal = [...document.querySelectorAll('.deliver-greeting-modal')].find((m) => m.offsetParent !== null);
-  const stay = modal ? modal.querySelector('.deliver-greeting-modal__btn--sec') : null;
-  const next = modal ? modal.querySelector('.deliver-greeting-modal__btn--pri') : null;
+  const apply = [...document.querySelectorAll('.summary-planes__action button, button.job-detail-summary__apply')].find((b) => shown(b));
+  const modal = [...document.querySelectorAll('.deliver-greeting-modal')].find((m) => shown(m));
+  const byText = (text) => modal ? [...modal.querySelectorAll('button')].find((b) => (b.innerText || '').replace(/\s+/g, '').includes(text)) : null;
+  const stay = byText('留在此页'), next = byText('继续沟通');
   const applyPoint = modal ? {x: 0, y: 0, clickable: false} : point(apply);
   const stayPoint = point(stay), nextPoint = point(next);
   return JSON.stringify({
@@ -53,6 +54,7 @@ PAGE_STATE_JS = r"""
 
 CHAT_STATE_JS = r"""
 (() => {
+  const shown = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };  // fixed elements have no offsetParent
   const point = (el) => {
     if (!el) return {x: 0, y: 0, ok: false};
     const r = el.getBoundingClientRect();
@@ -60,8 +62,8 @@ CHAT_STATE_JS = r"""
     const top = document.elementFromPoint(x, y);
     return {x, y, ok: !!(top && (el === top || el.contains(top)) && x > 0 && y > 0 && x < innerWidth && y < innerHeight)};
   };
-  const input = [...document.querySelectorAll('textarea.im-sender__input')].find((e) => e.offsetParent !== null);
-  const send = [...document.querySelectorAll('button.im-sender__send-btn')].find((e) => e.offsetParent !== null);
+  const input = [...document.querySelectorAll('textarea.im-sender__input')].find((e) => shown(e));
+  const send = [...document.querySelectorAll('button.im-sender__send-btn')].find((e) => shown(e));
   const inputPoint = point(input), sendPoint = point(send);
   const messages = [...document.querySelectorAll('.im-msg-text')].map((e) => (e.innerText || '').replace(/\s+/g, ' ').trim());
   return JSON.stringify({

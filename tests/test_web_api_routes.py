@@ -1264,7 +1264,7 @@ class WebApiRouteTests(unittest.TestCase):
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
                 external = _job("zhilian-ready")
-                external.update({"source_platform": "zhilian", "source_job_id": "zhilian-ready"})
+                external.update({"source_platform": "zhilian_campus", "source_job_id": "zhilian-ready"})
                 insert_job(db, external)
                 update_job_score(db, "zhilian-ready", 90, "匹配")
                 update_job_status(db, "zhilian-ready", "ready")
@@ -4154,10 +4154,10 @@ class WebApiRouteTests(unittest.TestCase):
             "search": {"keywords": ["人力"], "cities": ["深圳"]},
             "profile": {"resume_path": "C:/resume.md"},
             "ai": {"api_key": "test-key"},
-            "collection": {"default_order": ["boss", "zhilian"]},
+            "collection": {"default_order": ["boss", "zhilian_campus"]},
             "platforms": {
                 "boss": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
-                "zhilian": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
+                "zhilian_campus": {"enabled": True, "search": {"keywords": ["人力"], "cities": ["深圳"]}},
             },
         }
         with patch.object(server, "load_config", return_value=config), patch.object(server, "_preflight_messages", return_value=[]), patch.object(
@@ -4166,7 +4166,7 @@ class WebApiRouteTests(unittest.TestCase):
             status, _, body = self._request("/api/workbench/task", method="POST", json_body={"mode": "full"})
 
         self.assertTrue(status.startswith("400"), body)
-        self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian"])
+        self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian_campus"])
         start.assert_not_called()
 
     def test_full_task_rejects_collection_only_platform_from_dialog(self):
@@ -4176,14 +4176,14 @@ class WebApiRouteTests(unittest.TestCase):
             "collection": {"default_order": ["boss"]},
             "platforms": {
                 "boss": {"enabled": True, "search": {}},
-                "zhilian": {"enabled": False, "search": {}},
+                "zhilian_campus": {"enabled": False, "search": {}},
             },
         }
         options = {
-            "platform_order": ["zhilian"],
+            "platform_order": ["zhilian_campus"],
             "auto_score": False,
             "platforms": {
-                "zhilian": {
+                "zhilian_campus": {
                     "keywords": ["人力"],
                     "cities": ["深圳"],
                     "city_codes": {"深圳": "765"},
@@ -4203,7 +4203,7 @@ class WebApiRouteTests(unittest.TestCase):
             )
 
         self.assertTrue(status.startswith("400"), body)
-        self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian"])
+        self.assertEqual(json.loads(body)["collection_only_platforms"], ["zhilian_campus"])
         start.assert_not_called()
         write_config.assert_not_called()
 

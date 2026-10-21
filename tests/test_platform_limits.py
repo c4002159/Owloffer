@@ -46,11 +46,11 @@ def pool(tmp_path):
         conn.execute("UPDATE jobs SET status = ?, score = ? WHERE id = ?", (status, score, job_id))
         conn.commit()
 
-    add("z1", "华为技术有限公司", "zhilian", "ready", 90)
-    add("z2", "上海华为", "zhilian", "ready", 70)             # same company as z1: only the better one is listed
-    add("z3", "美团", "zhilian", "scored")                     # the company was already applied to on BOSS
-    add("z4", "小米科技", "zhilian", "approved")
-    add("z5", "字节跳动", "zhilian", "sent")                   # already handled: history, not manual list
+    add("z1", "华为技术有限公司", "zhilian_campus", "ready", 90)
+    add("z2", "上海华为", "zhilian_campus", "ready", 70)             # same company as z1: only the better one is listed
+    add("z3", "美团", "zhilian_campus", "scored")                     # the company was already applied to on BOSS
+    add("z4", "小米科技", "zhilian_campus", "approved")
+    add("z5", "字节跳动", "zhilian_campus", "sent")                   # already handled: history, not manual list
     add("b1", "美团科技有限公司", "boss", "sent")
     add_history(conn, "b1", "sent")
     add("b2", "腾讯", "boss", "ready")

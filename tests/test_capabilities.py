@@ -17,7 +17,7 @@ class PlatformCapabilitiesTests(unittest.TestCase):
             self.assertTrue(platform_supports(platform, "score"))
             self.assertTrue(platform_supports(platform, "greet"))
             # 51job applies from the job page (executor/job51_apply.py); the others stay manual.
-            self.assertEqual(platform_supports(platform, "deliver"), platform in {"51job", "liepin"})
+            self.assertEqual(platform_supports(platform, "deliver"), platform in {"51job", "liepin", "zhilian"})
             self.assertFalse(platform_supports(platform, "monitor"))
 
     def test_unknown_platform_supports_nothing(self):

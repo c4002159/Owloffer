@@ -5,7 +5,7 @@ PLATFORM_CAPABILITIES: dict[str, frozenset[str]] = {
     # New platforms start read-only. Delivery and monitoring stay locked until
     # an authorized real-account acceptance test has verified the live DOM and
     # the maintainer explicitly enables those capabilities in a later change.
-    "zhilian": frozenset({"collect", "score", "greet"}),
+    "zhilian": frozenset({"collect", "score", "greet", "deliver"}),
     "zhilian_campus": frozenset({"collect", "score", "greet"}),
     # 51job applies from the job page; a send counts only after the page shows 已投递 (executor/job51_apply.py).
     "51job": frozenset({"collect", "score", "greet", "deliver"}),
