@@ -42,7 +42,7 @@ from bosshunter.config import (
 	save_config,
 	validate_config_send_windows,
 )
-from bosshunter.platform_limits import PLATFORM_NAMES, limits_today
+from bosshunter.platform_limits import PLATFORM_NAMES, limit_details, limits_today
 from bosshunter.db import (
 	GREETING_ALLOWED_STATUSES,
 	REJECT_ALLOWED_STATUSES,
@@ -1689,6 +1689,7 @@ def api_workbench():
 			"delivery_job_ids": _active_delivery_job_ids(status),
 			"busy_jobs": _busy_jobs(status),
 			"platform_limits_today": limits_today(db),
+			"platform_limit_details": limit_details(db),
 			"queued_tasks": [_task_summary(item) for item in status.get("queued") or []],
 			"recent_tasks": [_task_summary(item) for item in (status.get("tasks") or [])[-8:]][::-1],
 			"funnel": get_funnel_stats(db),

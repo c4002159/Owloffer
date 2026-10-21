@@ -17,6 +17,7 @@ import { JobFilterBar } from '@/components/jobs/JobFilterBar'
 import { InterviewPreparation } from '@/components/jobs/InterviewPreparation'
 import { parseHistoryDetail } from '@/lib/historyDetail'
 import { PLATFORM_LABELS } from '@/lib/platforms'
+import { PlatformLimitNotice } from '@/components/dashboard/PlatformLimitNotice'
 import {
   EMPTY_JOB_FILTERS,
   filterJobs,
@@ -998,11 +999,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             )
           })}
         </div>
-        {Object.keys(workbench.platform_limits_today ?? {}).length > 0 && (
-          <div role="alert" className="rounded-xl border border-warning bg-warning-soft px-4 py-3 text-sm font-bold text-warning-strong">
-            {Object.entries(workbench.platform_limits_today ?? {}).map(([platform, reason]) => `${PLATFORM_LABELS[platform] || platform}：${reason || '今天已暂停'}`).join('；')}。已暂停该平台，岗位仍留在「待投递」；今天再次采集会先让你确认，无人值守的定时任务会跳过它。
-          </div>
-        )}
+        <PlatformLimitNotice details={workbench.platform_limit_details ?? {}} />
         {!showGettingStarted && notice && <CompactNotice message={notice} />}
         {!showGettingStarted && preflightChecks.some(check => check.status !== 'pass') && (
           <PreflightPanel checks={preflightChecks} checking={Boolean(modePending) || preflightRunning} onRetry={retryPreflight} />

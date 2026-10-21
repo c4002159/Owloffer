@@ -130,6 +130,7 @@ interface WorkbenchData {
   delivery_job_ids?: string[]
   busy_jobs?: Record<string, string>
   platform_limits_today?: Record<string, string>
+  platform_limit_details?: Record<string, { reason: string; since: string; until: string }>
   recent_tasks?: TaskSummary[]
   pending_greetings: Job[]
   send_errors: Job[]

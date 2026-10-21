@@ -121,3 +121,16 @@ def test_a_verification_stop_only_cools_the_platform_down_for_a_while(tmp_path):
     conn.commit()
     assert "liepin" not in limits_today(conn)                                      # the cooldown ran out
     conn.close()
+
+
+def test_the_details_say_when_it_happened_and_when_a_cooldown_ends(tmp_path):
+    from bosshunter.platform_limits import limit_details
+
+    conn = get_db(tmp_path / "t.db")
+    mark_limit_reached(conn, "liepin", "采集遇到验证或限流，暂停 30 分钟", minutes=30)
+    mark_limit_reached(conn, "zhilian", "采集异常已暂停（selector_changed）：智联职位卡结构变化")
+    details = limit_details(conn)
+    assert details["liepin"]["until"] and details["liepin"]["since"] < details["liepin"]["until"]
+    assert details["zhilian"]["until"] == "" and "T" in details["zhilian"]["since"]       # local time, set when it happened
+    assert details["zhilian"]["reason"].startswith("采集异常已暂停")
+    conn.close()
