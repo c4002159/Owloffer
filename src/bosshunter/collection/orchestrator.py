@@ -326,6 +326,7 @@ class _SharedProcessor:
         self.repeat_ratio = float(automation.get("repeat_ratio", 0.8) or 0.8)
         self.repeat_strikes_limit = int(automation.get("repeat_strikes", 2) or 2)
         self.abandoned_keyword = False
+        self.active_new = 0
         self.reset_keyword_window()
 
     def reset_keyword_window(self) -> None:
@@ -483,6 +484,10 @@ class _SharedProcessor:
         if inserted:
             self.new_job_ids.append(candidate.storage_id)
             self.pool_companies.append(candidate.company)
+            from bosshunter.ai.prefilter import hr_active_level
+
+            if (hr_active_level(candidate.hr_active) or 0) >= 2:        # active within about three days
+                self.active_new += 1
             record_sighting(self.conn, candidate.storage_id)
         else:
             self.progress.duplicate += 1
@@ -804,6 +809,11 @@ class CollectionOrchestrator:
             request = replace(request, max_pages=min(request.max_pages, kp.SPOT_CHECK_PAGES))
             processor.event(message=f"今天的关键词都采完了，抽检 {len(pending)} 个：{'、'.join(pending)}")
         start_total = len(processor.new_job_ids)
+        variants: list[str] = []
+        if not intern and request.platform == "liepin":
+            from bosshunter.experience_level import liepin_variants
+
+            variants = liepin_variants(self.config, request.filters)
         for round_no in range(3 if target and not spot_check else 1):              # later rounds top up the keywords that hit their cap
             for word in list(pending):
                 if self.stop_event is not None and self.stop_event.is_set():
@@ -817,8 +827,16 @@ class CollectionOrchestrator:
                     cap = max(1, min(cap, target - got))
                 processor.cap_total = before + cap
                 processor.reset_keyword_window()
+                variant, active0 = "", processor.active_new
+                word_request = replace(request, keywords=[word])
+                if variants:
+                    from bosshunter import experience_bandit as bandit
+
+                    variant = bandit.choose(conn, request.platform, variants)
+                    word_request = replace(word_request, filters={**request.filters, "work_year": variant})
+                    processor.event(message=f"「{word}」这次用经验标签 {variant}")
                 try:
-                    result = collector.collect(replace(request, keywords=[word]), hooks)
+                    result = collector.collect(word_request, hooks)
                 except CollectionError as exc:
                     if exc.code != "callback_stopped":
                         raise
@@ -831,9 +849,16 @@ class CollectionOrchestrator:
                     filtered=processor.progress.filtered - filtered0,
                 )
                 results.append(result)
+                if variant:
+                    bandit.record(
+                        conn, request.platform, variant, seen=processor.progress.seen - seen0,
+                        new=len(processor.new_job_ids) - before, active=processor.active_new - active0,
+                    )
                 if result.status not in ok and result.reason_code != "callback_stopped":
                     return result                               # a safety stop ends the whole platform
-                finished = (result.status == "completed" and result.reason_code != "callback_stopped") or processor.abandoned_keyword
+                finished = (
+                    result.status == "completed" and result.reason_code not in {"callback_stopped", "day_off", "outside_window"}
+                ) or processor.abandoned_keyword
                 if finished and not capped and not spot_check:  # searched to its end (or given up as stale / repeated)
                     kp.mark_done(conn, request.platform, kind, word)
                     pending.remove(word)

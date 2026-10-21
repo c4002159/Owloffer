@@ -1065,3 +1065,37 @@ class KeywordRotationTests(TestCase):
             CollectionOrchestrator(self.CONFIG, db_path=db_path, registry=CollectorRegistry({"51job": Repeats})).run(options)
         self.assertEqual(calls, ["甲", "乙"])                                 # 乙 still got its turn
         self.assertLess(len(listed), 60)                                      # 甲 was cut short after two repeated pages
+
+
+class ExperienceTagAlternationTests(TestCase):
+    def test_liepin_searches_alternate_between_the_tags_and_the_results_feed_the_odds(self):
+        from bosshunter import experience_bandit as bandit
+
+        used = []
+
+        class Collector:
+            def collect(self, request, hooks):
+                used.append(request.filters.get("work_year"))
+                word = request.keywords[0]
+                for index in range(2):
+                    candidate = JobCandidate(**{**_candidate("liepin", f"{word}-{index}-{used[-1]}", f"{word}岗位").__dict__,
+                                                "company": f"{word}{used[-1]}公司{index}号", "city": "上海",
+                                                "hr_active": "刚刚活跃"})
+                    if hooks.on_list_candidate(candidate):
+                        hooks.on_candidate(candidate)
+                return PlatformCollectionResult("liepin", "completed", "search_exhausted", "ok")
+
+        options = _options(order=["liepin"])
+        options["platforms"]["liepin"].update(cities=["上海"], keywords=[f"词{i}" for i in range(12)])
+        options["quotas"] = {"fulltime": 10, "internship": 0}
+        config = {"automation": {"keyword_budget": True}, "_experience_level": "fresh",
+                  "profile": {"resume_path": ""}}
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            CollectionOrchestrator(config, db_path=db_path, registry=CollectorRegistry({"liepin": Collector})).run(options)
+            conn = get_db(db_path)
+            recorded = bandit.stats(conn, "liepin")
+            conn.close()
+        self.assertEqual(set(used), {"1", "0$1"})                                  # both tags were tried
+        self.assertEqual(sum(entry["new"] for entry in recorded.values()), 24)     # 12 keywords x 2 new jobs
+        self.assertEqual(sum(entry["active"] for entry in recorded.values()), 24)  # all of them had an active HR

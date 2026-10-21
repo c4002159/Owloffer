@@ -433,10 +433,16 @@ class LiepinCollector:
             if not request.city_codes.get(city):
                 return PlatformCollectionResult(self.platform, "failed", "no_valid_city", f"猎聘城市编码未配置：{city}")
 
+        # The checkpoints are per experience tag too: the same keyword under another tag is another search.
+        work_year = str((request.filters or {}).get("work_year") or "")
+
+        def ckey(word: str) -> str:
+            return f"{word}|{work_year}" if work_year else word
+
         # 词级断点续采：跳过最近 N 小时内已完成的 (city, keyword) 组合。
         collected_combos: set[tuple[str, str]] = set()
         if self.safety_conn is not None:
-            all_keywords = set(request.keywords)
+            all_keywords = {ckey(word) for word in request.keywords}
             prune_collected_combos(self.safety_conn, "liepin", all_keywords)
             prune_page_progress(self.safety_conn, "liepin", all_keywords)
             collected_combos = get_collected_combos(
@@ -454,21 +460,21 @@ class LiepinCollector:
 
         for city in request.cities:
             for keyword in request.keywords:
-                if (city, keyword) in collected_combos:
+                if (city, ckey(keyword)) in collected_combos:
                     hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
                                    message=f"猎聘 {keyword} 断点续采：{self._resume_ttl_hours()}h 内已完成，整词跳过")
                     continue
                 # 页级断点：从上次采到页码的下一页继续
                 saved_page = (
-                    get_page_progress(self.safety_conn, "liepin", city, keyword, within_hours=self._resume_ttl_hours())
+                    get_page_progress(self.safety_conn, "liepin", city, ckey(keyword), within_hours=self._resume_ttl_hours())
                     if self.safety_conn is not None
                     else 0
                 )
                 start_page = saved_page + 1 if saved_page > 0 else 1
                 if start_page > request.max_pages:
                     if self.safety_conn is not None:
-                        mark_combo_collected(self.safety_conn, "liepin", city, keyword)
-                        delete_page_progress(self.safety_conn, "liepin", city, keyword)
+                        mark_combo_collected(self.safety_conn, "liepin", city, ckey(keyword))
+                        delete_page_progress(self.safety_conn, "liepin", city, ckey(keyword))
                     hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
                                    message=f"猎聘 {keyword} 页级断点已超最大页（{saved_page}/{request.max_pages}），视为已采完，跳过")
                     continue
@@ -617,12 +623,12 @@ class LiepinCollector:
                                 "猎聘详情页暂时不可用，保留上一完整页断点，下次重试",
                             )
                         if self.safety_conn is not None:
-                            upsert_page_progress(self.safety_conn, "liepin", city, keyword, page)
+                            upsert_page_progress(self.safety_conn, "liepin", city, ckey(keyword), page)
                 finally:
                     self.browser.close_tab(target_id)
                 if self.safety_conn is not None:
-                    mark_combo_collected(self.safety_conn, "liepin", city, keyword)
-                    delete_page_progress(self.safety_conn, "liepin", city, keyword)
+                    mark_combo_collected(self.safety_conn, "liepin", city, ckey(keyword))
+                    delete_page_progress(self.safety_conn, "liepin", city, ckey(keyword))
         return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "猎聘搜索结果已采集完毕")
 
     @staticmethod

@@ -30,6 +30,21 @@ PROMPT = """根据下面这份简历，判断候选人的工作经验档位。�
 """
 
 
+# A platform whose experience filter takes a single value gets several tags to alternate between.
+LIEPIN_VARIANTS = {"fresh": ["1", "0$1"], "under1": ["0$1", "1"], "1-3": ["1$3", "0$1"]}
+
+
+def liepin_variants(config: dict, filters: dict | None = None) -> list[str]:
+    """The Liepin experience codes to alternate between ([] when one is set explicitly or the level has only one)."""
+    if "work_year" in (filters or {}):
+        return []
+    platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
+    own = ((platforms.get("liepin") or {}).get("search") or {}).get("filters") or {}
+    if "work_year" in own:
+        return []
+    return list(LIEPIN_VARIANTS.get(str(config.get("_experience_level") or ""), []))
+
+
 def parse_level(answer: str | None) -> str:
     """The level in the model's answer ('' when there is none)."""
     if not answer:

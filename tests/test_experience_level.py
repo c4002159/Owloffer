@@ -75,3 +75,32 @@ def test_the_boss_experience_setting_is_only_a_fallback_without_a_resume_level()
     assert native_filters_query(boss) == "&workYear=01,06&jobType=01"
     assert _work_year_code(boss) == "1"
     assert native_filters_query({**boss, "_experience_level": "5-10"}) == "&jobType=01"            # the resume says otherwise
+
+
+def test_the_tags_start_equally_likely_and_follow_the_quality_of_the_searches(tmp_path):
+    import random
+
+    from bosshunter import experience_bandit as bandit
+    from bosshunter.db import get_db
+
+    conn = get_db(tmp_path / "t.db")
+    odds = bandit.weights(conn, "liepin", ["1", "0$1"])
+    assert odds["1"] == pytest.approx(0.5) and odds["0$1"] == pytest.approx(0.5)              # no data: equal odds
+    bandit.record(conn, "liepin", "1", seen=100, new=60, active=50)                           # 应届生: new and active jobs
+    bandit.record(conn, "liepin", "0$1", seen=100, new=10, active=1)                          # 一年以内: mostly repeats
+    odds = bandit.weights(conn, "liepin", ["1", "0$1"])
+    assert odds["1"] > 0.8 and odds["0$1"] >= bandit.FLOOR - 1e-9                              # never below the floor
+    picks = [bandit.choose(conn, "liepin", ["1", "0$1"], random.Random(seed)) for seed in range(300)]
+    assert 0.7 < picks.count("1") / 300 < 0.97 and "0$1" in picks                             # mostly 应届生, still tries the other
+    assert bandit.choose(conn, "liepin", ["only"]) == "only"
+    conn.close()
+
+
+def test_liepin_alternates_only_when_nothing_is_set_explicitly():
+    from bosshunter.experience_level import liepin_variants
+
+    assert liepin_variants({"_experience_level": "fresh"}) == ["1", "0$1"]
+    assert liepin_variants({"_experience_level": "5-10"}) == []
+    assert liepin_variants({"_experience_level": "fresh"}, {"work_year": "2"}) == []
+    own = {"_experience_level": "fresh", "platforms": {"liepin": {"search": {"filters": {"work_year": "1"}}}}}
+    assert liepin_variants(own) == []
