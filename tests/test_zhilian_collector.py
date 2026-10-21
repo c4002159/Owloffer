@@ -1213,3 +1213,40 @@ class ZhilianNativeFilterTests(TestCase):
         self.assertEqual(len(navigated), 1)
         self.assertIn("el=4", navigated[0])
         self.assertIn("et=2", navigated[0])
+
+
+class ZhilianUpdateAgeTests(TestCase):
+    @staticmethod
+    def _days_ago(days):
+        from datetime import date, timedelta
+
+        return (date.today() - timedelta(days=days)).isoformat()
+
+    def test_campus_postings_may_be_updated_up_to_30_days_ago_others_only_5(self):
+        from bosshunter.collection.platforms.zhilian import update_age_reason
+
+        self.assertEqual(update_age_reason({}, {"updated": self._days_ago(20), "campus": True}), "")
+        self.assertIn("校招网申", update_age_reason({}, {"updated": self._days_ago(31), "campus": True}))
+        self.assertEqual(update_age_reason({}, {"updated": self._days_ago(5), "campus": False}), "")
+        reason = update_age_reason({}, {"updated": self._days_ago(6), "campus": False})
+        self.assertIn("普通岗位上限 5 天", reason)
+
+    def test_a_missing_or_unreadable_date_is_not_a_reason_to_drop_the_job(self):
+        from bosshunter.collection.platforms.zhilian import update_age_reason
+
+        self.assertEqual(update_age_reason({}, {}), "")
+        self.assertEqual(update_age_reason({}, {"updated": "昨天", "campus": False}), "")
+
+    def test_the_limits_can_be_changed_in_the_zhilian_config(self):
+        from bosshunter.collection.platforms.zhilian import update_age_reason
+
+        config = {"platforms": {"zhilian": {"search": {"max_update_days": 10, "campus_update_days": 0}}}}
+        self.assertEqual(update_age_reason(config, {"updated": self._days_ago(9), "campus": False}), "")
+        self.assertEqual(update_age_reason(config, {"updated": self._days_ago(300), "campus": True}), "")   # 0 = no limit
+
+    def test_the_update_date_becomes_updated_days_on_the_candidate(self):
+        from bosshunter.collection.models import JobCandidate
+
+        base = JobCandidate(platform="zhilian", source_job_id="1", title="t", company="c")
+        candidate = ZhilianCollector._candidate_from_detail({"jd": "x", "updated": self._days_ago(3)}, base)
+        self.assertEqual(candidate.updated_days, 3.0)

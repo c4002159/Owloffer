@@ -291,8 +291,14 @@ JS_EXTRACT_DETAIL = """
   const cityText = cityNode ? cityNode.textContent.trim() : '';
   const city = expectedCity && cityText.includes(expectedCity) ? expectedCity : cityText;
   const activeMatch = (document.body ? document.body.innerText : '').match(/当前在线|刚刚在线|\\S{1,6}前在线|今日在线|本周在线|\\d+日内活跃/);
+  // Zhilian shows no HR activity on most pages; the posting's own "YYYY-MM-DD 更新" date and the 校招网申 badge next to the
+  // title stand in for it.
+  const updatedMatch = (document.body ? document.body.innerText : '').match(/(\\d{4}-\\d{2}-\\d{2})\\s*更新/);
+  const head = title ? (title.closest('.job-detail-summary, .summary-planes, header') || (title.parentElement ? title.parentElement.parentElement : null)) : null;
+  const campus = Boolean(head && /校招网申/.test(head.textContent || ''));
   return JSON.stringify({
     hr_active: activeMatch ? activeMatch[0] : '',
+    updated: updatedMatch ? updatedMatch[1] : '', campus,
     // Normal logged-in pages can contain incidental login copy in headers,
     // footers or ads. A readable JD always wins; otherwise require structural
     // login evidence (login URL/dialog) or a page with no job identity at all.
@@ -373,6 +379,39 @@ def _with_params(url: str, params: dict[str, str]) -> str:
     query = {key: values[0] for key, values in parse_qs(parts.query, keep_blank_values=True).items()}
     query.update(params)
     return urlunparse(parts._replace(query=urlencode(query)))
+
+
+def _updated_days(text: Any) -> float | None:
+    """Days since a 'YYYY-MM-DD' update date; None when it is missing or unreadable."""
+    from datetime import date, datetime
+
+    try:
+        updated = datetime.strptime(str(text or "").strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return float(max((date.today() - updated).days, 0))
+
+
+def update_age_reason(config: dict, detail: dict[str, Any]) -> str:
+    """Why a posting is too old ('' = fine or unknown).
+
+    Zhilian hardly ever shows HR activity, so freshness stands in for it: a posting marked 校招网申 may be updated up to
+    ``campus_update_days`` (30) ago, any other one at most ``max_update_days`` (5) ago.
+    """
+    days = _updated_days(detail.get("updated"))
+    if days is None:
+        return ""
+    platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
+    search = ((platforms.get("zhilian") or {}).get("search") or {})
+    campus = bool(detail.get("campus"))
+    key, default = ("campus_update_days", 30) if campus else ("max_update_days", 5)
+    try:
+        limit = float(search.get(key, default))
+    except (TypeError, ValueError):
+        limit = float(default)
+    if limit > 0 and days > limit:
+        return f"岗位 {int(days)} 天前更新，超过{'校招网申' if campus else '普通岗位'}上限 {limit:g} 天"
+    return ""
 
 
 def url_value(url: str, name: str) -> str:
@@ -1498,6 +1537,9 @@ class ZhilianCollector:
                                 except (CollectionError, json.JSONDecodeError, TypeError, ValueError) as exc:
                                     hooks.on_parse_failed(str(exc) or "智联侧栏详情解析失败")
                                     continue
+                                if reason := update_age_reason(self.config, detail):
+                                    hooks.on_event(message=reason, increment_filtered=True, filtered_candidate=final)
+                                    continue
                                 if not hooks.on_candidate(final):
                                     return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
                                 continue
@@ -1567,6 +1609,9 @@ class ZhilianCollector:
                             except (CollectionError, json.JSONDecodeError, TypeError) as exc:
                                 hooks.on_parse_failed(str(exc) or "智联详情解析失败")
                                 continue
+                            if reason := update_age_reason(self.config, detail):
+                                hooks.on_event(message=reason, increment_filtered=True, filtered_candidate=final)
+                                continue
                             if not hooks.on_candidate(final):
                                 return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
                         # 页级断点：每采完一页立即记录页码
@@ -1611,5 +1656,5 @@ class ZhilianCollector:
             salary=str(detail.get("salary") or base.salary).strip(), city=str(detail.get("city") or base.city).strip(),
             experience=str(detail.get("experience") or "").strip(), education=str(detail.get("education") or "").strip(),
             jd=str(detail.get("jd") or "").strip(), hr_active=str(detail.get("hr_active") or "").strip(), url=detail_url,
-            source_keyword=base.source_keyword,
+            source_keyword=base.source_keyword, updated_days=_updated_days(detail.get("updated")),
         )
