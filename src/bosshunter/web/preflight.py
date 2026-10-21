@@ -19,7 +19,7 @@ from bosshunter.ai.credentials import (
 	get_ai_key_source,
 	get_ai_service,
 )
-from bosshunter.browser.diagnostics import probe_zhilian_search_page, run_browser_diagnostics
+from bosshunter.browser.diagnostics import probe_campus_search_page, probe_zhilian_search_page, run_browser_diagnostics
 from bosshunter.collection.orchestrator import normalize_collection_options
 
 VALID_MODES = {"full", "collect", "rescore", "monitor", "fill"}
@@ -415,6 +415,17 @@ def check_browser_connection(config: dict, collection_options: dict | None = Non
 						"browser",
 					)
 				)
+		if "zhilian_campus" in selected_platforms and result.get("runtime"):
+			campus_state = probe_campus_search_page()
+			status = str(campus_state.get("status") or "unknown")
+			if status == "ready":
+				checks.append(_check("zhilian_campus_page", "智联校园页面", "pass", "智联校园搜索页可用，未发现登录墙", "采集不会点击投递或申请按钮。"))
+			elif status == "login_required":
+				checks.append(_check("zhilian_campus_login", "智联校园登录", "error", "智联校园页面要求登录", "请在已连接的 Google Chrome 中登录智联校园（xiaoyuan.zhaopin.com）后重新检查。", "browser"))
+			elif status == "blocked":
+				checks.append(_check("zhilian_campus_blocked", "智联校园页面状态", "error", "智联校园页面受到拦截", str(campus_state.get("message") or "请人工处理验证码、频率限制或账号异常。"), "browser"))
+			else:
+				checks.append(_check("zhilian_campus_page", "智联校园页面结构", "error", "未识别到智联校园搜索页", str(campus_state.get("message") or "请在 Chrome 打开 xiaoyuan.zhaopin.com 的职位搜索页后重新检查。"), "browser"))
 		if "zhilian" in selected_platforms:
 			zhilian_tab = result.get("zhilian_tab")
 			page_state = result.get("zhilian_page") or {}

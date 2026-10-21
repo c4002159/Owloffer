@@ -1175,3 +1175,36 @@ class CompanyPrecheckTests(TestCase):
         self.assertIn("不在目标城市", answers[("新公司", "深圳 南山")])
         self.assertEqual(answers[("新公司", "上海 徐汇")], "")
         self.assertEqual(result["platforms"]["zhilian"]["filtered"], 3)           # the three refusals are counted as filtered
+
+
+class CampusChannelTests(TestCase):
+    def test_the_campus_channel_is_a_platform_of_its_own_with_zhilian_city_codes(self):
+        options = normalize_collection_options(
+            {"platforms": {"zhilian_campus": {"search": {"keywords": ["Agent"], "cities": ["上海"]}}}},
+            {"platform_order": ["zhilian_campus"]},
+        )
+        self.assertEqual(options["platform_order"], ["zhilian_campus"])
+        self.assertTrue(options["platforms"]["zhilian_campus"]["city_codes"].get("上海"))
+        self.assertEqual(options["platforms"]["zhilian_campus"]["keywords"], ["Agent"])
+
+    def test_a_campus_run_stores_jobs_as_zhilian_postings(self):
+        class Campus:
+            platform = "zhilian_campus"
+
+            def collect(self, request, hooks):
+                candidate = _candidate("zhilian", "CC1J1", "AI应用开发工程师")
+                candidate.recruitment_type = "campus"
+                if hooks.on_list_candidate(candidate):
+                    hooks.on_candidate(candidate)
+                return PlatformCollectionResult("zhilian_campus", "completed", "search_exhausted", "ok")
+
+        options = {"platform_order": ["zhilian_campus"], "auto_score": False, "platforms": {"zhilian_campus": {
+            "keywords": ["AI"], "cities": ["北京"], "city_codes": {"北京": "530"}, "max_pages": 1, "sort": "default"}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "c.db"
+            result = CollectionOrchestrator({}, db_path=db_path, registry=CollectorRegistry({"zhilian_campus": Campus})).run(options)
+            conn = get_db(db_path)
+            rows = conn.execute("SELECT source_platform, recruitment_type FROM jobs").fetchall()
+            conn.close()
+        self.assertEqual(result["platforms"]["zhilian_campus"]["new"], 1)
+        self.assertEqual([(row["source_platform"], row["recruitment_type"]) for row in rows], [("zhilian", "campus")])

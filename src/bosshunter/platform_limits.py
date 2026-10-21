@@ -11,7 +11,7 @@ Collection asks for confirmation before it runs on a marked platform, and unatte
 import sqlite3
 from datetime import date, datetime, timedelta
 
-PLATFORM_NAMES = {"boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘", "zhilian": "智联招聘"}
+PLATFORM_NAMES = {"boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘", "zhilian": "智联招聘", "zhilian_campus": "智联校招"}
 DEFAULT_COOLDOWN_MINUTES = 30
 
 

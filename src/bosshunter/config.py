@@ -131,6 +131,16 @@ DEFAULTS: dict[str, Any] = {
                 "sort": "default",
             },
         },
+        "zhilian_campus": {
+            "enabled": False,
+            "search": {
+                "keywords": [],
+                "cities": [],
+                "city_codes": {},
+                "max_pages": 3,
+                "sort": "default",
+            },
+        },
         "51job": {
             "enabled": False,
             "search": {

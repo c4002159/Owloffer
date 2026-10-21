@@ -2026,7 +2026,7 @@ def api_workbench_task_start():
 					"enabled": platform in selected_platforms,
 					"search": value,
 				}
-			for platform in ("boss", "zhilian", "51job", "liepin"):
+			for platform in ("boss", "zhilian", "zhilian_campus", "51job", "liepin"):
 				if platform not in selected_platforms and isinstance(platform_configs.get(platform), dict):
 					platform_configs[platform]["enabled"] = False
 			base_config["platforms"] = platform_configs
@@ -3472,7 +3472,7 @@ def api_city_lookup():
 @app.route("/api/cities")
 def api_city_snapshot():
 	platform = request.params.get("platform", "").strip().lower()
-	if platform == "zhilian":
+	if platform in {"zhilian", "zhilian_campus"}:
 		snapshot = load_zhilian_city_snapshot()
 		return _json_response({
 			"ok": True,
@@ -3522,8 +3522,8 @@ def api_city_snapshot():
 @app.route("/api/cities/refresh", method="POST")
 def api_city_refresh():
 	platform = request.params.get("platform", "").strip().lower()
-	if platform in {"zhilian", "51job", "liepin"}:
-		label = "智联" if platform == "zhilian" else "51job" if platform == "51job" else "猎聘"
+	if platform in {"zhilian", "zhilian_campus", "51job", "liepin"}:
+		label = "智联" if platform in {"zhilian", "zhilian_campus"} else "51job" if platform == "51job" else "猎聘"
 		return _json_response({
 			"ok": False,
 			"source": "local",

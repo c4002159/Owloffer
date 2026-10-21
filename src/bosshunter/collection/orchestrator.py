@@ -20,6 +20,7 @@ from bosshunter.collection.platforms.boss import BossCollector, normalize_boss_s
 from bosshunter.collection.platforms.job51 import Job51Collector, get_51job_city_code
 from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_city_code
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
+from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.collection_run_store import (
     boss_combo_key, boss_resume_options, claim_boss_resume, create_collection_run,
@@ -40,10 +41,11 @@ from bosshunter.job_filters import matching_blocked_company, matching_deal_break
 from bosshunter.outsourcing import load_rules
 
 
-SUPPORTED_PLATFORMS = {"boss", "zhilian", "51job", "liepin"}
+SUPPORTED_PLATFORMS = {"boss", "zhilian", "zhilian_campus", "51job", "liepin"}
 SORT_OPTIONS = {
     "boss": {"default", "newest"},
     "zhilian": {"default", "newest"},
+    "zhilian_campus": {"default", "newest"},
     "51job": {"default", "newest", "active"},
     "liepin": {"default", "newest"},
 }
@@ -86,11 +88,12 @@ def normalize_collection_options(config: dict[str, Any], raw_options: dict[str, 
     ):
         boss_search = dict(legacy_search)
     zhilian_search = configured_platforms.get("zhilian", {}).get("search", {}) if isinstance(configured_platforms.get("zhilian"), dict) else {}
+    campus_search = configured_platforms.get("zhilian_campus", {}).get("search", {}) if isinstance(configured_platforms.get("zhilian_campus"), dict) else {}
     job51_search = configured_platforms.get("51job", {}).get("search", {}) if isinstance(configured_platforms.get("51job"), dict) else {}
     liepin_search = configured_platforms.get("liepin", {}).get("search", {}) if isinstance(configured_platforms.get("liepin"), dict) else {}
 
     platforms: dict[str, Any] = {}
-    for platform, fallback in (("boss", boss_search), ("zhilian", zhilian_search), ("51job", job51_search), ("liepin", liepin_search)):
+    for platform, fallback in (("boss", boss_search), ("zhilian", zhilian_search), ("zhilian_campus", campus_search), ("51job", job51_search), ("liepin", liepin_search)):
         value = raw_platforms.get(platform) if isinstance(raw_platforms.get(platform), dict) else {}
         search = value.get("search") if isinstance(value.get("search"), dict) else value
         if not isinstance(search, dict):
@@ -178,7 +181,7 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
     if len(order) != len(set(order)):
         raise ValueError("采集平台顺序不能重复")
     if any(platform not in SUPPORTED_PLATFORMS for platform in order):
-        raise ValueError("采集平台只支持 boss、zhilian、51job 或 liepin")
+        raise ValueError("采集平台只支持 boss、zhilian、zhilian_campus、51job 或 liepin")
     if not isinstance(platforms, dict) or set(platforms) != set(order):
         raise ValueError("平台顺序与平台配置不一致")
     if not isinstance(options.get("auto_score", False), bool):
@@ -200,7 +203,7 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{platform} 至少需要一个城市")
         city_codes = value.get("city_codes") if isinstance(value.get("city_codes"), dict) else {}
         city_codes = {str(key).strip(): str(code).strip() for key, code in city_codes.items() if str(key).strip()}
-        if platform == "zhilian":
+        if platform in {"zhilian", "zhilian_campus"}:
             for city in cities:
                 resolved = get_zhilian_city_code(city)
                 if resolved:
@@ -581,6 +584,7 @@ class CollectionOrchestrator:
         self.registry = registry or CollectorRegistry({
             "boss": BossCollector,
             "zhilian": ZhilianCollector,
+            "zhilian_campus": ZhilianCampusCollector,
             "51job": Job51Collector,
             "liepin": LiepinCollector,
         })
@@ -692,6 +696,8 @@ class CollectionOrchestrator:
                         if platform == "51job" and self._uses_default_registry
                         else ZhilianCollector(config=self.config, safety_conn=conn)
                         if platform == "zhilian" and self._uses_default_registry
+                        else ZhilianCampusCollector(config=self.config, safety_conn=conn)
+                        if platform == "zhilian_campus" and self._uses_default_registry
                         else LiepinCollector(config=self.config, safety_conn=conn)
                         if platform == "liepin" and self._uses_default_registry
                         else self.registry.get(platform)
@@ -991,7 +997,8 @@ class CollectionOrchestrator:
             on_parse_failed=hooks.on_parse_failed,
             on_event=hooks.on_event,
         )
-        classes = {"boss": BossCollector, "51job": Job51Collector, "zhilian": ZhilianCollector, "liepin": LiepinCollector}
+        classes = {"boss": BossCollector, "51job": Job51Collector, "zhilian": ZhilianCollector,
+                   "zhilian_campus": ZhilianCampusCollector, "liepin": LiepinCollector}
         collector = (
             classes[platform](config=intern_config, safety_conn=conn)
             if self._uses_default_registry

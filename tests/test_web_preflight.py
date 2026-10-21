@@ -315,3 +315,20 @@ class BrowserPreflightTests(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class CampusPreflightTests(unittest.TestCase):
+	@patch("bosshunter.web.preflight.probe_campus_search_page")
+	@patch("bosshunter.web.preflight.run_browser_diagnostics")
+	def test_the_campus_channel_checks_the_campus_search_page(self, diagnostics, probe):
+		diagnostics.return_value = {
+			"node": {"available": True, "version": "v22"}, "runtime": True, "chrome": True,
+			"browser_name": "Google Chrome", "browser_product": "Chrome/138.0", "boss_tab": None,
+			"zhilian_tab": None, "zhilian_page": None, "errors": [], "runtime_url": "http://127.0.0.1:3456",
+		}
+		probe.return_value = {"status": "ready"}
+		checks = check_browser_connection({}, {"platform_order": ["zhilian_campus"]})
+		self.assertEqual(next(check for check in checks if check["id"] == "zhilian_campus_page")["status"], "pass")
+		probe.return_value = {"status": "login_required"}
+		checks = check_browser_connection({}, {"platform_order": ["zhilian_campus"]})
+		self.assertEqual(next(check for check in checks if check["id"] == "zhilian_campus_login")["status"], "error")

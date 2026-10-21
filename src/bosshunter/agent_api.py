@@ -13,7 +13,7 @@ from typing import Any
 
 
 AGENT_API_VERSION = "v1"
-PLATFORMS = ("boss", "zhilian", "51job", "liepin")
+PLATFORMS = ("boss", "zhilian", "zhilian_campus", "51job", "liepin")
 _TEXT_LIST_FIELDS = ("keywords", "cities", "deal_breakers", "jd_deal_breakers", "blocked_companies")
 _OPTIONAL_TEXT_FIELDS = ("education", "recruitment_type")
 _ALLOWED_FIELDS = frozenset(
@@ -273,7 +273,7 @@ def _validated_platform_order(value: Any) -> list[str]:
     if not isinstance(value, list) or not value:
         raise AgentRequestError("platform_order 必须是非空平台列表")
     if any(not isinstance(platform, str) or platform not in PLATFORMS for platform in value):
-        raise AgentRequestError("platform_order 只支持 boss、zhilian、51job、liepin")
+        raise AgentRequestError("platform_order 只支持 boss、zhilian、zhilian_campus、51job、liepin")
     if len(set(value)) != len(value):
         raise AgentRequestError("platform_order 不能重复")
     return list(value)

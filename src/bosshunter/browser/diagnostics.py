@@ -85,6 +85,48 @@ def probe_zhilian_search_page(city_code: str = "538") -> dict[str, str]:
             close_tab(target_id)
 
 
+CAMPUS_PAGE_STATE_SCRIPT = """
+(() => {
+  const text = document.body ? document.body.innerText : '';
+  if (/验证码|滑块|访问频繁|频率限制|账号异常|拒绝访问/.test(text)) return JSON.stringify({status: 'blocked', message: '智联校园页面受到验证码、频率限制或账号异常拦截'});
+  const cards = document.querySelectorAll('div.position-card').length;
+  if (cards) return JSON.stringify({status: 'ready', message: '智联校园搜索页可用'});
+  if (/请先登录|请登录|登录后|扫码登录/.test(text)) return JSON.stringify({status: 'login_required', message: '智联校园页面要求登录'});
+  return JSON.stringify({status: 'selector_changed', message: '未识别到智联校园搜索页结构'});
+})()
+"""
+
+
+def probe_campus_search_page(city_code: str = "538") -> dict[str, str]:
+    """Open the 智联校园 search page in a background tab, read its state and close it again."""
+    import time
+
+    from bosshunter.browser import close_tab, new_tab, wait_for_load
+
+    target_id = None
+    try:
+        target_id = new_tab(f"https://xiaoyuan.zhaopin.com/search/index?refcode=4404&city={city_code}&cateType=major", background=True)
+        if not target_id:
+            return {"status": "unknown", "message": "无法打开智联校园搜索页进行检查"}
+        wait_for_load(target_id, timeout=15)
+        state: dict[str, Any] = {"status": "unknown", "message": "智联校园页面状态检查未返回有效结果"}
+        for _ in range(6):
+            raw = evaluate(target_id, CAMPUS_PAGE_STATE_SCRIPT, timeout=5)
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                payload = None
+            if isinstance(payload, dict):
+                state = {str(key): str(value) for key, value in payload.items()}
+                if state.get("status") != "selector_changed":
+                    break
+            time.sleep(1.0)
+        return state
+    finally:
+        if target_id:
+            close_tab(target_id)
+
+
 def run_browser_diagnostics(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Collect Browser Runtime readiness state."""
     node = check_node_available()

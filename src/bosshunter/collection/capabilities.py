@@ -6,6 +6,7 @@ PLATFORM_CAPABILITIES: dict[str, frozenset[str]] = {
     # an authorized real-account acceptance test has verified the live DOM and
     # the maintainer explicitly enables those capabilities in a later change.
     "zhilian": frozenset({"collect", "score", "greet"}),
+    "zhilian_campus": frozenset({"collect", "score", "greet"}),
     # 51job applies from the job page; a send counts only after the page shows 已投递 (executor/job51_apply.py).
     "51job": frozenset({"collect", "score", "greet", "deliver"}),
     # Liepin applies from the job page too (executor/liepin_apply.py); verified with a real application, which
