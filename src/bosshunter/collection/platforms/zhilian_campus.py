@@ -7,7 +7,7 @@
   （职位名、公司、薪资、城市、学历、校招/实习、发布时间、职位编号）。
 * 先用这些列表信息筛选（公司已投过/已在池里、城市、薪资、职位名是否相关），只给留下来的岗位打开详情页
   （``/job/<编号>``）读岗位描述和"更新日期"，再按校招网申的新鲜度规则（默认 30 天内）过滤。
-* 岗位以 ``zhilian`` 平台入库（和普通智联共用岗位编号去重），因为只能手动投递，进"手动投递"列表。
+* 岗位以 ``zhilian_campus`` 平台入库（只能手动投递，进"手动投递"列表；普通智联岗位将来可以由程序投递）。
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def parse_item(item: dict[str, Any], keyword: str) -> JobCandidate | None:
     place = "·".join(part for part in (item.get("workCity"), item.get("cityDistrict"), item.get("streetName")) if part)
     published = str(item.get("publishTime") or "")
     return JobCandidate(
-        platform="zhilian", source_job_id=number, title=title, company=company,
+        platform="zhilian_campus", source_job_id=number, title=title, company=company,
         salary=str(item.get("salary60") or item.get("salaryReal") or "").strip(), city=place,
         experience=str(item.get("workingExp") or "").strip(), education=str(item.get("education") or "").strip(),
         recruitment_type="campus", url=DETAIL_URL.format(number=number), source_keyword=keyword,

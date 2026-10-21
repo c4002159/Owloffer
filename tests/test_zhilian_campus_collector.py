@@ -79,7 +79,7 @@ class CampusCollectorTests(TestCase):
         detail_pages = [url for url in opened if "/job/" in url]
         self.assertEqual(detail_pages, ["https://xiaoyuan.zhaopin.com/job/CC1J1", "https://xiaoyuan.zhaopin.com/job/CC3J3"])
         self.assertEqual(result.reason_code, "search_exhausted")
-        self.assertTrue(all(c.platform == "zhilian" and c.recruitment_type == "campus" for c in saved))
+        self.assertTrue(all(c.platform == "zhilian_campus" and c.recruitment_type == "campus" for c in saved))
         self.assertEqual(saved[0].jd, "负责 AI 应用开发")
 
     def test_a_stale_posting_is_dropped_after_its_detail_page_by_the_campus_rule(self):

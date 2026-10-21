@@ -28,7 +28,7 @@ MANUAL_STATUS_PROTECTED = {"sent", "replied", "resume_sent", "needs_resume", "fo
 DELETION_PROTECTED_HISTORY_ACTIONS = {
     "sent", "manual_sent", "replied", "resume_sent", "needs_resume", "follow_up_sent", "reply_pending", "auto_replied",
 }
-EXTERNAL_MANUAL_SEND_PLATFORMS = {"zhilian", "51job", "liepin"}
+EXTERNAL_MANUAL_SEND_PLATFORMS = {"zhilian", "zhilian_campus", "51job", "liepin"}
 # Where the user may mark a job as sent by hand: also BOSS (a send done in the BOSS app or site itself).
 MANUAL_SENT_PLATFORMS = EXTERNAL_MANUAL_SEND_PLATFORMS | {"boss"}
 
@@ -406,7 +406,7 @@ def mark_external_jobs_sent(conn: sqlite3.Connection, job_ids: Any, *, confirmed
     if blocked:
         raise JobManualSentConflictError("存在不允许手动标记的岗位，批量操作已整体拒绝", blocked=blocked)
 
-    platform_labels = {"boss": "BOSS 直聘", "zhilian": "智联招聘", "51job": "前程无忧", "liepin": "猎聘"}
+    platform_labels = {"boss": "BOSS 直聘", "zhilian": "智联招聘", "zhilian_campus": "智联校招", "51job": "前程无忧", "liepin": "猎聘"}
     with conn:
         for row in pending_rows:
             job_id = str(row["id"])

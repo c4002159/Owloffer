@@ -1318,12 +1318,12 @@ def api_job_search():
 		return _json_response({"error": "queue_view 参数无效"}, 400)
 	if queue_view == "confirm":      # scored and waiting for the user, no greeting prepared yet
 		conditions.append("status IN ('pending', 'scored', 'ready') AND NOT (status = 'ready' AND TRIM(COALESCE(greeting, '')) != '')")
-		conditions.append("COALESCE(source_platform, 'boss') != 'zhilian'")      # 智联岗位在“手动投递”里
+		conditions.append(_not_manual_clause())      # 只能手动投递的智联岗位在“手动投递”里
 	elif queue_view == "waiting":    # confirmed (or greeting ready) and waiting to be delivered, by the program or by hand
 		conditions.append("(status = 'approved' OR (status = 'ready' AND TRIM(COALESCE(greeting, '')) != ''))")
-		conditions.append("COALESCE(source_platform, 'boss') != 'zhilian'")
+		conditions.append(_not_manual_clause())
 	elif queue_view == "manual":     # 智联：只能手动投递；已投递过的公司和同公司重复岗位不再列出
-		conditions.append("COALESCE(source_platform, 'boss') = 'zhilian' AND status IN ('pending', 'scored', 'ready', 'approved')")
+		conditions.append(f"{_manual_clause()} AND status IN ('pending', 'scored', 'ready', 'approved')")
 		excluded = _manual_delivery_duplicates()
 		if excluded:
 			conditions.append(f"id NOT IN ({','.join('?' for _ in excluded)})")
@@ -1346,7 +1346,7 @@ def api_job_search():
 		params.extend(status_filters)
 	source_platforms = _query_values("source_platform")
 	if source_platforms:
-		if any(value not in {"boss", "zhilian", "51job", "liepin"} for value in source_platforms):
+		if any(value not in {"boss", "zhilian", "zhilian_campus", "51job", "liepin"} for value in source_platforms):
 			return _json_response({"error": "source_platform 参数无效"}, 400)
 		placeholders = ",".join("?" for _ in source_platforms)
 		conditions.append(f"COALESCE(source_platform, 'boss') IN ({placeholders})")
@@ -1643,6 +1643,25 @@ def _task_summary(task: dict) -> dict:
 	}
 
 
+def _manual_platforms() -> list[str]:
+	"""Zhilian platforms whose postings the program cannot deliver (yet): they are delivered by hand."""
+	return [platform for platform in ("zhilian", "zhilian_campus") if not platform_supports(platform, "deliver")]
+
+
+def _manual_clause() -> str:
+	platforms = _manual_platforms()
+	if not platforms:
+		return "0"
+	return "COALESCE(source_platform, 'boss') IN (" + ",".join(f"'{name}'" for name in platforms) + ")"
+
+
+def _not_manual_clause() -> str:
+	platforms = _manual_platforms()
+	if not platforms:
+		return "1"
+	return "COALESCE(source_platform, 'boss') NOT IN (" + ",".join(f"'{name}'" for name in platforms) + ")"
+
+
 def _manual_delivery_duplicates() -> list[str]:
 	"""Zhilian jobs to leave out of the manual list: the company was already applied to (any platform, within the
 	cooldown) or another Zhilian job of the same company with a better score is listed already."""
@@ -1653,7 +1672,7 @@ def _manual_delivery_duplicates() -> list[str]:
 		recent = [item["company"] for item in approved_within(db, cooldown_days(load_config(CONFIG_PATH)))]
 		rows = db.execute(
 			"SELECT id, company, COALESCE(score, 0) AS score FROM jobs WHERE deleted_at IS NULL "
-			"AND COALESCE(source_platform, 'boss') = 'zhilian' AND status IN ('pending', 'scored', 'ready', 'approved') "
+			f"AND {_manual_clause()} AND status IN ('pending', 'scored', 'ready', 'approved') "
 			"ORDER BY score DESC, id"
 		).fetchall()
 	finally:

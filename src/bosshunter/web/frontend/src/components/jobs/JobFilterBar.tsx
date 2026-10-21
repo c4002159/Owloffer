@@ -96,6 +96,7 @@ export function JobFilterBar({
           <MultiSelect className={controlClass} compact={compact} value={filters.sourcePlatform} onChange={value => updateMulti('sourcePlatform', value)} placeholder="来源平台：全部" options={[
             { value: 'boss', label: 'BOSS 直聘' },
             { value: 'zhilian', label: '智联招聘' },
+            { value: 'zhilian_campus', label: '智联校招' },
             { value: '51job', label: '前程无忧' },
             { value: 'liepin', label: '猎聘' },
           ]} />

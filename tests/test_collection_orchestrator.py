@@ -1187,12 +1187,12 @@ class CampusChannelTests(TestCase):
         self.assertTrue(options["platforms"]["zhilian_campus"]["city_codes"].get("上海"))
         self.assertEqual(options["platforms"]["zhilian_campus"]["keywords"], ["Agent"])
 
-    def test_a_campus_run_stores_jobs_as_zhilian_postings(self):
+    def test_a_campus_run_stores_jobs_as_campus_postings(self):
         class Campus:
             platform = "zhilian_campus"
 
             def collect(self, request, hooks):
-                candidate = _candidate("zhilian", "CC1J1", "AI应用开发工程师")
+                candidate = _candidate("zhilian_campus", "CC1J1", "AI应用开发工程师")
                 candidate.recruitment_type = "campus"
                 if hooks.on_list_candidate(candidate):
                     hooks.on_candidate(candidate)
@@ -1207,4 +1207,4 @@ class CampusChannelTests(TestCase):
             rows = conn.execute("SELECT source_platform, recruitment_type FROM jobs").fetchall()
             conn.close()
         self.assertEqual(result["platforms"]["zhilian_campus"]["new"], 1)
-        self.assertEqual([(row["source_platform"], row["recruitment_type"]) for row in rows], [("zhilian", "campus")])
+        self.assertEqual([(row["source_platform"], row["recruitment_type"]) for row in rows], [("zhilian_campus", "campus")])

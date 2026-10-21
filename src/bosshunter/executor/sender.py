@@ -801,9 +801,11 @@ def _make_resume_chooser(config: dict, db):
 def _deliver_job_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
     """One delivery attempt, routed to the job's platform (BOSS greets; 51job and Liepin apply from the job page)."""
     platform = str(job.get("source_platform") or "boss")
-    if platform in {"51job", "liepin"}:
+    if platform in {"51job", "liepin", "zhilian"}:
         if platform == "51job":
             from bosshunter.executor.job51_apply import apply_51job as apply_from_page
+        elif platform == "zhilian":
+            from bosshunter.executor.zhilian_apply import apply_zhilian as apply_from_page
         else:
             from bosshunter.executor.liepin_apply import apply_liepin as apply_from_page
 
@@ -811,7 +813,7 @@ def _deliver_job_once(job: dict, greeting: str, throttle_config: dict) -> tuple[
         window_checker = throttle_config.get("_send_window_checker")
         if window_checker and not window_checker.is_active():
             return {"success": False, "error": "outside_window", "skip_backoff": True}, None
-        extra = {"greeting": greeting} if platform == "liepin" else {}
+        extra = {"greeting": greeting} if platform in {"liepin", "zhilian"} else {}
         return apply_from_page(
             job, throttle_config, **extra,
             sleep=lambda seconds: _sleep_or_stop(seconds, stop_event),
@@ -1145,6 +1147,8 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
     throttle_config["_platform_access_guard"] = access_guard
     automation_cfg = config.get("automation") if isinstance(config.get("automation"), dict) else {}
     throttle_config["_send_greeting_after_apply"] = automation_cfg.get("external_greeting_send", False) is True
+    # Zhilian: the customized greeting is sent in the chat right after the default one (automation.zhilian_greeting_send).
+    throttle_config["_send_zhilian_greeting"] = automation_cfg.get("zhilian_greeting_send", True) is not False
     throttle_config["_resume_chooser"] = _make_resume_chooser(config, db)
     try:
         access_guard.ensure_unlocked()

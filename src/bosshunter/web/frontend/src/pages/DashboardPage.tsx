@@ -261,7 +261,7 @@ function safeExternalUrl(value: string | undefined, platform: string) {
 	try {
 		const url = new URL(value)
 		if (url.protocol !== 'https:') return ''
-		const allowedDomain = platform === 'zhilian'
+		const allowedDomain = platform === 'zhilian' || platform === 'zhilian_campus'
 			? 'zhaopin.com'
 			: platform === '51job'
 				? '51job.com'
@@ -2074,6 +2074,19 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     }
   }
 
+  const markSelectedManuallySent = async () => {
+    if (!selectedIds.length) return
+    if (!window.confirm(`请确认：所选 ${selectedIds.length} 个岗位你都已经在平台上手动投递完成。此操作只更新 BossHunter 本地记录，不会向平台发送任何内容。`)) return
+    try {
+      const result = await postJobAction('/api/jobs/manual-sent', { job_ids: selectedIds, confirmed: true })
+      setSelectedIds([])
+      refreshJobs()
+      setNotice(`已将 ${result.affected_count || 0} 个岗位标记为“已发送”。`)
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '批量标记失败')
+    }
+  }
+
   const deliverSelectedJobs = async () => {
     if (!selectedIds.length) return
     const count = selectedIds.length
@@ -2366,7 +2379,10 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         </Button>
         <span className="rounded-full bg-secondary px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
-        <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
+        <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>{poolView === 'manual' ? '批量删除（移入回收站）' : '移入回收站'}</Button>
+        {poolView === 'manual' && (
+          <Button size="sm" disabled={!selectedIds.length} onClick={() => void markSelectedManuallySent()}>批量标记已投递</Button>
+        )}
         {poolView !== 'history' && <>
           <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
             <Send className="mr-1 h-4 w-4" />一键投递已选
@@ -2406,7 +2422,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
             </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
-            {([['boss', 'BOSS 直聘', '自动'], ['51job', '前程无忧', '自动'], ['liepin', '猎聘', '自动'], ['zhilian', '智联招聘', '手动']] as const).map(([key, label, mode]) => (
+            {([['boss', 'BOSS 直聘', '自动'], ['51job', '前程无忧', '自动'], ['liepin', '猎聘', '自动'], ['zhilian', '智联招聘', '手动'], ['zhilian_campus', '智联校招', '手动']] as const).map(([key, label, mode]) => (
               <span key={key} className="rounded-full border border-card-border bg-card px-3 py-1">
                 {label} 待发送 {mode === '自动' ? waitingByPlatform(key) : 0}{mode === '自动' && failedByPlatform(key) > 0 ? `，失败 ${failedByPlatform(key)}` : ''}（{mode}）
               </span>

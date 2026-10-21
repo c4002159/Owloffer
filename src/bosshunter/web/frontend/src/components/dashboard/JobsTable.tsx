@@ -33,7 +33,7 @@ interface JobsTableProps {
 
 function safeJobUrl(job: Job): string | null {
   const platform = job.source_platform || 'boss'
-  if (platform !== 'boss' && platform !== 'zhilian' && platform !== '51job' && platform !== 'liepin') return null
+  if (platform !== 'boss' && platform !== 'zhilian' && platform !== 'zhilian_campus' && platform !== '51job' && platform !== 'liepin') return null
   try {
     const parsed = platform === 'boss'
       ? new URL(job.url || '', 'https://www.zhipin.com')
@@ -41,7 +41,7 @@ function safeJobUrl(job: Job): string | null {
     if (parsed.protocol !== 'https:') return null
     const rootDomain = platform === 'boss'
       ? 'zhipin.com'
-      : platform === 'zhilian'
+      : platform === 'zhilian' || platform === 'zhilian_campus'
         ? 'zhaopin.com'
         : platform === '51job'
           ? '51job.com'
@@ -150,7 +150,7 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
             <tbody>
               {jobs.map(job => {
                 const isExpanded = expanded === job.id
-                const isExternalPlatform = job.source_platform === 'zhilian' || job.source_platform === '51job' || job.source_platform === 'liepin'
+                const isExternalPlatform = job.source_platform === 'zhilian' || job.source_platform === 'zhilian_campus' || job.source_platform === '51job' || job.source_platform === 'liepin'
                 const jobUrl = safeJobUrl(job)
                 const alreadySent = ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent'].includes(job.status)
                 // 正在投递或排在投递队列里：整行变灰，不能再选、不能再操作。
