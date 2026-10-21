@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import type { WorkbenchTask } from '@/hooks/useDashboard'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 
-type PlatformId = 'boss' | 'zhilian' | '51job' | 'liepin'
+type PlatformId = 'boss' | 'zhilian' | 'zhilian_campus' | '51job' | 'liepin'
 
 interface PlatformDraft {
   enabled: boolean
@@ -46,6 +46,7 @@ interface CollectJobsDialogProps {
 const initialDrafts: Record<PlatformId, PlatformDraft> = {
   boss: { enabled: true, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '3', sort: 'default' },
   zhilian: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
+  zhilian_campus: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
   '51job': { enabled: false, keywords: '', internKeywords: '', cities: '上海', cityCodes: '上海=020000', maxPages: '1', sort: 'active' },
   liepin: { enabled: false, keywords: '', internKeywords: '', cities: '', cityCodes: '', maxPages: '1', sort: 'default' },
 }
@@ -149,19 +150,21 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         if (cancelled) return
         const nextBoss = draftFromConfig(config, 'boss')
         const nextZhilian = draftFromConfig(config, 'zhilian')
+        const nextCampus = draftFromConfig(config, 'zhilian_campus')
         const nextJob51 = draftFromConfig(config, '51job')
         const nextLiepin = draftFromConfig(config, 'liepin')
         if (mode === 'full') {
           nextZhilian.enabled = false
+          nextCampus.enabled = false
           nextJob51.enabled = false
           nextLiepin.enabled = false
         }
         const configuredOrder = Array.isArray(config?.collection?.default_order) ? config.collection.default_order : ['boss']
-        const enabledFromConfig = (['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled === true)
+        const enabledFromConfig = (['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled === true)
         const nextOrder = [...configuredOrder, ...enabledFromConfig].filter((item: unknown, index, values): item is PlatformId =>
-          (item === 'boss' || item === 'zhilian' || item === '51job' || item === 'liepin') && values.indexOf(item) === index,
+          (item === 'boss' || item === 'zhilian' || item === 'zhilian_campus' || item === '51job' || item === 'liepin') && values.indexOf(item) === index,
         )
-        setDrafts({ boss: nextBoss, zhilian: nextZhilian, '51job': nextJob51, liepin: nextLiepin })
+        setDrafts({ boss: nextBoss, zhilian: nextZhilian, zhilian_campus: nextCampus, '51job': nextJob51, liepin: nextLiepin })
         setOrder(mode === 'full' ? ['boss'] : (nextOrder.length ? nextOrder : ['boss']))
         setAutoScore(mode === 'full' || config?.collection?.auto_score_default === true)
         const cap = Number(config?.automation?.review_cap) || 150
@@ -251,7 +254,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         return
       }
       const configuredCodes = parseCityCodes(draft.cityCodes)
-      const platformCities = platform === 'zhilian' ? zhilianCities : platform === '51job' ? job51Cities : platform === 'liepin' ? liepinCities : []
+      const platformCities = platform === 'zhilian' || platform === 'zhilian_campus' ? zhilianCities : platform === '51job' ? job51Cities : platform === 'liepin' ? liepinCities : []
       const cityCodes = platform !== 'boss'
         ? Object.fromEntries(cities.map(city => [city, findPlatformCity(city, platformCities)?.code || configuredCodes[city] || '']).filter(([, code]) => code))
         : configuredCodes
@@ -336,10 +339,10 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         )}
 
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
+          {(['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[]).map(platform => {
             const draft = drafts[platform]
             const label = PLATFORM_LABELS[platform]
-            const platformCities = platform === 'zhilian' ? zhilianCities : platform === '51job' ? job51Cities : liepinCities
+            const platformCities = platform === 'zhilian' || platform === 'zhilian_campus' ? zhilianCities : platform === '51job' ? job51Cities : liepinCities
             return (
               <section key={platform} className={`rounded-2xl border p-4 ${draft.enabled ? 'border-primary/30 bg-surface' : 'border-card-border bg-card opacity-70'}`}>
                 <div className="flex items-center justify-between gap-3">

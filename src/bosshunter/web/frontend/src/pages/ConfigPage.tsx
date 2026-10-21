@@ -49,7 +49,7 @@ const AI_SERVICES = {
 } as const
 
 type AiService = keyof typeof AI_SERVICES
-type PlatformId = 'boss' | 'zhilian' | '51job' | 'liepin'
+type PlatformId = 'boss' | 'zhilian' | 'zhilian_campus' | '51job' | 'liepin'
 
 const BOSS_FILTER_OPTIONS = {
   job_type: ['全职', '兼职', '实习'],
@@ -232,7 +232,7 @@ export default function ConfigPage() {
   }
 
   const updatePlatformCities = (platform: PlatformId, cities: string[]) => {
-    const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
+    const platformCityOptions = platform === 'zhilian' || platform === 'zhilian_campus' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
     const cityCodes = platform !== 'boss'
       ? Object.fromEntries(cities.map(city => {
         const found = platformCityOptions.find(option => option.name.replace(/市$/, '') === city.replace(/市$/, ''))
@@ -247,7 +247,7 @@ export default function ConfigPage() {
   const setPlatformEnabled = (platform: PlatformId, enabled: boolean) => {
     updateConfig(`platforms.${platform}.enabled`, enabled)
     const currentOrder: PlatformId[] = Array.isArray(config?.collection?.default_order)
-      ? config.collection.default_order.filter((item: unknown): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job' || item === 'liepin')
+      ? config.collection.default_order.filter((item: unknown): item is PlatformId => item === 'boss' || item === 'zhilian' || item === 'zhilian_campus' || item === '51job' || item === 'liepin')
       : ['boss'] as PlatformId[]
     const nextOrder = enabled
       ? [...currentOrder, ...(!currentOrder.includes(platform) ? [platform] : [])]
@@ -256,8 +256,8 @@ export default function ConfigPage() {
   }
 
   const setCollectionOrder = (value: string) => {
-    const enabled = (['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled !== false)
-    const requested = value.split(',').filter((item): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job' || item === 'liepin')
+    const enabled = (['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled !== false)
+    const requested = value.split(',').filter((item): item is PlatformId => item === 'boss' || item === 'zhilian' || item === 'zhilian_campus' || item === '51job' || item === 'liepin')
     const next = [...requested, ...enabled.filter(platform => !requested.includes(platform))]
     updateConfig('collection.default_order', next.length ? next : ['boss'])
   }
@@ -290,7 +290,7 @@ export default function ConfigPage() {
   const bossTheoreticalPages = bossEstimateKeywords.length * bossEstimateCities.length * bossEstimateMaxPages
   const bossDailySearchLimit = Math.max(Number(config.collection?.daily_search_page_limit) || 60, 1)
   const bossTheoreticalExceedsLimit = bossTheoreticalPages > bossDailySearchLimit
-  const guidePlatform = (['boss', 'zhilian', '51job', 'liepin'] as PlatformId[])
+  const guidePlatform = (['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[])
     .find(platform => config.platforms?.[platform]?.enabled ?? platform === 'boss')
 
   return (
@@ -442,10 +442,10 @@ export default function ConfigPage() {
             <p className="rounded-xl border border-card-border bg-surface px-3 py-2 text-xs leading-5 text-muted">
               前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘没有投简历入口或没有合适简历时自动降级为发定制招呼语，投递成功后再追发招呼语由 automation.external_greeting_send 控制（默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。BossHunter 只在 BOSS 上监听回复。
             </p>
-            {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
+            {(['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[]).map(platform => {
               const search = platformSearch(platform)
               const label = PLATFORM_LABELS[platform]
-              const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
+              const platformCityOptions = platform === 'zhilian' || platform === 'zhilian_campus' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
               const enabled = config.platforms?.[platform]?.enabled ?? platform === 'boss'
               const cities = Array.isArray(search.cities) && search.cities.length
                 ? search.cities
