@@ -27,7 +27,9 @@ from bosshunter.collection_run_store import (
 )
 from bosshunter.ai.prefilter import freshness_filter_result
 from bosshunter.employment import internship_search_config
-from bosshunter.platform_limits import mark_limit_reached
+import time
+
+from bosshunter.platform_limits import cooldown_minutes, mark_limit_reached
 from bosshunter.company_dedup import approved_within, cooldown_days, matching_company, pool_companies
 from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.db import (
@@ -480,6 +482,7 @@ class CollectionOrchestrator:
         self.run_id = run_id or str(uuid4())
         self.task_id = task_id
         self.stop_event = config.get("_workbench_stop_event")
+        self.sleep = time.sleep          # replaceable, so tests need not wait out a cooldown
 
     def run(self, raw_options: dict[str, Any] | None = None) -> dict[str, Any]:
         resume_id = raw_options.get("resume_run_id") if isinstance(raw_options, dict) else None
@@ -524,7 +527,15 @@ class CollectionOrchestrator:
             save_boss_checkpoint(conn, self.run_id, checkpoint_pages)
 
         try:
-            for index, platform in enumerate(order, start=1):
+            # Platforms run in order. One that stops on a verification / rate-limit wording is put on a cooldown and the
+            # others go first; once they are done it is visited once more (after waiting out what is left of the cooldown).
+            queue = list(order)
+            index = 0
+            blocked_at: dict[str, int] = {}
+            retry_ready: dict[str, float] = {}
+            while queue:
+                platform = queue.pop(0)
+                index += 1
                 if self.stop_event is not None and self.stop_event.is_set():
                     states[platform]["status"] = "stopped"
                     states[platform]["reason_code"] = "user_stopped"
@@ -614,11 +625,15 @@ class CollectionOrchestrator:
                         f"解析失败 {processor.progress.parse_failed} 条，保存失败 {processor.progress.save_failed} 条"
                     )
                 platform_results.append(result)
+                cooldown_block = result.status == "blocked" and result.reason_code == "rate_limit"
                 if result.status in {"blocked", "failed"} and result.reason_code not in {"login_required", "user_stopped"}:
-                    # The platform stopped collecting because of an error: pause it for the rest of the day, so
-                    # unattended runs skip it and a manual run has to be confirmed.
+                    # The platform stopped collecting because of an error: pause it, so unattended runs skip it and a
+                    # manual run has to be confirmed. A verification / rate-limit stop only cools down for a while.
+                    minutes = cooldown_minutes(self.config) if cooldown_block else None
+                    note = (f"采集遇到验证或限流，暂停 {minutes} 分钟，先采集其他平台：{result.message}" if cooldown_block
+                            else f"采集异常已暂停（{result.reason_code}）：{result.message}")
                     try:
-                        mark_limit_reached(conn, platform, f"采集异常已暂停（{result.reason_code}）：{result.message}"[:300])
+                        mark_limit_reached(conn, platform, note[:300], minutes=minutes)
                     except Exception:
                         pass
                 states[platform].update({
@@ -644,11 +659,30 @@ class CollectionOrchestrator:
                 # continue. Other unknown/risk blocks remain queue-wide until
                 # they have an equally explicit platform-local classification.
                 if (
-                    (result.status == "blocked" and result.reason_code != "login_required")
+                    (result.status == "blocked" and result.reason_code not in {"login_required", "rate_limit"})
                     or result.reason_code in {"user_stopped", "browser_disconnected"}
                     or (self.stop_event and self.stop_event.is_set())
                 ):
                     break
+                if cooldown_block and platform not in blocked_at:
+                    blocked_at[platform] = index
+                    retry_ready[platform] = time.time() + cooldown_minutes(self.config) * 60
+                if not queue and retry_ready:
+                    # Only come back when other platforms were collected in the meantime.
+                    due = [name for name in retry_ready if index > blocked_at[name]]
+                    for name in [name for name in retry_ready if name not in due]:
+                        retry_ready.pop(name)
+                    if due:
+                        name = min(due, key=lambda item: retry_ready[item])
+                        wait = min(max(retry_ready.pop(name) - time.time(), 0.0), 35 * 60)
+                        states[name].update(status="queued", message=f"冷却中，{int(wait // 60)} 分钟后再回来采集")
+                        self._persist(states, all_new_ids, name, status="queued")
+                        if wait > 0:
+                            if self.stop_event is not None:
+                                self.stop_event.wait(wait)
+                            else:
+                                self.sleep(wait)
+                        queue.append(name)
             if self._budget:
                 self.keyword_moves = self._adjust_tiers(conn, options)
         finally:
@@ -656,7 +690,8 @@ class CollectionOrchestrator:
 
         unique_new_ids = list(dict.fromkeys(str(job_id) for job_id in all_new_ids if str(job_id)))
         stopped = bool(self.stop_event and self.stop_event.is_set()) or any(r.reason_code == "user_stopped" for r in platform_results)
-        errors = any(r.status in {"blocked", "failed"} for r in platform_results)
+        last_result = {r.platform: r for r in platform_results}      # a platform that was retried counts by its last try
+        errors = any(r.status in {"blocked", "failed"} for r in last_result.values())
         shortages = any(r.status == "completed_with_shortage" for r in platform_results)
         outcome = "stopped" if stopped else "completed_with_errors" if errors else "completed_with_shortage" if shortages else "completed"
         if options["auto_score"] and unique_new_ids and not stopped:

@@ -303,7 +303,7 @@ class CollectionOrchestratorTests(TestCase):
     def test_non_login_block_still_stops_the_remaining_queue(self):
         events = []
         registry = CollectorRegistry({
-            "zhilian": lambda: _BlockedCollector("zhilian", events, "rate_limit"),
+            "zhilian": lambda: _BlockedCollector("zhilian", events, "selector_changed"),
             "boss": lambda: _FakeCollector("boss", events, [_candidate("boss", "not-started")]),
         })
         with tempfile.TemporaryDirectory() as tmp:
@@ -314,6 +314,54 @@ class CollectionOrchestratorTests(TestCase):
         self.assertEqual(events, ["start:zhilian"])
         self.assertEqual(result["status"], "completed_with_errors")
         self.assertEqual(result["platforms"]["boss"]["status"], "queued")
+
+    def test_a_rate_limited_platform_cools_down_while_the_others_go_first_and_is_visited_again(self):
+        events, waits = [], []
+        attempts = {"n": 0}
+
+        class Flaky:
+            platform = "liepin"
+
+            def collect(self, request, hooks):
+                attempts["n"] += 1
+                events.append(f"liepin#{attempts['n']}")
+                if attempts["n"] == 1:
+                    return PlatformCollectionResult("liepin", "blocked", "rate_limit", "猎聘出现验证或限流")
+                return PlatformCollectionResult("liepin", "completed", "search_exhausted", "ok")
+
+        registry = CollectorRegistry({
+            "liepin": Flaky,
+            "51job": lambda: _FakeCollector("51job", events, [_candidate("51job", "j1")]),
+            "zhilian": lambda: _FakeCollector("zhilian", events, [_candidate("zhilian", "z1")]),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            orchestrator = CollectionOrchestrator({}, db_path=Path(tmp) / "c.db", registry=registry)
+            orchestrator.sleep = waits.append
+            result = orchestrator.run(_options(order=["liepin", "51job", "zhilian"]))
+
+        self.assertEqual(events, ["liepin#1", "start:51job", "start:zhilian", "liepin#2"])   # others first, then back
+        self.assertEqual(result["status"], "completed")                                          # the retry succeeded
+        self.assertEqual(len(waits), 1)                                                          # what was left of the cooldown
+
+    def test_a_platform_that_stays_limited_is_tried_only_once_more(self):
+        attempts = []
+
+        class Limited:
+            platform = "liepin"
+
+            def collect(self, request, hooks):
+                attempts.append(1)
+                return PlatformCollectionResult("liepin", "blocked", "rate_limit", "猎聘出现验证或限流")
+
+        registry = CollectorRegistry({
+            "liepin": Limited, "51job": lambda: _FakeCollector("51job", [], [_candidate("51job", "j1")]),
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            orchestrator = CollectionOrchestrator({}, db_path=Path(tmp) / "c.db", registry=registry)
+            orchestrator.sleep = lambda _seconds: None
+            result = orchestrator.run(_options(order=["liepin", "51job"]))
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(result["status"], "completed_with_errors")
 
     def test_legacy_search_values_override_empty_platform_defaults(self):
         result = normalize_collection_options({

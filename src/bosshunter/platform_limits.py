@@ -1,39 +1,69 @@
-"""Platforms that told us they will take no more contacts today (BOSS: "您已达到沟通上限").
+"""Platforms that are not collected from or delivered to for a while.
 
-The mark lasts until the end of the local day. Collection asks for confirmation before it runs on a marked platform, and
-unattended runs skip it.
+Two kinds of mark, both keyed by platform and local day:
+* the platform told us it will take no more contacts today (BOSS: "您已达到沟通上限"): lasts until the end of the day;
+* a cooldown (``minutes``): the platform stopped answering or asked for verification, so other platforms go first and
+  this one is tried again later.
+
+Collection asks for confirmation before it runs on a marked platform, and unattended runs skip it.
 """
 
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
 
 PLATFORM_NAMES = {"boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘", "zhilian": "智联招聘"}
+DEFAULT_COOLDOWN_MINUTES = 30
 
 
 def _ensure(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS platform_daily_limits ("
         "platform TEXT NOT NULL, day TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', "
-        "created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (platform, day))"
+        "created_at TEXT DEFAULT CURRENT_TIMESTAMP, until TEXT, PRIMARY KEY (platform, day))"
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(platform_daily_limits)").fetchall()}
+    if "until" not in columns:                       # a table made before cooldowns existed
+        conn.execute("ALTER TABLE platform_daily_limits ADD COLUMN until TEXT")
 
 
-def mark_limit_reached(conn: sqlite3.Connection, platform: str, reason: str = "") -> None:
+def cooldown_minutes(config: dict | None) -> int:
+    raw = ((config or {}).get("automation") or {}).get("platform_cooldown_minutes", DEFAULT_COOLDOWN_MINUTES)
+    try:
+        return min(max(int(raw), 1), 720)
+    except (TypeError, ValueError):
+        return DEFAULT_COOLDOWN_MINUTES
+
+
+def mark_limit_reached(conn: sqlite3.Connection, platform: str, reason: str = "", minutes: int | None = None) -> None:
+    """Mark the platform for the rest of today, or for ``minutes`` only."""
     _ensure(conn)
+    until = (datetime.now() + timedelta(minutes=minutes)).isoformat(timespec="seconds") if minutes else None
     conn.execute(
-        "INSERT OR REPLACE INTO platform_daily_limits (platform, day, reason) VALUES (?, ?, ?)",
-        (platform, date.today().isoformat(), reason[:300]),
+        "INSERT OR REPLACE INTO platform_daily_limits (platform, day, reason, until) VALUES (?, ?, ?, ?)",
+        (platform, date.today().isoformat(), reason[:300], until),
     )
     conn.commit()
 
 
 def limits_today(conn: sqlite3.Connection) -> dict[str, str]:
-    """``{platform: reason}`` for the platforms that reached their limit today."""
+    """``{platform: reason}`` for the platforms that are marked right now (cooldowns that ran out are left out)."""
     _ensure(conn)
     rows = conn.execute(
-        "SELECT platform, reason FROM platform_daily_limits WHERE day = ?", (date.today().isoformat(),)
+        "SELECT platform, reason, until FROM platform_daily_limits WHERE day = ?", (date.today().isoformat(),)
     ).fetchall()
-    return {str(row[0]): str(row[1]) for row in rows}
+    now = datetime.now().isoformat(timespec="seconds")
+    return {str(row[0]): str(row[1]) for row in rows if not row[2] or str(row[2]) > now}
+
+
+def cooldown_remaining_seconds(conn: sqlite3.Connection, platform: str) -> float:
+    """Seconds left of a platform's cooldown (0 when there is none, it ran out, or the mark lasts all day)."""
+    _ensure(conn)
+    row = conn.execute(
+        "SELECT until FROM platform_daily_limits WHERE platform = ? AND day = ?", (platform, date.today().isoformat())
+    ).fetchone()
+    if not row or not row[0]:
+        return 0.0
+    return max((datetime.fromisoformat(str(row[0])) - datetime.now()).total_seconds(), 0.0)
 
 
 def clear_limit(conn: sqlite3.Connection, platform: str) -> None:

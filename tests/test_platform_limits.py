@@ -97,7 +97,7 @@ def test_a_platform_that_stops_on_an_error_is_paused_for_the_rest_of_the_day(tmp
         platform = "liepin"
 
         def collect(self, request, hooks):
-            return PlatformCollectionResult("liepin", "blocked", "rate_limit", "猎聘出现验证或限流信号")
+            return PlatformCollectionResult("liepin", "blocked", "selector_changed", "猎聘页面结构变了")
 
     options = {"platform_order": ["liepin"], "auto_score": False, "platforms": {"liepin": {
         "keywords": ["AI"], "cities": ["上海"], "city_codes": {"上海": "020"}, "max_pages": 1, "sort": "default"}}}
@@ -105,4 +105,19 @@ def test_a_platform_that_stops_on_an_error_is_paused_for_the_rest_of_the_day(tmp
     CollectionOrchestrator({}, db_path=db_path, registry=CollectorRegistry({"liepin": Blocked})).run(options)
     conn = get_db(db_path)
     assert "采集异常已暂停" in limits_today(conn)["liepin"]
+    conn.close()
+
+
+def test_a_verification_stop_only_cools_the_platform_down_for_a_while(tmp_path):
+    from bosshunter.platform_limits import cooldown_remaining_seconds
+
+    conn = get_db(tmp_path / "t.db")
+    mark_limit_reached(conn, "liepin", "验证", minutes=30)
+    assert "liepin" in limits_today(conn)
+    assert 29 * 60 < cooldown_remaining_seconds(conn, "liepin") <= 30 * 60
+    mark_limit_reached(conn, "boss", "沟通上限")                                  # the whole day: no cooldown to wait out
+    assert cooldown_remaining_seconds(conn, "boss") == 0
+    conn.execute("UPDATE platform_daily_limits SET until = '2000-01-01T00:00:00' WHERE platform = 'liepin'")
+    conn.commit()
+    assert "liepin" not in limits_today(conn)                                      # the cooldown ran out
     conn.close()
