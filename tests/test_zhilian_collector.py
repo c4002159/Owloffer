@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import date
 from pathlib import Path
 from threading import Event
 from unittest import TestCase
@@ -25,6 +27,10 @@ from bosshunter.collection.platforms.zhilian import (
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+_DOM_ONLY = {"automation": {"zhilian_list_requests": False},
+             "throttle": {"collect_windows": ["00:00-23:59"], "day_off_probability": 0}}      # these tests read the page, not the page's list requests
 
 
 class ZhilianFixtureTests(TestCase):
@@ -353,14 +359,14 @@ class ZhilianFixtureTests(TestCase):
             on_event=lambda **_kwargs: None,
         )
 
-        result = ZhilianCollector(browser=browser, sleep=lambda _seconds: None).collect(
+        result = ZhilianCollector(browser=browser, config=_DOM_ONLY, sleep=lambda _seconds: None).collect(
             PlatformCollectionRequest("zhilian", ["AI运营"], ["北京"], {"北京": "530"}, max_pages=1),
             hooks,
         )
 
         self.assertEqual(result.reason_code, "callback_stopped")
         self.assertEqual(len(navigated), 1)                       # straight to the filtered search page
-        self.assertTrue(navigated[0].startswith("https://www.zhaopin.com/jobs/?jl=530&kw="))
+        self.assertTrue(navigated[0].startswith("https://www.zhaopin.com/jobs/?pageMode=search&jl=530&kw="))
         self.assertIn("et=2", navigated[0])                       # city, keyword and the full-time filter in the address
         self.assertEqual(collected[0].storage_id, "zhilian:CC123J40800000001")
         self.assertIn("用户增长", collected[0].jd)
@@ -1305,7 +1311,7 @@ class ZhilianScrollPagingTests(TestCase):
             stop_event=None, on_list_candidate=lambda c: True, on_candidate=lambda c: False,
             on_parse_failed=lambda r: None, on_event=lambda **_kw: None, on_list_company=precheck,
         )
-        ZhilianCollector(browser=browser, sleep=lambda _s: None).collect(
+        ZhilianCollector(browser=browser, config=_DOM_ONLY, sleep=lambda _s: None).collect(
             PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"}, max_pages=1), hooks)
         self.assertEqual(reasons, ["公司近期已投递过", "工作地点不在目标城市"])
         self.assertEqual(clicks, [])                              # neither card was opened
@@ -1337,9 +1343,87 @@ class ZhilianCardTitleTests(TestCase):
             stop_event=None, on_list_candidate=lambda c: True, on_candidate=lambda c: False,
             on_parse_failed=lambda r: None, on_event=lambda **kw: events.append(kw), on_list_company=lambda *_a: "",
         )
-        ZhilianCollector(browser=browser, config={"search": {"keywords": ["AI Agent开发"]}}, sleep=lambda _s: None).collect(
+        ZhilianCollector(browser=browser, config={"search": {"keywords": ["AI Agent开发"]}, **_DOM_ONLY}, sleep=lambda _s: None).collect(
             PlatformCollectionRequest("zhilian", ["Agent工程师"], ["上海"], {"上海": "538"}, max_pages=1), hooks)
         self.assertEqual(clicks, [])
         reasons = [e.get("message", "") for e in events if e.get("increment_filtered")]
         self.assertEqual(len(reasons), 2)
         self.assertTrue(all("不相关" in reason for reason in reasons))
+
+
+class ZhilianListRequestTests(TestCase):
+    """The page's own list requests are replayed for every page; the postings are checked on the list first."""
+
+    @staticmethod
+    def _item(number, name="Agent工程师", company="可用公司", **extra):
+        return {"number": number, "name": name, "companyName": company, "salary60": "1.5-2万", "workCity": "上海",
+                "cityDistrict": "浦东", "streetName": "金桥", "education": "本科", "workingExp": "经验不限",
+                "publishTime": "2026-10-01 10:00:00", "positionURL": f"http://jobs.zhaopin.com/{number}.htm", **extra}
+
+    def _browser(self, pages, details, replays):
+        opened = []
+
+        def evaluate(_target, script):
+            if "__zpHooked" in script:
+                return "hooked"
+            if "submitted_by" in script:
+                return json.dumps({"ok": True, "value": "x", "submitted_by": "button"})
+            if "window.__zpReq || null" in script:
+                return json.dumps({"u": "https://fe-api.example/search/positions", "h": {}, "body": "{}"})
+            if "Object.assign(JSON.parse(req.body)" in script:
+                overrides = json.loads(re.search(r"Object\.assign\(JSON\.parse\(req\.body\), (\{.*?\})\);", script).group(1))
+                replays.append(overrides)
+                page = overrides["pageIndex"]
+                return json.dumps({"status": 200, "body": json.dumps({"data": {
+                    "list": pages.get(page, []), "count": 40, "isEndPage": 1 if page >= len(pages) else 0}})})
+            if "descriptionCard" in script:
+                return json.dumps(details.pop(0) if details else {"status": "selector_changed"})
+            return "null"
+
+        return ZhilianBrowser(
+            new_tab=lambda url, **_k: opened.append(url) or f"tab{len(opened)}", close_tab=lambda _t: True, evaluate=evaluate,
+            scroll=lambda *_a, **_k: True, wait_for_load=lambda *_a, **_k: True, navigate_action=lambda *_a: True,
+        ), opened
+
+    def test_pages_come_from_the_replayed_request_with_the_filters_and_only_survivors_are_opened(self):
+        replays, saved, listed, events = [], [], [], []
+        pages = {1: [self._item("CCA1J1"), self._item("CCA2J2", name="跟单员")], 2: [self._item("CCA3J3", company="丙公司")]}
+        detail = {"status": "ready", "title": "Agent工程师", "company": "可用公司", "jd": "负责 Agent 开发", "updated": date.today().isoformat()}
+        browser, opened = self._browser(pages, [dict(detail), dict(detail)], replays)
+        config = {"search": {"keywords": ["AI Agent开发"]}, "throttle": {"collect_windows": ["00:00-23:59"], "day_off_probability": 0},
+                  "_experience_level": "fresh"}
+        collector = ZhilianCollector(browser=browser, config=config, sleep=lambda _s: None)
+        hooks = CollectorHooks(
+            stop_event=None, on_list_candidate=lambda c: listed.append(c) or True, on_candidate=lambda c: saved.append(c) or True,
+            on_parse_failed=lambda r: events.append(r), on_event=lambda **kw: events.append(kw),
+        )
+        result = collector.collect(PlatformCollectionRequest("zhilian", ["Agent工程师"], ["上海"], {"上海": "538"}, max_pages=5, filters={"work_experience": "0001"}), hooks)
+        self.assertEqual([r["pageIndex"] for r in replays], [1, 2])
+        self.assertEqual(replays[0]["S_SOU_FULL_INDEX"], "Agent工程师")
+        self.assertEqual(replays[0]["S_SOU_WORK_CITY"], "538")
+        self.assertEqual(replays[0]["S_SOU_WORK_EXPERIENCE"], "0001")                 # the site's own experience filter
+        self.assertEqual(replays[0]["S_SOU_POSITION_TYPE"], "2")                       # full-time
+        self.assertEqual([c.source_job_id for c in saved], ["CCA1J1", "CCA3J3"])      # 跟单员 never got a page
+        self.assertEqual([url for url in opened if "jobs.zhaopin.com" in url],
+                         ["http://jobs.zhaopin.com/CCA1J1.htm", "http://jobs.zhaopin.com/CCA3J3.htm"])
+        self.assertEqual(result.reason_code, "search_exhausted")
+
+    def test_a_page_that_sends_no_list_request_falls_back_to_reading_the_page(self):
+        browser = ZhilianBrowser(
+            new_tab=lambda *_a, **_k: "t", close_tab=lambda _t: True, evaluate=lambda _t, _s: "null",
+            scroll=lambda *_a, **_k: True, wait_for_load=lambda *_a, **_k: True, navigate_action=lambda *_a: True)
+        events = []
+        hooks = CollectorHooks(stop_event=None, on_list_candidate=lambda c: True, on_candidate=lambda c: True,
+                               on_parse_failed=lambda r: None, on_event=lambda **kw: events.append(kw))
+        collector = ZhilianCollector(browser=browser, config={"throttle": _DOM_ONLY["throttle"]}, sleep=lambda _s: None)
+        collector.collect(PlatformCollectionRequest("zhilian", ["AI"], ["上海"], {"上海": "538"}, max_pages=1), hooks)
+        self.assertTrue(any("改为读取页面" in str(e.get("message", "")) for e in events))
+
+    def test_a_position_item_becomes_a_candidate_with_the_hr_state_from_the_list(self):
+        from bosshunter.collection.platforms.zhilian import parse_position
+
+        item = self._item("CCA9J9", staffCard={"hrOnlineState": "刚刚在线"})
+        candidate = parse_position(item, "Agent")
+        self.assertEqual((candidate.source_job_id, candidate.hr_active, candidate.city), ("CCA9J9", "刚刚在线", "上海·浦东·金桥"))
+        self.assertEqual(candidate.url, "http://jobs.zhaopin.com/CCA9J9.htm")
+        self.assertIsNone(parse_position({"number": "", "name": "x"}, "k"))

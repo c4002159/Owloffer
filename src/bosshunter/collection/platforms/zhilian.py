@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse, urlunparse
 
-from bosshunter.ai.prefilter import salary_filter_result
+from bosshunter.collection.platforms import zhilian_replay as zr
+
+from bosshunter.ai.prefilter import freshness_filter_result, salary_filter_result
 from bosshunter.browser import (
     click as browser_click,
     close_tab,
@@ -416,6 +418,30 @@ def update_age_reason(config: dict, detail: dict[str, Any]) -> str:
     if limit > 0 and days > limit:
         return f"岗位 {int(days)} 天前更新，超过{'校招网申' if campus else '普通岗位'}上限 {limit:g} 天"
     return ""
+
+
+POSITIONS_MARKER = "search/positions"
+LIST_PAGE_SIZE = 20
+
+
+def parse_position(item: dict[str, Any], keyword: str) -> JobCandidate | None:
+    """One item of Zhilian's ``search/positions`` list as a candidate (None without a job number or title)."""
+    number = str(item.get("number") or "").strip()
+    title = str(item.get("name") or "").strip()
+    if not number or not title:
+        return None
+    staff = item.get("staffCard") if isinstance(item.get("staffCard"), dict) else {}
+    hr_active = str(staff.get("hrOnlineState") or staff.get("lastOnlineTimeText") or staff.get("hrStateInfo") or "").strip()
+    place = "·".join(str(part) for part in (item.get("workCity"), item.get("cityDistrict"), item.get("streetName")) if part)
+    published = str(item.get("publishTime") or "")
+    return JobCandidate(
+        platform="zhilian", source_job_id=number, title=title, company=str(item.get("companyName") or "").strip(),
+        salary=str(item.get("salary60") or item.get("salaryReal") or "").strip(), city=place,
+        experience=str(item.get("workingExp") or "").strip(), education=str(item.get("education") or "").strip(),
+        url=str(item.get("positionURL") or item.get("positionUrl") or f"https://jobs.zhaopin.com/{number}.htm").strip(),
+        source_keyword=keyword, company_size=str(item.get("companySize") or ""), company_industry=str(item.get("industryName") or ""),
+        hr_active=hr_active, updated_days=_updated_days(published[:10]) if published else None,
+    )
 
 
 def url_value(url: str, name: str) -> str:
@@ -1116,8 +1142,148 @@ class ZhilianCollector:
         code = str(request.city_codes.get(city) or "").strip()
         if not code:
             raise CollectionError("no_valid_city", f"未配置智联城市编码：{city}")
-        params = {"jl": code, "kw": keyword, **(getattr(self, "_native_params", None) or {})}
+        params = {"pageMode": "search", "jl": code, "kw": keyword, **(getattr(self, "_native_params", None) or {})}
         return "https://www.zhaopin.com/jobs/?" + urlencode(params, quote_via=quote)
+
+    # ------------------------------------------------------------------ the list requests (preferred way)
+    def _positions_overrides(self, keyword: str, code: str, page: int) -> dict[str, Any]:
+        """Body fields of the remembered list request for this keyword, city, page and the site's own filters."""
+        body: dict[str, Any] = {"S_SOU_FULL_INDEX": keyword, "S_SOU_WORK_CITY": code, "pageIndex": int(page)}
+        native = getattr(self, "_native_params", None) or {}
+        if native.get("we"):
+            body["S_SOU_WORK_EXPERIENCE"] = native["we"]
+        if native.get("el"):
+            body["S_SOU_EDUCATION_LOWESTLEVEL"] = native["el"]
+        if native.get("et"):
+            body["S_SOU_POSITION_TYPE"] = native["et"]
+        return body
+
+    def _collect_positions(self, request: PlatformCollectionRequest, hooks: CollectorHooks, collected_combos: set[tuple[str, str]]):
+        """Collect through the page's own list requests. ``None`` when the page never sends one (the caller then falls back
+        to reading the page)."""
+        self._positions_ok = False
+        ttl = self._resume_ttl_hours()
+        for city in request.cities:
+            code = str(request.city_codes[city]).strip()
+            for keyword in request.keywords:
+                ck = self._ckey(request, keyword)
+                if (city, ck) in collected_combos:
+                    hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
+                                   message=f"智联 {keyword} 今天已采完，整词跳过")
+                    continue
+                saved = (get_page_progress(self.safety_conn, "zhilian", city, ck, within_hours=ttl)
+                         if self.safety_conn is not None else 0)
+                start_page = saved + 1 if saved > 0 else 1
+                if start_page > request.max_pages:
+                    continue
+                outcome = self._positions_keyword(request, hooks, city, code, keyword, ck, start_page)
+                if outcome == "fallback":
+                    return None
+                if outcome is not None:
+                    return outcome
+        return PlatformCollectionResult(self.platform, "completed", "search_exhausted", "智联搜索结果已采集完毕")
+
+    def _positions_keyword(self, request, hooks, city, code, keyword, ck, start_page):
+        target_id = self.browser.new_tab("about:blank", background=True)
+        if not target_id:
+            return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "无法打开智联搜索页")
+        try:
+            if not self.browser.navigate_action(target_id, self._direct_search_url(request, city, keyword)):
+                return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "智联搜索页导航失败")
+            self.browser.wait_for_load(target_id, timeout=15)
+            self.sleep(2.0)
+            if not zr.capture_template(self.browser.evaluate, target_id, POSITIONS_MARKER,
+                                       _build_submit_search_script(keyword), self.sleep):
+                if not self._positions_ok:
+                    return "fallback"                      # the page does not work this way: read the page instead
+                return PlatformCollectionResult(self.platform, "blocked", "selector_changed", "智联搜索页没有发出列表请求，可能是页面结构变化")
+            self._positions_ok = True
+            detail_requests = 0
+            for page in range(start_page, request.max_pages + 1):
+                if hooks.stop_event is not None and hooks.stop_event.is_set():
+                    return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
+                answer = zr.replay(self.browser.evaluate, target_id, self._positions_overrides(keyword, code, page))
+                if answer.get("status") in (401, 403, 429):
+                    return PlatformCollectionResult(self.platform, "blocked", "rate_limit", f"智联列表请求被拒绝（HTTP {answer['status']}），可能是限流或登录失效")
+                if answer.get("error"):
+                    return PlatformCollectionResult(self.platform, "blocked", "selector_changed", f"智联列表请求失败：{answer['error']}")
+                data = answer["data"]
+                items = [item for item in (data.get("list") or []) if isinstance(item, dict)]
+                if not items:
+                    break
+                for item in items:
+                    candidate = parse_position(item, keyword)
+                    if candidate is None:
+                        continue
+                    outcome = self._process_position(hooks, candidate, city, page, keyword, detail_requests)
+                    if isinstance(outcome, PlatformCollectionResult):
+                        return outcome
+                    detail_requests += outcome
+                if self.safety_conn is not None:
+                    upsert_page_progress(self.safety_conn, "zhilian", city, ck, page)
+                if data.get("isEndPage") or page * LIST_PAGE_SIZE >= int(data.get("count") or 0):
+                    break
+            if self.safety_conn is not None:
+                mark_combo_collected(self.safety_conn, "zhilian", city, ck)
+                delete_page_progress(self.safety_conn, "zhilian", city, ck)
+            return None
+        finally:
+            self.browser.close_tab(target_id)
+
+    def _process_position(self, hooks, candidate, city, page, keyword, detail_requests):
+        """List-stage checks first; only a posting that passes gets its page opened. Returns how many pages were opened
+        (0 or 1) or the result that ends the collection."""
+        if hooks.on_list_company is not None and candidate.company:
+            if hooks.on_list_company(candidate.company, candidate.city, candidate.title):
+                return 0
+        reason = self._salary_block_reason(candidate) or self._filter_reason(candidate) or self._relevance_reason(candidate)
+        if not reason and candidate.hr_active:
+            profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
+            score, why = freshness_filter_result({"hr_active": candidate.hr_active}, profile)
+            reason = "" if score > 0 else why
+        if reason:
+            hooks.on_event(message=f"智联 列表预筛：{reason}", increment_filtered=True, filtered_candidate=candidate)
+            return 0
+        if not hooks.on_list_candidate(candidate):
+            return 0
+        if detail_requests:
+            delay = max(0.0, self.uniform(*self.delay_range))
+            hooks.on_event(phase="pacing", keyword=keyword, city=city, page=page, message=f"详情页安全间隔 {delay:.1f} 秒")
+            if hooks.stop_event is not None:
+                if hooks.stop_event.wait(delay):
+                    return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+            else:
+                self.sleep(delay)
+        hooks.on_event(phase="loading_detail", keyword=keyword, city=city, page=page)
+        target = self.browser.new_tab(candidate.url, background=True)
+        if not target:
+            hooks.on_parse_failed("无法打开智联详情页")
+            return 0
+        try:
+            self.browser.wait_for_load(target, timeout=15)
+            detail = self._read_detail_with_retry(target, city, attempts=6, retry_delay=1.0)
+        except CollectionError as exc:
+            hooks.on_parse_failed(str(exc) or "智联详情页读取失败")
+            return 1
+        finally:
+            self.browser.close_tab(target)
+        status = detail.get("status")
+        if status == "blocked":
+            return PlatformCollectionResult(self.platform, "blocked", "rate_limit", "智联页面出现验证或限流，已停止整个采集队列")
+        if status == "login_required":
+            return PlatformCollectionResult(self.platform, "blocked", "login_required", "智联页面要求重新登录，已停止智联当前任务；后续平台将继续")
+        if status != "ready" or not str(detail.get("jd") or "").strip():
+            hooks.on_parse_failed("智联详情页没有读到岗位描述")
+            return 1
+        final = self._candidate_from_detail(detail, candidate)
+        reason = update_age_reason(self.config, detail) or self._salary_block_reason(final) or self._filter_reason(final)
+        if reason:
+            hooks.on_event(message=f"智联 {reason}", increment_filtered=True, filtered_candidate=final)
+            return 1
+        if not hooks.on_candidate(final):
+            return PlatformCollectionResult(self.platform, "completed", "callback_stopped", "采集回调已停止")
+        return 1
 
     def _direct_results_ready(self, target_id: str, keyword: str, timeout: float = 12.0) -> bool:
         """True when the page shows the keyword's results (search box filled, cards listed)."""
@@ -1453,6 +1619,13 @@ class ZhilianCollector:
             collected_combos = get_collected_combos(
                 self.safety_conn, "zhilian", within_hours=self._resume_ttl_hours()
             )
+
+        # The page's own list requests first (fast, works in a background tab); reading the page is the fallback.
+        if self.browser.navigate_action is not None and (self.config.get("automation") or {}).get("zhilian_list_requests", True) is not False:
+            positions = self._collect_positions(request, hooks, collected_combos)
+            if positions is not None:
+                return positions
+            hooks.on_event(message="智联页面没有发出列表请求，改为读取页面")
 
         # API-fetch 优先：尝试 API 模式，不可用时降级到 DOM 模式
         if self._api_fetch_enabled():
