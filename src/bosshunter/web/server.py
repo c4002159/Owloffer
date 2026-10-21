@@ -947,7 +947,31 @@ def _refresh_greeting_settings(config: dict) -> dict:
 	return config
 
 
+def _release_scheduled(task: WorkbenchTask, job_id: str) -> None:
+	"""A job whose turn in the delivery queue is over (sent or failed) is no longer queued: it stops being grey and
+	can be queued again."""
+	lock = task.context.get("delivery_queue_lock")
+	scheduled = task.context.get("delivery_scheduled_ids")
+	if scheduled is None:
+		return
+	if lock is not None:
+		with lock:
+			scheduled.discard(str(job_id))
+	else:
+		scheduled.discard(str(job_id))
+
+
 def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
+	config = dict(config)
+	config["_workbench_job_done"] = lambda job_id: _release_scheduled(task, job_id)
+	try:
+		_execute_deliver_batch_inner(task, config)
+	finally:
+		for job_id in config.get("_workbench_job_ids", []):
+			_release_scheduled(task, str(job_id))
+
+
+def _execute_deliver_batch_inner(task: WorkbenchTask, config: dict) -> None:
 	from bosshunter.ai.greeter import generate_greetings
 	from bosshunter.executor.sender import send_greetings
 
@@ -996,8 +1020,9 @@ def _execute_deliver_batch(task: WorkbenchTask, config: dict) -> None:
 		"send_quota_deferred": quota_deferred_count,
 		"send_already_today": int(report.get("already_sent", 0) or 0),
 		"send_daily_limit": int(report.get("daily_limit", 0) or 0),
-		"send_remaining_quota": int(report.get("remaining_quota", 0) or 0),
 	})
+	if int(report.get("daily_limit", 0) or 0) > 0:        # no card for a quota that does not exist
+		task.metrics["send_remaining_quota"] = int(report.get("remaining_quota", 0) or 0)
 	total_count = len(selected_job_ids) or sent_count + failed_count + deferred_count
 	_log(
 		task,
@@ -1282,6 +1307,15 @@ def api_job_search():
 	params = []
 	keyword = (request.query.getunicode("q") or "").strip()
 	status_filters = _query_values("status")
+	queue_view = request.params.get("queue_view", "").strip()
+	if queue_view and queue_view not in {"confirm", "waiting", "failed"}:
+		return _json_response({"error": "queue_view 参数无效"}, 400)
+	if queue_view == "confirm":      # scored and waiting for the user, no greeting prepared yet
+		conditions.append("status IN ('pending', 'scored', 'ready') AND NOT (status = 'ready' AND TRIM(COALESCE(greeting, '')) != '')")
+	elif queue_view == "waiting":    # confirmed (or greeting ready) and waiting to be delivered, by the program or by hand
+		conditions.append("(status = 'approved' OR (status = 'ready' AND TRIM(COALESCE(greeting, '')) != ''))")
+	elif queue_view == "failed":     # a delivery was tried and failed
+		conditions.append("status = 'error'")
 	if keyword:
 		conditions.append("(title LIKE ? OR company LIKE ? OR jd LIKE ? OR score_reason LIKE ?)")
 		keyword_param = f"%{keyword}%"
@@ -1589,7 +1623,11 @@ def api_workbench():
 	try:
 		config = load_config(CONFIG_PATH)
 		threshold = config.get("scoring", {}).get("threshold", 60)
-		daily_limit = int(config.get("throttle", {}).get("daily_limit", 30) or 30)
+		try:
+			daily_limit = int(config.get("throttle", {}).get("daily_limit", 30))
+		except (TypeError, ValueError):
+			daily_limit = 30
+		unlimited = daily_limit <= 0
 		today_sent_row = db.execute(
 			"SELECT COUNT(*) AS cnt FROM history WHERE action='sent' AND date(created_at)=date('now')"
 		).fetchone()
@@ -1625,8 +1663,9 @@ def api_workbench():
 			"send_quota": {
 				"daily_limit": daily_limit,
 				"sent": today_sent,
-				"remaining": max(daily_limit - today_sent, 0),
-				"exhausted": today_sent >= daily_limit,
+				"remaining": 0 if unlimited else max(daily_limit - today_sent, 0),
+				"exhausted": False if unlimited else today_sent >= daily_limit,
+				"unlimited": unlimited,
 			},
 			"task": status["active"],
 			"last_task": status["last_task"],
@@ -2865,6 +2904,24 @@ def api_keywords_plan():
 	return _json_response({"plan": load_plan(BASE_DIR)})
 
 
+@app.route("/api/resumes/tags")
+def api_resumes_tags():
+	"""The platform's resumes with their tags as remembered (no browser is touched)."""
+	from bosshunter.resume_sync import run_sync
+
+	return _json_response(run_sync(load_config(CONFIG_PATH), detect=False))
+
+
+@app.route("/api/resumes/sync", method="POST")
+def api_resumes_sync():
+	"""Check the platform's resumes now; new or replaced ones are read again and re-tagged."""
+	from bosshunter.resume_sync import run_sync
+
+	if task_runner.status().get("active"):
+		return _json_response({"error": "有后台任务在运行，请等它结束后再同步简历"}, 409)
+	return _json_response(run_sync(load_config(CONFIG_PATH), detect=True))
+
+
 @app.route("/api/keywords/strategy")
 def api_keywords_strategy():
 	"""Tier, 14-day results and recent tier moves of the configured search keywords."""
@@ -3483,10 +3540,25 @@ def _job_action_error(exc: ValueError):
 	return _json_response(payload, 409 if isinstance(exc, (JobDeletionConflictError, JobManualSentConflictError)) else 400)
 
 
-def _active_task_mutation_error():
-	active = task_runner.status().get("active")
+def _active_task_mutation_error(job_ids=None):
+	"""Block edits while a background task runs - except database-only edits of jobs that are not queued for delivery,
+	which may run alongside a delivery queue (the queued jobs are grey and locked until their turn is over)."""
+	status = task_runner.status()
+	active = status.get("active")
 	if not active:
 		return None
+	if job_ids is not None:
+		runtime = task_runner._tasks.get(active.get("id"))
+		if runtime and runtime.status in {"running", "stopping"} and (runtime.mode == "deliver" or runtime.context.get("delivering")):
+			queued = set(_active_delivery_job_ids(status))
+			clash = [str(job_id) for job_id in job_ids if str(job_id) in queued]
+			if not clash:
+				return None
+			return _json_response({
+				"error": f"所选岗位里有 {len(clash)} 个正在投递队列中（已变灰），等它们投递完或停止队列后再改；其余岗位可以直接改",
+				"code": "jobs_in_delivery_queue",
+				"job_ids": clash,
+			}, 409)
 	return _json_response({
 		"error": f"当前后台任务「{active.get('label', '未知任务')}」仍在运行，请停止或等待结束后再修改岗位状态",
 		"code": "active_task_conflict",
@@ -3500,7 +3572,7 @@ def api_jobs_soft_delete():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
+			conflict = _active_task_mutation_error(job_ids)
 			if conflict is not None:
 				return conflict
 			result = soft_delete_jobs(
@@ -3522,7 +3594,7 @@ def api_jobs_restore():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
+			conflict = _active_task_mutation_error(job_ids)
 			if conflict is not None:
 				return conflict
 			result = restore_jobs(db, job_ids, confirmed=body.get("confirmed") is True)
@@ -3539,7 +3611,7 @@ def api_jobs_manual_sent():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
+			conflict = _active_task_mutation_error(job_ids)
 			if conflict is not None:
 				return conflict
 			result = mark_external_jobs_sent(
@@ -3560,7 +3632,7 @@ def api_jobs_status():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
+			conflict = _active_task_mutation_error(job_ids)
 			if conflict is not None:
 				return conflict
 			result = update_jobs_manual_status(db, job_ids, str(body.get("status") or ""))
@@ -3577,7 +3649,7 @@ def api_jobs_permanent_delete():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
+			conflict = _active_task_mutation_error(job_ids)
 			if conflict is not None:
 				return conflict
 			result = permanent_delete_jobs(
@@ -3954,9 +4026,30 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 			"`npm ci && npm run build`（或安装官方发布的 wheel）后重试。"
 		)
 
+	import threading
+
+	def _sync_resumes_at_start():
+		"""After the server is up, and then from time to time: check which resumes Liepin has, read the new or
+		replaced ones through the platform's preview and have the model tag them."""
+		from bosshunter.resume_sync import format_report, needs_refresh, refresh_hours, run_sync
+
+		time.sleep(8)
+		first = True
+		while True:
+			try:
+				config = load_config(CONFIG_PATH)
+				if not task_runner.status().get("active") and (first or needs_refresh(config)):
+					for line in format_report(run_sync(config, detect=True, force=True)):
+						print(line, flush=True)
+			except Exception as exc:
+				print(f"简历同步失败：{type(exc).__name__}: {exc}", flush=True)
+			first = False
+			time.sleep(1800)
+
+	threading.Thread(target=_sync_resumes_at_start, daemon=True).start()
+
 	if open_browser:
 		import webbrowser
-		import threading
 		def _open():
 			time.sleep(1)
 			webbrowser.open(f"http://{host}:{port}")

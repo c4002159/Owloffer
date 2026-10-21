@@ -49,16 +49,25 @@ export function getActionLabel(action: string | null | undefined): string {
 }
 
 /** 岗位池分成两个视图：还要处理的，和已经有结果的历史记录。 */
-export type PoolView = 'pending' | 'history'
+export type PoolView = 'pending' | 'waiting' | 'failed' | 'history'
 
 export const POOL_VIEW_STATUSES: Record<PoolView, string[]> = {
-  // 待评分、已评分、待确认、已确认（待投递）、发送失败（需要你重试）
-  pending: ['pending', 'scored', 'ready', 'approved', 'error'],
+  // 待评分、已评分、待确认
+  pending: ['pending', 'scored', 'ready'],
+  // 已确认（或招呼语已备好）、等待投递
+  waiting: ['approved', 'ready'],
+  // 发送失败（需要重试或人工投递）
+  failed: ['error'],
   // 已投递、已回复、简历已发、待手动发简历、已跟进、已拒绝、已过滤、已跳过
   history: ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent', 'rejected', 'filtered', 'skipped'],
 }
 
+// 同一个状态可能属于两个视图（ready 有无招呼语），服务端按 queue_view 区分。
+export const POOL_VIEW_QUEUE: Record<PoolView, string | null> = { pending: 'confirm', waiting: 'waiting', failed: 'failed', history: null }
+
 export const POOL_VIEW_LABELS: Record<PoolView, string> = {
   pending: '待确认',
+  waiting: '待投递',
+  failed: '投递失败',
   history: '历史投递记录',
 }

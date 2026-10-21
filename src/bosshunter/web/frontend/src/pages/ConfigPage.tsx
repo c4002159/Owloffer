@@ -439,7 +439,7 @@ export default function ConfigPage() {
         <SectionCard title="搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
             <p className="rounded-xl border border-card-border bg-surface px-3 py-2 text-xs leading-5 text-muted">
-              前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘可在投递后追发定制招呼语（automation.external_greeting_send，默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。BossHunter 只在 BOSS 上监听回复。
+              前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘没有投简历入口或没有合适简历时自动降级为发定制招呼语，投递成功后再追发招呼语由 automation.external_greeting_send 控制（默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。BossHunter 只在 BOSS 上监听回复。
             </p>
             {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
               const search = platformSearch(platform)

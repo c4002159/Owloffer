@@ -54,7 +54,7 @@
 | BOSS 直聘 | 支持 | 人工确认后低频发送，并支持回复监听 |
 | 智联招聘 | 支持采集、评分和招呼语准备（采集在真实环境尚未充分验证） | 在原平台手动投递，再回填“已发送” |
 | 前程无忧 51job | 支持采集（可选“活跃职位优先”排序）、评分和招呼语准备 | 人工确认后从岗位页一键投递：点“立即投递”，重开岗位页看到“已投递”才记为已发送；HR 走微信沟通，招呼语只生成供复制 |
-| 猎聘 | 支持采集（可按“招聘者活跃”筛选）、评分和招呼语准备 | 人工确认后一键投递：“投简历”→ 选简历 →“立即投递”，到“投递成功”页才记为已发送（从不点“一键发简历”）；只有“聊一聊”的岗位改为发送定制招呼语；投递后追发招呼语由 `automation.external_greeting_send` 控制，默认关闭 |
+| 猎聘 | 支持采集（可按“招聘者活跃”筛选）、评分和招呼语准备 | 人工确认后一键投递：“投简历”→ 选简历 →“立即投递”，到“投递成功”页才记为已发送（从不点“一键发简历”）；用的是猎聘账号里的附件简历：程序启动后通过猎聘自带的“简历预览”读取每份简历的文字（去掉电话和邮箱），让 AI 模型打标签并记住，之后每隔一段时间（`automation.resume_refresh_hours`，默认 12 小时）以及猎聘投递前检查一次，只重新读取新增或更换的（`bosshunter resumes sync` 可手动触发）；投简历时给岗位打同一套标签，选标签最匹配的一份，没有合适的就不投、降级为打招呼；没有“投简历”入口（只有“聊一聊”）或没有合适简历的岗位，自动降级为发送定制招呼语；投递成功后再追发一条招呼语由 `automation.external_greeting_send` 控制，默认关闭 |
 
 各平台严格串行采集。检测到验证码、频率限制、登录墙或未知页面结构时会安全停止，不尝试绕过。所有“已发送”都以页面确认为准，点击后没有确认成功会记为失败并提示核对，不会误记。
 
@@ -136,72 +136,8 @@ bosshunter run
 
 </details>
 
-## 🧭 现任维护者
-
-包括项目负责人在内的 5 名正式维护者共同维护全项目，不设置固定模块；擅长方向仅用于协作参考。
-
-| GitHub | 身份 | 贡献占比 | 擅长方向 | 任期 |
-|---|---|---|---|---|
-| [@yukinoshi](https://github.com/yukinoshi) | 正式维护者（Write） | 25.5% | AI、错误恢复与产品流程 | 2026-08-29 起 |
-| [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 正式维护者（Write） | 24.2%（试算） | 运行时、发送安全与监测链路 | 2026-08-30 起 |
-| [@yuppiez99999](https://github.com/yuppiez99999) | 正式维护者（Write） | 25.5% | 平台采集、城市数据与测试 | 2026-08-29 起 |
-| [@bianshilong0604](https://github.com/bianshilong0604) | 正式维护者（Write） | 24.8%（试算） | Web、产品流程与隐私边界 | 2026-08-30 起 |
-| [@powerycy](https://github.com/powerycy) 跑跑蹦蹦跳跳 | 项目负责人兼正式技术维护者（Admin） | 不参评 | 全仓技术审核、安全复核与合并；贡献文档与评分 | 项目发起至今；2026-09-06 起计入技术审核池 |
-
-截至 **2026-09-28 10:38（Asia/Shanghai）**，以上为经项目负责人确认的结果；任职未满 30 天者仍标注试算。维护贡献按任期累计，与项目贡献分别记录；0604 的审核团队邀请已接受，见 [#200](https://github.com/shengjidaguai-china/BossHunter/pull/200)。
-
-[查看维护者任期](MAINTAINERS.md) · [查看维护贡献及评分](MAINTENANCE_CONTRIBUTIONS.md) · [查看技术审核规则](GOVERNANCE.md)
-
-技术 PR 的审核、测试验证与合并由包括项目负责人在内的正式维护者完成，项目负责人的有效批准按一人计入；本人提交或参与编写的技术改动不得自审计票，高风险 PR 仍需两名不同的非作者维护者批准。项目负责人负责 PR 项目贡献和维护贡献两类文档，并单方面决定维护贡献评分；本页摘要由维护者按贡献文档同步。
-
-## 🔥 近 30 天贡献榜 Top 10
-
-统计窗口：**2026-08-30 至 2026-09-28（Asia/Shanghai）**；实际核对截至 **9 月 28 日 10:38**。只计算窗口内被主线采纳的部分，同分并列。
-
-| 排名 | 贡献者 | 本期主要贡献 |
-|:---:|---|---|
-| 🥇 | [@yuppiez99999](https://github.com/yuppiez99999) | 多平台续采、智联 API 与过滤、城市快照和构建交付；薪资失败策略、任务弹窗与招呼语面板适配 |
-| 🥈 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | 安全操作与本地凭据；猎聘断点保护、重试反馈；Agent API 人工确认与访问安全共同实现 |
-| 🥉 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | 定制简历预览和显式确认；招呼语原文/优化版选择；标题规范、建议提示与运行时探测边界 |
-| 4 | [@pikachuprogrammer01](https://github.com/pikachuprogrammer01) | 简历拖放上传、原件 PDF/MD 双预览与安全读取；macOS 启动器、安装指南和含空格路径回归 |
-| 5 | [@bactdt](https://github.com/bactdt) | 招呼语后台生成、编辑、重新生成及确认工作流 |
-| 5 | [@kai04072911-sudo](https://github.com/kai04072911-sudo) | 本机 Agent Tool API、受控配置/采集/评分工作流、接口文档与基础测试 |
-| 7 | [@1028huli](https://github.com/1028huli) | 配置页发现与选择 AI 模型；草稿查询不保存、URL 凭据边界和分页保护 |
-| 8 | [@Rainmemery](https://github.com/Rainmemery) | 按实际字体重建薪资映射；评分弹窗反馈；恢复测试对 Python 3.10 的兼容 |
-| 9 | [@Spades6](https://github.com/Spades6) | 猎聘面板配置、采集/岗位筛选与导出入口；简历相对路径按配置目录解析 |
-| 10 | [@zepengfan145-netizen](https://github.com/zepengfan145-netizen) | 招呼语队列进度、任务状态与网址白名单；失败招呼语重试复用原发送通道 |
-
-## 🏆 贡献总榜 Top 10
-
-截至 **2026-09-28 10:38（Asia/Shanghai）**，完整总榜共 **41 位**贡献者，贡献度合计 **100.0%**。
-
-| 排名 | 贡献者 | 贡献度 | 主要贡献 |
-|:---:|---|:---:|---|
-| 🥇 | [@yuppiez99999](https://github.com/yuppiez99999) | **6.0%** | 多平台采集、续采与构建交付；薪资解析失败可选跳过、任务启动反馈及招呼语任务面板兼容；测试和维护状态文档修正 |
-| 🥈 | [@shuaigechz-cloud](https://github.com/shuaigechz-cloud) | **5.4%** | 会话送达与招呼语约束、定制简历预览及人工确认；原文/优化版显式选择；简历标题规范、建议提示与运行时探测边界 |
-| 🥉 | [@fengziliang43-cmyk](https://github.com/fengziliang43-cmyk) | **5.1%** | 监测、本地凭据与猎聘断点保护；失败重试反馈和回归；Agent API 回环访问、人工确认、任务互斥及队列行为测试 |
-| 4 | [@yukinoshi](https://github.com/yukinoshi) | **4.6%** | Thinking 与多 AI 兼容、评分恢复和凭据优先级；批次删除保护；招呼语生成流程的既有回归测试适配 |
-| 5 | [@zhenian-666](https://github.com/zhenian-666) | **4.6%** | 多范围岗位导出、城市目录、回收站与独立 AI 评分；统一平台采集架构和智联只读采集 |
-| 6 | [@pikachuprogrammer01](https://github.com/pikachuprogrammer01) | **4.3%** | 简历拖放上传、原件 PDF/MD 双预览与安全读取；macOS 启动器、安装指南和含空格路径回归 |
-| 7 | [@GioiaZheng](https://github.com/GioiaZheng) | **3.9%** | API Key 脱敏与安全读取；PDF 依赖降级；人工确认、招呼语和发送选择修复 |
-| 8 | [@atticus-zhou](https://github.com/atticus-zhou) | **3.7%** | AI 评分与招呼语重试、前台浏览器交互、送达验证和防重复发送 |
-| 9 | [@bactdt](https://github.com/bactdt) | **3.7%** | 招呼语后台生成、编辑、重新生成及确认工作流 |
-| 9 | [@kai04072911-sudo](https://github.com/kai04072911-sudo) | **3.7%** | 本机 Agent Tool API、受控配置/采集/评分工作流、接口文档与基础测试 |
-
-[查看完整榜单、证据链接与历月快照](CONTRIBUTORS.md)
-
 ## 许可证
 
 本项目源码公开，采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。许可证允许符合其定义的非商业用途，以及为这些用途修改和分发本软件；商业使用不在该许可证的授权范围内，需事先取得另行书面授权。
 
 因此，BossHunter 属于 **source-available（源码可用）的非商业许可软件**，不是 [OSI 定义下的开源软件](https://opensource.org/osd)。
-
-## 参与项目
-
-欢迎 [Star](https://github.com/shengjidaguai-china/BossHunter/stargazers)、提交 [Issue](https://github.com/shengjidaguai-china/BossHunter/issues) 或 Pull Request。大改动建议先开 Issue 讨论。
-
-- 不接受绕过平台安全机制、规避检测或提高默认发送频率的 PR。
-- 不接受绕过人工确认，或收集、上传、外发用户隐私数据的 PR。
-- 所有修改必须走 PR 并通过 CI；贡献记录以合入主线的实际影响为准。
-
-[查看贡献指南](CONTRIBUTING.md) · [查看完整贡献榜](CONTRIBUTORS.md) · [申请成为候选维护者](https://github.com/shengjidaguai-china/BossHunter/issues/new?template=maintainer_application.md) · [关注升级打怪开源社区](https://github.com/shengjidaguai-china)

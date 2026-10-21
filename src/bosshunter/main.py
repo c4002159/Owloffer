@@ -448,6 +448,22 @@ def monitor(ctx: click.Context, once: bool, interval: int | None) -> None:
             console.print("\n[yellow]已停止监听[/yellow]")
 
 
+@cli.group()
+def resumes() -> None:
+    """简历：读取平台里的附件简历并用 AI 打标签"""
+
+
+@resumes.command("sync")
+@click.option("--no-detect", is_flag=True, help="不打开猎聘，只显示已记住的简历")
+@click.pass_context
+def resumes_sync(ctx: click.Context, no_detect: bool) -> None:
+    """读取猎聘里的附件简历（通过简历预览），让 AI 模型打标签并记住；只重新读取新增或更换的"""
+    from bosshunter.resume_sync import format_report, run_sync
+
+    for line in format_report(run_sync(ctx.obj["config"], detect=not no_detect)):
+        console.print(line)
+
+
 @cli.command()
 @click.option("--port", "-p", default=8686, help="服务端口（默认 8686）")
 @click.option("--no-open", is_flag=True, help="不自动打开浏览器")

@@ -759,6 +759,22 @@ def _detect_job_closed_on_page(target_id: str) -> dict | None:
     return None
 
 
+def _make_resume_chooser(config: dict, db):
+    """``chooser(job, names, default_name) -> (name or None, note)``: match each resume's tags against the job's tags."""
+    from bosshunter.resume_tags import MIN_SCORE, pick_resume
+
+    automation = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+    try:
+        min_score = float(automation.get("resume_match_min_score", MIN_SCORE))
+    except (TypeError, ValueError):
+        min_score = MIN_SCORE
+
+    def chooser(job: dict, names: list[str], default_name: str = "") -> tuple[str | None, str]:
+        return pick_resume(db, config, job, names, min_score, default_name)
+
+    return chooser
+
+
 def _deliver_job_once(job: dict, greeting: str, throttle_config: dict) -> tuple[dict, str | None]:
     """One delivery attempt, routed to the job's platform (BOSS greets; 51job and Liepin apply from the job page)."""
     platform = str(job.get("source_platform") or "boss")
@@ -1106,6 +1122,7 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
     throttle_config["_platform_access_guard"] = access_guard
     automation_cfg = config.get("automation") if isinstance(config.get("automation"), dict) else {}
     throttle_config["_send_greeting_after_apply"] = automation_cfg.get("external_greeting_send", False) is True
+    throttle_config["_resume_chooser"] = _make_resume_chooser(config, db)
     try:
         access_guard.ensure_unlocked()
     except PlatformSafetyStop as exc:
@@ -1163,7 +1180,11 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
         return 0
 
     # Check daily limit
-    daily_limit = throttle_config.get("daily_limit", 30)
+    try:
+        daily_limit = int(throttle_config.get("daily_limit", 30))
+    except (TypeError, ValueError):
+        daily_limit = 30
+    unlimited = daily_limit <= 0              # 0 = no daily cap; how many jobs a run handles is set by review_cap
     interval_min = throttle_config.get("interval_min", 60)
     interval_max = throttle_config.get("interval_max", 180)
 
@@ -1173,7 +1194,7 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
     ).fetchone()
     already_sent = today_sent["cnt"] if today_sent else 0
 
-    remaining_quota = daily_limit - already_sent
+    remaining_quota = len(jobs) if unlimited else daily_limit - already_sent
     send_report["already_sent"] = already_sent
     send_report["daily_limit"] = daily_limit
     send_report["remaining_quota"] = max(remaining_quota, 0)
@@ -1185,6 +1206,15 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
         return 0
 
     jobs_to_send = jobs[:remaining_quota]
+    if any(str(job.get("source_platform") or "boss") == "liepin" for job in jobs_to_send):
+        try:
+            from bosshunter.resume_sync import needs_refresh, run_sync
+
+            if needs_refresh(config):
+                console.print("[dim]猎聘附件简历已有一段时间没检查，先检查一次是否换过简历…[/dim]")
+                run_sync(config, detect=True, force=True)
+        except Exception as exc:
+            console.print(f"[yellow]检查猎聘附件简历失败，沿用已记住的：{type(exc).__name__}[/yellow]")
     send_report["scheduled_count"] = len(jobs_to_send)
     send_report["quota_deferred_count"] = max(len(jobs) - len(jobs_to_send), 0)
     if send_report["quota_deferred_count"]:
@@ -1194,7 +1224,7 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
     sent_count = 0
     workbench_log = config.get("_workbench_log")
 
-    console.print(f"[bold]准备发送 {len(jobs_to_send)} 条招呼语[/bold] (今日已发 {already_sent}/{daily_limit})")
+    console.print(f"[bold]准备发送 {len(jobs_to_send)} 条招呼语[/bold] ({'发送量不设每日上限' if unlimited else f'今日已发 {already_sent}/{daily_limit}'})")
 
     with Progress(
         SpinnerColumn(),
@@ -1205,7 +1235,10 @@ def send_greetings(config: dict, force: bool = False, db_path=None) -> int:
     ) as progress:
         task = progress.add_task("发送中", total=len(jobs_to_send))
 
+        job_done = config.get("_workbench_job_done")
         for index, job in enumerate(jobs_to_send):
+            if index > 0 and callable(job_done):
+                job_done(str(jobs_to_send[index - 1]["id"]))          # its turn is over: sent or failed, not queued any more
             if _stop_requested(stop_event):
                 console.print("[yellow]已请求停止，结束发送[/yellow]")
                 send_report["stop_reason"] = "stopped"

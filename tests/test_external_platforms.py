@@ -110,7 +110,7 @@ def _request(path, method="GET", json_body=None):
 
     raw = json.dumps(json_body).encode("utf-8") if json_body is not None else b""
     environ = {
-        "REMOTE_ADDR": "127.0.0.1", "REQUEST_METHOD": method, "PATH_INFO": path, "QUERY_STRING": "",
+        "REMOTE_ADDR": "127.0.0.1", "REQUEST_METHOD": method, "PATH_INFO": path.split("?")[0], "QUERY_STRING": path.partition("?")[2],
         "SERVER_NAME": "127.0.0.1", "SERVER_PORT": "8686", "wsgi.version": (1, 0), "wsgi.url_scheme": "http",
         "wsgi.input": io.BytesIO(raw), "wsgi.errors": io.StringIO(), "wsgi.multithread": False,
         "wsgi.multiprocess": False, "wsgi.run_once": False,
@@ -221,3 +221,92 @@ def test_fill_collects_internship_keywords_on_external_platforms_with_internship
     }
     fill_module.fill_review_list(config, lambda _m: None, max_rounds=1)
     assert ("51job", "Agent工程师", False) in calls and ("51job", "AI开发实习生", True) in calls
+
+
+def test_a_zero_daily_limit_means_the_send_quota_is_not_capped(tmp_path):
+    (tmp_path / "config.yaml").write_text("throttle:\n  daily_limit: 0\n", encoding="utf-8")
+    get_db(tmp_path / "data" / "bosshunter.db").close()
+    server.set_base_dir(tmp_path)
+    status, payload = _request("/api/workbench")
+    assert status.startswith("200") and payload["send_quota"]["unlimited"] is True
+    assert payload["send_quota"]["exhausted"] is False
+
+    (tmp_path / "config.yaml").write_text("throttle:\n  daily_limit: 30\n", encoding="utf-8")
+    status, payload = _request("/api/workbench")
+    assert payload["send_quota"]["unlimited"] is False and payload["send_quota"]["remaining"] == 30
+
+
+def test_a_job_leaves_the_delivery_queue_when_its_turn_is_over_and_can_be_queued_again():
+    from threading import Lock
+
+    from bosshunter.web.tasks import WorkbenchTask
+
+    task = WorkbenchTask(id="t1", mode="deliver", label="确认投递")
+    task.context.update({"delivering": True, "delivery_queue_lock": Lock(), "delivery_scheduled_ids": {"a", "b"}})
+    server._release_scheduled(task, "a")                                       # a was sent or failed
+    assert task.context["delivery_scheduled_ids"] == {"b"}
+    payload, new_ids = server._queue_active_delivery(task, ["a", "b", "c"], direct_send=True)
+    assert new_ids == ["a", "c"] and payload["already_queued_count"] == 1      # b is still queued; a (failed) and c are added
+    assert task.context["delivery_scheduled_ids"] == {"a", "b", "c"}
+    server._release_scheduled(task, "missing")                                 # unknown ids are harmless
+
+
+def test_the_sender_reports_each_finished_job_to_the_queue(monkeypatch, tmp_path):
+    from bosshunter.executor import sender
+
+    done = []
+    config = {"_workbench_job_done": done.append, "_workbench_job_ids": ["j1", "j2"], "throttle": {"interval_min": 0, "interval_max": 0, "daily_limit": 0, "browse_before_greet": False, "send_windows": ["00:00-23:59"]}}
+    db_path = tmp_path / "data" / "bosshunter.db"
+    conn = get_db(db_path)
+    for job_id in ("j1", "j2"):
+        _job(conn, job_id, "boss", status="ready")
+    conn.close()
+    monkeypatch.setattr(sender, "_deliver_job_once", lambda job, greeting, cfg: ({"success": True}, None))
+    monkeypatch.setattr(sender, "should_take_day_off", lambda *a, **k: False)
+    monkeypatch.setattr("bosshunter.executor.sender.RequestThrottle.wait", lambda self, stop=None: False)
+    sender.send_greetings(config, force=True, db_path=db_path)
+    assert done[:1] == ["j1"]                                                  # j1 is released before j2 starts
+
+
+def _pool(tmp_path, rows):
+    conn = get_db(tmp_path / "data" / "bosshunter.db")
+    for job_id, status, greeting in rows:
+        _job(conn, job_id, "boss", status="pending")
+        conn.execute("UPDATE jobs SET status = ?, greeting = ? WHERE id = ?", (status, greeting, job_id))
+    conn.commit()
+    conn.close()
+    server.set_base_dir(tmp_path)
+
+
+def test_pool_views_split_confirm_waiting_and_failed(tmp_path):
+    _pool(tmp_path, [("p1", "pending", ""), ("r1", "ready", ""), ("r2", "ready", "您好"), ("a1", "approved", ""),
+                     ("e1", "error", "您好"), ("s1", "sent", "您好")])
+
+    def ids(view):
+        status, payload = _request(f"/api/jobs/search?limit=50&queue_view={view}")
+        assert status.startswith("200"), payload
+        return {item["id"] for item in payload["items"]}
+
+    assert ids("confirm") == {"p1", "r1"}                      # nothing prepared yet: waiting for you
+    assert ids("waiting") == {"r2", "a1"}                      # confirmed or greeting ready: waiting to be delivered
+    assert ids("failed") == {"e1"}
+    assert _request("/api/jobs/search?queue_view=nope")[0].startswith("400")
+
+
+def test_database_edits_of_jobs_outside_the_delivery_queue_run_alongside_it(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _pool(tmp_path, [("queued", "ready", "您好"), ("free", "ready", "您好"), ("other", "ready", "您好")])
+    runtime = SimpleNamespace(mode="deliver", status="running", context={"delivering": True, "delivery_scheduled_ids": {"queued"}})
+    monkeypatch.setattr(server.task_runner, "status", lambda: {"active": {"id": "t1", "label": "确认投递"}, "last_task": None})
+    monkeypatch.setitem(server.task_runner._tasks, "t1", runtime)
+
+    status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["free"], "confirmed": True})
+    assert status.startswith("200") and payload["affected_count"] == 1                 # not queued: goes ahead
+
+    status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["queued", "other"], "confirmed": True})
+    assert status.startswith("409") and payload["code"] == "jobs_in_delivery_queue" and payload["job_ids"] == ["queued"]
+
+    runtime.mode, runtime.context = "collect", {}                                      # any other task still blocks edits
+    status, payload = _request("/api/jobs/soft-delete", "POST", {"job_ids": ["other"], "confirmed": True})
+    assert status.startswith("409") and payload["code"] == "active_task_conflict"

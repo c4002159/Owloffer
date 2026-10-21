@@ -1,5 +1,5 @@
 import { OutsourcingBadge } from '@/components/jobs/OutsourcingBadge'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useDashboard, type CollectionProgress, type HistoryItem, type Job, type WorkbenchTask } from '@/hooks/useDashboard'
 import { useJobSearch, type JobSortKey, type JobSortOrder } from '@/hooks/useJobSearch'
 import { Button } from '@/components/ui/button'
@@ -25,7 +25,7 @@ import {
   useDebouncedValue,
   type JobFilters,
 } from '@/lib/jobFilters'
-import { getActionLabel, getStatusLabel, POOL_VIEW_LABELS, POOL_VIEW_STATUSES, type PoolView } from '@/lib/status'
+import { getActionLabel, getStatusLabel, POOL_VIEW_LABELS, POOL_VIEW_QUEUE, POOL_VIEW_STATUSES, type PoolView } from '@/lib/status'
 import { describeGreetTaskOutcome, greetPauseReasonLabel } from '@/lib/greetTask'
 import { cn } from '@/lib/utils'
 import {
@@ -323,6 +323,18 @@ async function parsePreflightResponse(res: Response) {
   return { ok: Boolean(res.ok && data.ok), messages, checks }
 }
 
+// Jobs that are queued or being delivered are grey and cannot be operated; they turn normal again when their turn is
+// over and fail, or leave the pending lists when they were sent.
+function QueuedShield({ queued, children }: { queued: boolean; children: ReactNode }) {
+  if (!queued) return <>{children}</>
+  return (
+    <div className="relative">
+      <div className="pointer-events-none select-none opacity-50 grayscale" aria-disabled="true">{children}</div>
+      <span className="absolute right-3 top-3 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-black text-primary">投递队列中</span>
+    </div>
+  )
+}
+
 function CompactNotice({ message, danger = false }: { message: string; danger?: boolean }) {
   return (
     <details className={cn('group mt-2 rounded-lg px-2 text-xs', danger ? 'bg-danger-soft text-danger' : 'bg-secondary text-primary')}>
@@ -533,6 +545,12 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       window.clearInterval(interval)
     }
   }, [view])
+
+  const queuedIds = useMemo(() => new Set(workbench.delivery_job_ids ?? []), [workbench.delivery_job_ids])
+  useEffect(() => {
+    if (!queuedIds.size) return
+    setSelected(previous => (previous.some(id => queuedIds.has(id)) ? previous.filter(id => !queuedIds.has(id)) : previous))
+  }, [queuedIds])
 
   const pendingGreetingJobs = workbench.pending_greetings
   const reviewedGreetingJobs = pendingGreetingJobs.filter(job => job.greeting_selection !== 'pending')
@@ -1197,7 +1215,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           </div>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {workbench.send_errors.map(job => (
-              <div key={job.id} className="rounded-2xl border border-danger-border bg-card p-4">
+              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
+              <div className="rounded-2xl border border-danger-border bg-card p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
@@ -1215,6 +1234,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                   <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
                 </div>
               </div>
+              </QueuedShield>
             ))}
           </div>
         </section>
@@ -1245,16 +1265,17 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           </div>
           <div className="divide-y divide-card-border border-t border-card-border">
             {pendingGreetingJobs.map(job => (
-              <GreetingReviewCard
-                key={job.id}
-                job={job}
-                busy={sendingGreetingIds.has(job.id) || Boolean(job.greeting_activity)}
-                onBusyChange={onGreetingBusyChange}
-                onSelect={(selection, greeting) => selectGreeting(job, selection, greeting)}
-                onSend={() => sendReadyGreetings([job.id])}
-                onReject={() => rejectSelectedJobs([job.id])}
-                onDetail={() => openJobDetail(job)}
-              />
+              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
+                <GreetingReviewCard
+                  job={job}
+                  busy={sendingGreetingIds.has(job.id) || Boolean(job.greeting_activity) || queuedIds.has(job.id)}
+                  onBusyChange={onGreetingBusyChange}
+                  onSelect={(selection, greeting) => selectGreeting(job, selection, greeting)}
+                  onSend={() => sendReadyGreetings([job.id])}
+                  onReject={() => rejectSelectedJobs([job.id])}
+                  onDetail={() => openJobDetail(job)}
+                />
+              </QueuedShield>
             ))}
           </div>
         </section>
@@ -1304,14 +1325,15 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         {filteredTodayJobs.length ? (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {filteredTodayJobs.map(job => (
-              <JobActionCard
-                key={job.id}
-                job={job}
-                selected={selected.includes(job.id)}
-                onToggle={() => toggleJob(job.id)}
-                onDetail={() => openJobDetail(job)}
-                onReject={() => rejectSelectedJobs([job.id])}
-              />
+              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
+                <JobActionCard
+                  job={job}
+                  selected={selected.includes(job.id)}
+                  onToggle={() => toggleJob(job.id)}
+                  onDetail={() => openJobDetail(job)}
+                  onReject={() => rejectSelectedJobs([job.id])}
+                />
+              </QueuedShield>
             ))}
           </div>
         ) : todayJobs.length ? (
@@ -1768,7 +1790,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [filters, setFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
   const [hideHandled, setHideHandled] = useState(true)
   const [poolView, setPoolView] = useState<PoolView>('pending')
-  const [viewCounts, setViewCounts] = useState<Record<PoolView, number | null>>({ pending: null, history: null })
+  const [viewCounts, setViewCounts] = useState<Record<PoolView, number | null>>({ pending: null, waiting: null, failed: null, history: null })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [notice, setNotice] = useState('')
   const [blockedCompanies, setBlockedCompanies] = useState<string[]>([])
@@ -1784,28 +1806,18 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [recycleLoading, setRecycleLoading] = useState(false)
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
-  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled && poolView === 'pending', POOL_VIEW_STATUSES[poolView])
+  const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled && poolView === 'pending', POOL_VIEW_STATUSES[poolView], POOL_VIEW_QUEUE[poolView])
   const { workbench: deliveryWorkbench } = useDashboard('workbench')
   const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
     ? deliveryWorkbench.task
     : deliveryWorkbench.last_task?.mode === 'deliver' ? deliveryWorkbench.last_task : null
-  // 已通过、等待投递的岗位按平台统计，让所有平台的队列都看得到。
-  const [approvedCounts, setApprovedCounts] = useState<Record<string, number>>({})
-  useEffect(() => {
-    const controller = new AbortController()
-    const load = async () => {
-      const next: Record<string, number> = {}
-      for (const platform of ['boss', '51job', 'liepin', 'zhilian']) {
-        const params = new URLSearchParams({ limit: '1', offset: '0', status: 'approved', source_platform: platform })
-        const res = await fetch(`/api/jobs/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
-        const data = await res.json()
-        next[platform] = Number(data.total ?? 0)
-      }
-      setApprovedCounts(next)
-    }
-    load().catch(() => { /* 统计失败时不显示数字 */ })
-    return () => controller.abort()
-  }, [deliveryTask?.id, deliveryTask?.status, items])
+  // 已有招呼语、等待发送的岗位和发送失败的岗位，按平台统计；“继续”按钮发的就是这些。
+  const DELIVER_PLATFORM_KEYS = ['boss', '51job', 'liepin']
+  const platformOf = (job: Job) => job.source_platform || 'boss'
+  const waitingJobs = (deliveryWorkbench.pending_greetings || []).filter(job => DELIVER_PLATFORM_KEYS.includes(platformOf(job)))
+  const failedJobs = (deliveryWorkbench.send_errors || []).filter(job => DELIVER_PLATFORM_KEYS.includes(platformOf(job)))
+  const waitingByPlatform = (key: string) => waitingJobs.filter(job => platformOf(job) === key).length
+  const failedByPlatform = (key: string) => failedJobs.filter(job => platformOf(job) === key).length
 
   useEffect(() => {
     // 两个视图各自的岗位数，显示在切换按钮上（不受下面的筛选条件影响）。
@@ -1813,14 +1825,16 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     const count = async (view: PoolView) => {
       const params = new URLSearchParams({ limit: '1', offset: '0' })
       POOL_VIEW_STATUSES[view].forEach(value => params.append('status', value))
+      const queue = POOL_VIEW_QUEUE[view]
+      if (queue) params.set('queue_view', queue)
       if (view === 'pending' && hideHandled) params.set('hide_handled', '1')
       const res = await fetch(`/api/jobs/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
       if (!res.ok) return null
       const data = await res.json()
       return typeof data.total === 'number' ? data.total : null
     }
-    Promise.all([count('pending'), count('history')])
-      .then(([pending, history]) => { if (!controller.signal.aborted) setViewCounts({ pending, history }) })
+    Promise.all([count('pending'), count('waiting'), count('failed'), count('history')])
+      .then(([pending, waiting, failed, history]) => { if (!controller.signal.aborted) setViewCounts({ pending, waiting, failed, history }) })
       .catch(() => { /* 计数失败只是不显示数字。 */ })
     return () => controller.abort()
   }, [items, total, hideHandled])
@@ -2062,15 +2076,25 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     }
   }
 
-  const restartDelivery = async () => {
-    if (!window.confirm('重新启动投递队列？会再次处理所有已通过、尚未发送的 BOSS、前程无忧和猎聘岗位，仍受发送时间窗口和每日额度限制。')) return
+  const sendJobIds = async (ids: string[], label: string) => {
+    if (!ids.length) return
     try {
-      const result = await postJobAction('/api/workbench/deliver', { scope: 'approved' })
+      const result = await postJobAction('/api/workbench/deliver', { job_ids: ids, direct_send: true })
       refreshJobs()
-      setNotice(`已重新启动投递队列。${describeSkipped(result)}`)
+      setNotice(`${label}：已把 ${ids.length} 个岗位加入发送队列。${describeSkipped(result)}`)
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : '重新启动投递队列失败')
+      setNotice(cause instanceof Error ? cause.message : `${label}失败`)
     }
+  }
+
+  const continueDelivery = async () => {
+    if (!window.confirm(`继续投递剩余的 ${waitingJobs.length} 个岗位吗？仍受发送时间窗口和发送间隔限制，窗口外会立刻停止。`)) return
+    await sendJobIds(waitingJobs.map(job => job.id), '继续投递')
+  }
+
+  const retryFailedDelivery = async () => {
+    if (!window.confirm(`重试发送失败的 ${failedJobs.length} 个岗位吗？失败原因没处理的话可能再次失败。`)) return
+    await sendJobIds(failedJobs.map(job => job.id), '重试失败的岗位')
   }
 
   const deliverAllApproved = async () => {
@@ -2262,7 +2286,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         </div>
       </div>
       <div className="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="岗位池视图">
-        {(['pending', 'history'] as PoolView[]).map(view => (
+        {(['pending', 'waiting', 'failed', 'history'] as PoolView[]).map(view => (
           <button
             key={view}
             type="button"
@@ -2281,7 +2305,12 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
           </button>
         ))}
         <span className="text-xs text-muted">
-          {poolView === 'pending' ? '还需要你处理的岗位：待评分、待确认、已确认待投递、发送失败。' : '已有结果的岗位：已投递、已回复、已拒绝、已过滤、已跳过。'}
+          {{
+            pending: '等你确认的岗位：待评分、已评分、待确认。',
+            waiting: '已确认、等待投递的岗位：可以一键投递，也可以打开平台自己投，再在“修改状态”里标记已投递。',
+            failed: '程序投递失败的岗位：可以重试，也可以打开平台自己投，再在“修改状态”里标记已投递（就会进入历史记录）。',
+            history: '已有结果的岗位：已投递、已回复、已拒绝、已过滤、已跳过。',
+          }[poolView]}
         </span>
       </div>
       <JobFilterBar
@@ -2307,7 +2336,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         <span className="rounded-full bg-secondary px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
         <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>移入回收站</Button>
-        {poolView === 'pending' && <>
+        {poolView !== 'history' && <>
           <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
             <Send className="mr-1 h-4 w-4" />一键投递已选
           </Button>
@@ -2325,7 +2354,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         <ExportMenu onExport={exportJobs} hasSelection={selectedIds.length > 0} hasFiltered={total > 0} />
       </div>
       {notice && <div className="sticky top-2 z-30 mb-4 rounded-xl bg-secondary px-4 py-3 text-sm text-primary shadow-md">{notice}</div>}
-      {(deliveryTask || Object.values(approvedCounts).some(count => count > 0)) && (
+      {(deliveryTask || waitingJobs.length > 0 || failedJobs.length > 0) && (
         <div className="mb-4 rounded-2xl border border-card-border bg-surface p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -2334,8 +2363,11 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
             </div>
             <div className="flex items-center gap-2">
               {deliveryTask?.status === 'running' && <Button size="sm" variant="destructive" onClick={() => void stopDelivery()}>停止投递队列</Button>}
-              {deliveryTask?.status !== 'running' && (approvedCounts.boss || 0) + (approvedCounts['51job'] || 0) + (approvedCounts.liepin || 0) > 0 && (
-                <Button size="sm" onClick={() => void restartDelivery()}>重新启动投递队列</Button>
+              {deliveryTask?.status !== 'running' && waitingJobs.length > 0 && (
+                <Button size="sm" onClick={() => void continueDelivery()}>继续投递剩余 {waitingJobs.length} 个</Button>
+              )}
+              {deliveryTask?.status !== 'running' && failedJobs.length > 0 && (
+                <Button size="sm" variant="secondary" onClick={() => void retryFailedDelivery()}>重试失败 {failedJobs.length} 个</Button>
               )}
               <span className="rounded-full bg-secondary px-3 py-1 text-xs font-black text-primary">
                 {!deliveryTask ? '未启动' : deliveryTask.status === 'running' ? '处理中' : deliveryTask.status === 'completed' ? '已完成' : deliveryTask.status === 'failed' ? '失败' : deliveryTask.status === 'stopped' ? '已停止' : deliveryTask.status}
@@ -2345,7 +2377,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
             {([['boss', 'BOSS 直聘', '自动'], ['51job', '前程无忧', '自动'], ['liepin', '猎聘', '自动'], ['zhilian', '智联招聘', '手动']] as const).map(([key, label, mode]) => (
               <span key={key} className="rounded-full border border-card-border bg-card px-3 py-1">
-                {label} 待投递 {approvedCounts[key] ?? 0}（{mode}）
+                {label} 待发送 {mode === '自动' ? waitingByPlatform(key) : 0}{mode === '自动' && failedByPlatform(key) > 0 ? `，失败 ${failedByPlatform(key)}` : ''}（{mode}）
               </span>
             ))}
           </div>

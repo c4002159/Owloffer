@@ -22,6 +22,7 @@ export function useJobSearch(
   sortOrder: JobSortOrder = 'desc',
   hideHandled = false,
   viewStatuses: string[] | null = null,
+  queueView: string | null = null,
 ) {
   const debouncedQuery = useDebouncedValue(filters.query, 250)
   const [items, setItems] = useState<Job[]>([])
@@ -59,6 +60,7 @@ export function useJobSearch(
     filters.education.forEach(value => params.append('education', value))
     filters.recruitmentType.forEach(value => params.append('recruitment_type', value))
     if (hideHandled) params.set('hide_handled', '1')
+    if (queueView) params.set('queue_view', queueView)
     params.set('sort_by', sortBy)
     params.set('sort_order', sortOrder)
 
@@ -86,7 +88,7 @@ export function useJobSearch(
       })
 
     return () => controller.abort()
-  }, [debouncedQuery, filters.minScore, filters.minActivity, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, viewStatuses, revision])
+  }, [debouncedQuery, filters.minScore, filters.minActivity, filters.salaryMin, filters.salaryMax, filters.status, filters.createdWithin, filters.sourcePlatform, filters.city, filters.education, filters.recruitmentType, page, pageSize, sortBy, sortOrder, hideHandled, viewStatuses, queueView, revision])
 
   return { items, total, allTotal, cityOptions, loading, error, refresh }
 }

@@ -484,6 +484,13 @@ class ReviewWindow:
         self.log.set(f"已将 {len(added)} 家公司加入黑名单")
         self.refresh()
 
+    def _daily_limit_text(self) -> str:
+        try:
+            limit = int(self.config.get("throttle", {}).get("daily_limit", 30))
+        except (TypeError, ValueError):
+            limit = 30
+        return f"每日上限 {limit}" if limit > 0 else "发送量不设每日上限"
+
     def start_dispatch(self) -> None:
         if self.dispatching:
             return
@@ -498,7 +505,7 @@ class ReviewWindow:
         if not messagebox.askyesno(
             "确认投递",
             f"将为 {count} 个已通过岗位定制简历、生成招呼语，并按限速发送"
-            f"（每日上限 {self.config.get('throttle', {}).get('daily_limit', 30)}，只在发送时间窗口内）。\n\n确认开始？",
+            f"（{self._daily_limit_text()}，只在发送时间窗口内）。\n\n确认开始？",
             parent=self.root,
         ):
             return

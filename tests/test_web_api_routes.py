@@ -1298,6 +1298,7 @@ class WebApiRouteTests(unittest.TestCase):
             "sent": 1,
             "remaining": 29,
             "exhausted": False,
+            "unlimited": False,
         })
 
     def test_web_api_workbench_shows_approved_job_when_greeting_was_interrupted(self):

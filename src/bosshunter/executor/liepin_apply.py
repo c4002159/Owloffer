@@ -34,6 +34,20 @@ PAGE_STATE_JS = r"""
   const modal = [...document.querySelectorAll('.ant-c-modal')].find((m) => m.offsetParent !== null && (m.innerText || '').includes('选择附件简历'));
   const confirm = modal ? [...modal.querySelectorAll('.ant-c-modal-footer button')].find((b) => (b.innerText || '').replace(/\s+/g, '') === '立即投递') : null;
   const picked = modal ? !!modal.querySelector('.ant-c-radio-checked') : false;
+  const resumes = modal ? [...modal.querySelectorAll('.ant-c-radio-wrapper')].map((w) => {
+    const text = (w.innerText || '').replace(/\s+/g, ' ').trim();
+    const name = text.split(/\s\d{4}-\d{2}-\d{2}/)[0].trim();
+    const uploaded = (text.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/) || [''])[0];
+    const fileId = ((w.querySelector('input') || {}).value || '').split('/').pop().split('?')[0];
+    const preview = [...w.querySelectorAll('div')].find((e) => (e.textContent || '').trim() === '预览' && e.children.length === 0);
+    const pr = preview ? preview.getBoundingClientRect() : null;
+    const previewPoint = pr ? {x: Math.round(pr.x + pr.width / 2), y: Math.round(pr.y + pr.height / 2)} : {x: 0, y: 0};
+    const circle = w.querySelector('.ant-c-radio-inner') || w;
+    const r = circle.getBoundingClientRect();
+    const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2);
+    const top = document.elementFromPoint(x, y);
+    return {name, fileId, uploaded, previewX: previewPoint.x, previewY: previewPoint.y, checked: !!w.querySelector('.ant-c-radio-checked'), x, y, ok: !!(top && (circle === top || circle.contains(top) || w.contains(top)) && x > 0 && y > 0 && x < innerWidth && y < innerHeight)};
+  }) : [];
   const applyPoint = modal ? {x: 0, y: 0, clickable: false} : point(apply);
   const confirmPoint = point(confirm);
   return JSON.stringify({
@@ -44,7 +58,7 @@ PAGE_STATE_JS = r"""
     applyLabel: apply ? (apply.innerText || '').replace(/\s+/g, '') : '',
     chatLabel: chat ? (chat.innerText || '').replace(/\s+/g, '') : '',
     applyX: applyPoint.x, applyY: applyPoint.y, applyClickable: applyPoint.clickable,
-    modal: !!modal, picked, confirmX: confirmPoint.x, confirmY: confirmPoint.y, confirmClickable: confirmPoint.clickable,
+    modal: !!modal, picked, resumes, confirmX: confirmPoint.x, confirmY: confirmPoint.y, confirmClickable: confirmPoint.clickable,
   });
 })()
 """.replace("__CAPTCHA__", CAPTCHA_PATTERN).replace("__CLOSED__", CLOSED_PATTERN).replace("__SUCCESS__", SUCCESS_URL_PART)
@@ -231,9 +245,9 @@ def apply_liepin(
                            "history_detail": "猎聘页面显示“继续聊”，说明已经投递或沟通过，未重复投递"})
         if state.get("applyLabel") != "投简历" and state.get("chatLabel") == "聊一聊":
             # Chat-only posting: there is nothing to apply with, the customized greeting IS the delivery.
-            if not (greeting and throttle_config.get("_send_greeting_after_apply")):
+            if not greeting:
                 return finish({"success": False, "error": "chat_only_needs_greeting", "skip_backoff": True,
-                               "history_detail": "这个岗位只有“聊一聊”，需要开启 automation.external_greeting_send 并有招呼语才能发送"})
+                               "history_detail": "这个岗位只有“聊一聊”，没有招呼语可发送（请先生成招呼语）"})
             sent, note = send_chat_greeting(
                 url, greeting, open_tab=open_tab, close=close, run_js=run_js, click=click,
                 type_into=type_into, wait_load=wait_load, sleep=sleep, labels=("聊一聊", "继续聊"),
@@ -259,7 +273,40 @@ def apply_liepin(
         if not (dialog.get("modal") and dialog.get("confirmClickable")):
             return finish({"success": False, "error": "resume_dialog_missing", "skip_backoff": True,
                            "history_detail": "点“投简历”后没有出现选择简历的弹窗，已放弃"})
-        if not dialog.get("picked"):
+        resume_note = ""
+        chooser = throttle_config.get("_resume_chooser")
+        if chooser and dialog.get("resumes"):
+            # Tag matching between the resumes in the picker and the job decides which one is used.
+            names = [str(resume.get("name") or "") for resume in dialog["resumes"]]
+            default_name = next((str(r.get("name") or "") for r in dialog["resumes"] if r.get("checked")), "")
+            chosen_name, resume_note = chooser(job, names, default_name)
+            target = next((r for r in dialog["resumes"] if r.get("name") == chosen_name), None) if chosen_name else None
+            if target is None:
+                # No resume fits: do not apply with a wrong one. Fall back to greeting the HR in the chat.
+                if greeting:
+                    sent, note = send_chat_greeting(
+                        url, greeting, open_tab=open_tab, close=close, run_js=run_js, click=click,
+                        type_into=type_into, wait_load=wait_load, sleep=sleep, labels=("聊一聊", "继续聊"),
+                    )
+                    if sent:
+                        return finish({"success": True, "degraded": True, "greeting_sent": True,
+                                       "history_detail": f"{resume_note}；未投递，已降级为打招呼：{note}"})
+                    return finish({"success": False, "error": "chat_greeting_not_sent", "skip_backoff": True,
+                                   "history_detail": f"{resume_note}；降级打招呼也未完成：{note}"})
+                return finish({"success": False, "error": "resume_not_found", "skip_backoff": True,
+                               "history_detail": f"{resume_note}；降级为打招呼也需要有招呼语（请先生成招呼语）"})
+            if not target.get("checked"):
+                if not target.get("ok"):
+                    return finish({"success": False, "error": "resume_not_clickable", "skip_backoff": True,
+                                   "history_detail": f"选中的简历「{chosen_name}」被遮挡，已放弃"})
+                click(target_id, f"{target['x']},{target['y']}")
+                sleep(0.8)
+                dialog = _state(target_id, run_js)
+                again = next((r for r in dialog.get("resumes") or [] if r.get("name") == chosen_name), None)
+                if not (again and again.get("checked") and dialog.get("confirmClickable")):
+                    return finish({"success": False, "error": "resume_select_failed", "skip_backoff": True,
+                                   "history_detail": f"没能选中简历「{chosen_name}」，已放弃"})
+        elif not dialog.get("picked"):
             return finish({"success": False, "error": "no_resume_selected", "skip_backoff": True,
                            "history_detail": "弹窗里没有默认选中的简历，已放弃（请先在猎聘设置默认简历）"})
         click(target_id, f"{dialog['confirmX']},{dialog['confirmY']}")
@@ -267,7 +314,7 @@ def apply_liepin(
         for _ in range(10):
             sleep(1.0)
             if success_somewhere():
-                done = finish({"success": True, "history_detail": "猎聘已跳转到“投递成功”页面"})
+                done = finish({"success": True, "history_detail": "猎聘已跳转到“投递成功”页面" + (f"；{resume_note}" if resume_note else "")})
                 if greeting and throttle_config.get("_send_greeting_after_apply"):
                     sent, note = send_chat_greeting(
                         url, greeting, open_tab=open_tab, close=close, run_js=run_js, click=click,
@@ -285,3 +332,96 @@ def apply_liepin(
         })
     except Exception as exc:  # keep one bad page from killing the whole delivery queue
         return finish({"success": False, "error": "apply_exception", "history_detail": f"投递异常：{type(exc).__name__}", "skip_backoff": True})
+
+
+PREVIEW_TEXT_JS = r"""
+(() => {
+  const text = (document.body ? document.body.innerText : '');
+  const start = text.indexOf('400%');                       // pdf.js toolbar ends with the zoom list
+  return JSON.stringify({text: (start >= 0 ? text.slice(start + 4) : text).trim()});
+})()
+"""
+
+
+def _preview_url_file(url: str) -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    return parse_qs(urlparse(url).query).get("file", [""])[0]
+
+
+def scan_picker(
+    job_urls: list[str],
+    need_text: Callable[[dict], bool] = lambda item: False,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    browser: Any = None,
+) -> list[dict] | None:
+    """The attachment resumes of the Liepin account: ``[{name, file_id, uploaded, text}]`` or None when unreadable.
+
+    Opens a job page that still has 投简历, opens the "选择附件简历" dialog and lists the resumes. For every resume
+    ``need_text`` accepts, its 预览 is opened (a pdf.js tab whose text layer holds the resume text) and the text is
+    read. Nothing is confirmed or applied; every tab opened here is closed again.
+    """
+    b = browser or type("B", (), {})()
+    open_tab = getattr(b, "new_tab", new_tab)
+    close = getattr(b, "close_tab", close_tab)
+    run_js = getattr(b, "evaluate", evaluate)
+    click = getattr(b, "click_at", click_at)
+    targets = getattr(b, "get_page_targets", get_page_targets)
+    wait_load = getattr(b, "wait_for_load", wait_for_load)
+    for url in job_urls[:4]:
+        tab = open_tab(url, background=False)
+        if not tab:
+            continue
+        opened: list[str] = []
+        try:
+            wait_load(tab, timeout=15)
+            sleep(2)
+            state = _state(tab, run_js)
+            if state.get("captcha") or state.get("applyLabel") != "投简历" or not state.get("applyClickable"):
+                continue
+            state = _state(tab, run_js)
+            click(tab, f"{state['applyX']},{state['applyY']}")
+            dialog: dict = {}
+            for _ in range(6):
+                sleep(1.0)
+                dialog = _state(tab, run_js)
+                if dialog.get("modal") and dialog.get("resumes"):
+                    break
+            if not (dialog.get("modal") and dialog.get("resumes")):
+                continue
+            items = []
+            for resume in dialog["resumes"]:
+                item = {"name": str(resume.get("name") or "").strip(), "file_id": str(resume.get("fileId") or ""),
+                        "uploaded": str(resume.get("uploaded") or ""), "text": ""}
+                if item["name"] and need_text(item) and resume.get("previewX"):
+                    known = {str(t.get("targetId") or "") for t in targets()}
+                    click(tab, f"{resume['previewX']},{resume['previewY']}")
+                    sleep(3)
+                    for t in targets():
+                        tid = str(t.get("targetId") or "")
+                        if tid and tid not in known and _preview_url_file(str(t.get("url") or "")):
+                            opened.append(tid)
+                            for _ in range(8):                  # wait for the pdf.js text layer to fill
+                                raw = run_js(tid, PREVIEW_TEXT_JS)
+                                try:
+                                    value = raw["value"] if isinstance(raw, dict) and "value" in raw else raw
+                                    text = (json.loads(value) if isinstance(value, str) else value or {}).get("text", "")
+                                except (TypeError, ValueError):
+                                    text = ""
+                                if len(text) > 200:
+                                    item["text"] = text
+                                    break
+                                sleep(1.0)
+                            close(tid)
+                            opened.remove(tid)
+                            break
+                items.append(item)
+            return [item for item in items if item["name"]]
+        except Exception:
+            continue
+        finally:
+            for tid in opened:
+                close(tid)
+            close(tab)
+    return None
