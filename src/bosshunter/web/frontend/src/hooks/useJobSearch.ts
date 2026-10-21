@@ -95,8 +95,9 @@ export function useJobSearch(
   // Every job id matching the current filters (not only the current page), for “选择全部”.
   const fetchAllIds = async (): Promise<string[]> => {
     const ids: string[] = []
-    for (let offset = 0; offset < 100000; offset += 500) {
-      const response = await fetch(`/api/jobs/search?${buildParams(500, offset).toString()}`, { cache: 'no-store' })
+    // The search endpoint takes at most 100 jobs per request.
+    for (let offset = 0; offset < 100000; offset += 100) {
+      const response = await fetch(`/api/jobs/search?${buildParams(100, offset).toString()}`, { cache: 'no-store' })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || '岗位筛选失败')
       ids.push(...(data.items as Job[]).map(job => job.id))
