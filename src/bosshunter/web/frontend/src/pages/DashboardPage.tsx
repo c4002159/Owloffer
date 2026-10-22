@@ -627,14 +627,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         return
       }
       if (modePending) return
-      if (activeTask) {
-        setNotice(
-          activeTask.status === 'stopping'
-            ? `当前${activeTask.label}正在停止，请等待后台完全结束后再启动其他模式。`
-            : `当前正在运行${activeTask.label}，请先点击正在运行的卡片停止后再启动其他模式。`
-        )
-        return
-      }
       if (mode === 'full') {
         setCollectDialogMode('full')
         setCollectDialogOpen(true)
@@ -646,7 +638,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       if (!(await runPreflight(mode))) return
       setNotice(`${target?.title || '任务'}启动中，请稍候...`)
       const started = await startTaskConfirmingLimit(mode)
-      setNotice(started?.status === 'queued' ? `${target?.title || '任务'}已排队，前面的任务结束后自动开始，可在「最近活动」查看。` : `${target?.title || '任务'}已启动，日志会在下方更新。`)
+      setNotice(started?.status === 'queued' ? `${target?.title || '任务'}已排队，前面的任务结束后自动开始，可在「今日活动 → 等待队列」查看。` : `${target?.title || '任务'}已启动，日志会在下方更新。`)
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '操作失败')
     } finally {
@@ -694,7 +686,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
       setNotice('启动前预检通过，正在启动任务...')
       const started = await startTaskConfirmingLimit(mode, options)
       if (started?.status === 'queued') {
-        setNotice('任务已排队，前面的任务结束后自动开始，可在「最近活动」查看。')
+        setNotice('任务已排队，前面的任务结束后自动开始，可在「今日活动 → 等待队列」查看。')
         return { ok: true }
       }
       setNotice(mode === 'full' ? '全流程已启动，进度会在下方更新。' : '岗位采集已启动，进度会在下方更新。')
@@ -956,7 +948,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   ]
   const renderModeCard = (item: { mode: WorkbenchMode; title: string; description: string }) => {
     const isActive = activeTask?.mode === item.mode && !loopBlocksOthers
-    const disabled = Boolean((blockedByTask(item.mode) || loopBlocksOthers) && !isActive)
+    const disabled = Boolean(loopBlocksOthers && !isActive)   // another running task no longer blocks: the new one waits in the queue
     return (
       <button
         key={item.mode}
