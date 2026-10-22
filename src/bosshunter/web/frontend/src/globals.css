@@ -6,24 +6,24 @@
   color-scheme: light;
 
   /* 基础面 */
-  --background: 27 100% 97%;
-  --foreground: 0 0% 12%;
+  --background: 222 100% 98%;
+  --foreground: 224 55% 14%;
   --card: 0 0% 100%;
-  --card-foreground: 0 0% 12%;
-  --surface: 24 100% 99%;
-  --surface-muted: 28 100% 97%;
+  --card-foreground: 224 55% 14%;
+  --surface: 222 100% 99%;
+  --surface-muted: 222 70% 97%;
   --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 12%;
+  --popover-foreground: 224 55% 14%;
 
   /* 品牌与次要色 */
-  --primary: 20 97% 53%;
+  --primary: 221 100% 59%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 25 100% 95%;
-  --secondary-foreground: 0 0% 12%;
-  --muted: 25 18% 43%;
-  --muted-foreground: 25 18% 43%;
-  --accent: 25 100% 95%;
-  --accent-foreground: 20 97% 53%;
+  --secondary: 221 100% 96%;
+  --secondary-foreground: 224 55% 14%;
+  --muted: 222 18% 42%;
+  --muted-foreground: 222 18% 42%;
+  --accent: 221 100% 96%;
+  --accent-foreground: 221 100% 52%;
 
   /* 状态色 */
   --success-soft: 138 76% 97%;
@@ -56,14 +56,14 @@
   --star: 48 96% 53%;
 
   /* 描边与焦点 */
-  --border: 27 35% 91%;
-  --input: 27 35% 91%;
-  --ring: 20 97% 53%;
+  --border: 220 55% 91%;
+  --input: 220 55% 91%;
+  --ring: 221 100% 59%;
 
   /* 滚动条 */
-  --scrollbar-track: 27 100% 95%;
-  --scrollbar-thumb: 22 72% 81%;
-  --scrollbar-thumb-hover: 20 97% 53%;
+  --scrollbar-track: 220 70% 95%;
+  --scrollbar-thumb: 220 60% 82%;
+  --scrollbar-thumb-hover: 221 100% 59%;
 
   --radius: 0.75rem;
 }
@@ -72,24 +72,24 @@
   color-scheme: dark;
 
   /* 基础面 */
-  --background: 24 10% 9%;
-  --foreground: 30 12% 93%;
-  --card: 24 8% 16%;
-  --card-foreground: 30 12% 93%;
-  --surface: 24 9% 12%;
-  --surface-muted: 24 9% 14%;
-  --popover: 24 8% 16%;
-  --popover-foreground: 30 12% 93%;
+  --background: 222 40% 8%;
+  --foreground: 220 25% 93%;
+  --card: 222 30% 13%;
+  --card-foreground: 220 25% 93%;
+  --surface: 222 33% 10%;
+  --surface-muted: 222 30% 12%;
+  --popover: 222 30% 13%;
+  --popover-foreground: 220 25% 93%;
 
   /* 品牌与次要色 */
-  --primary: 20 97% 53%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 24 9% 20%;
-  --secondary-foreground: 30 12% 93%;
-  --muted: 28 10% 63%;
-  --muted-foreground: 28 10% 63%;
-  --accent: 24 9% 20%;
-  --accent-foreground: 20 97% 62%;
+  --primary: 217 100% 66%;
+  --primary-foreground: 224 60% 10%;
+  --secondary: 222 30% 19%;
+  --secondary-foreground: 220 25% 93%;
+  --muted: 220 15% 65%;
+  --muted-foreground: 220 15% 65%;
+  --accent: 222 30% 19%;
+  --accent-foreground: 217 100% 74%;
 
   /* 状态色 */
   --success-soft: 150 30% 16%;
@@ -122,14 +122,14 @@
   --star: 48 90% 62%;
 
   /* 描边与焦点 */
-  --border: 24 8% 24%;
-  --input: 24 8% 24%;
-  --ring: 20 97% 60%;
+  --border: 222 25% 22%;
+  --input: 222 25% 22%;
+  --ring: 217 100% 66%;
 
   /* 滚动条 */
-  --scrollbar-track: 24 8% 14%;
-  --scrollbar-thumb: 24 8% 28%;
-  --scrollbar-thumb-hover: 20 97% 53%;
+  --scrollbar-track: 222 30% 12%;
+  --scrollbar-thumb: 222 22% 28%;
+  --scrollbar-thumb-hover: 217 100% 66%;
 }
 
 * {

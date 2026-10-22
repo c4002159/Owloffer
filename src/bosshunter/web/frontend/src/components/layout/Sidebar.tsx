@@ -1,6 +1,8 @@
 import { NavLink } from 'react-router-dom'
 import { BriefcaseBusiness, Github, LayoutDashboard, Radar, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { BRAND_NAME, GITHUB_URL } from '@/lib/owl'
+import { OwlLogo } from './OwlLogo'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '工作台' },
@@ -8,8 +10,6 @@ const navItems = [
   { to: '/monitor', icon: Radar, label: '监测执行' },
   { to: '/config', icon: Settings, label: '配置' },
 ]
-
-const GITHUB_URL = 'https://github.com/powerycy/BossHunter'
 
 interface SidebarProps {
   pendingReplies?: number
@@ -43,11 +43,9 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
     <aside className="flex w-16 shrink-0 flex-col border-r border-card-border bg-card md:w-60">
       <div className="flex h-16 shrink-0 items-center justify-center border-b border-card-border md:justify-start md:px-5">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/20">
-            <span className="font-black text-sm">BH</span>
-          </div>
+          <OwlLogo size={40} />
           <div className="hidden md:block">
-            <div className="font-black text-sm tracking-tight text-foreground">BossHunter</div>
+            <div className="font-black text-sm tracking-tight text-foreground">{BRAND_NAME}</div>
             <div className="text-[11px] text-muted">v2.4.0 · 本地控制台</div>
           </div>
         </div>
@@ -83,13 +81,13 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
           href={GITHUB_URL}
           target="_blank"
           rel="noreferrer"
-          aria-label="BossHunter GitHub"
+          aria-label={`${BRAND_NAME} GitHub`}
           className="relative flex items-center justify-center rounded-xl border border-card-border bg-surface px-3 py-3 text-xs font-black text-foreground transition-colors hover:border-primary/60 hover:text-primary md:rounded-2xl"
         >
           <Github className="h-4 w-4 shrink-0 md:absolute md:left-3" />
           <span className="mx-auto hidden items-center justify-center gap-2 md:flex">
             <span className="text-xl leading-none text-star">★</span>
-            BossHunter
+            {BRAND_NAME}
           </span>
         </a>
         <p className="hidden text-center text-[11px] leading-5 text-muted md:block">❤️  欢迎点 Star 支持维护  ❤️</p>

@@ -8,17 +8,16 @@ import { JobsTable } from '@/components/dashboard/JobsTable'
 import { RecycleBinPanel } from '@/components/dashboard/RecycleBinPanel'
 import { ScoreJobsDialog } from '@/components/dashboard/ScoreJobsDialog'
 import { CollectJobsDialog } from '@/components/dashboard/CollectJobsDialog'
-import { TrendChart } from '@/components/dashboard/TrendChart'
-import { TopCompanies } from '@/components/dashboard/TopCompanies'
 import { PipelineFlow } from '@/components/dashboard/PipelineFlow'
 import { RecentActivity } from '@/components/dashboard/RecentActivity'
-import type { ActivityData, TopCompany } from '@/hooks/useDashboard'
 import { JobFilterBar } from '@/components/jobs/JobFilterBar'
 import { InterviewPreparation } from '@/components/jobs/InterviewPreparation'
 import { parseHistoryDetail } from '@/lib/historyDetail'
 import { PLATFORM_LABELS } from '@/lib/platforms'
 import { PlatformLimitNotice } from '@/components/dashboard/PlatformLimitNotice'
-import { DailyLoopPanel } from '@/components/dashboard/DailyLoopPanel'
+import { DailyLoopCard, DailyLoopIncidents, DailyLoopProgress } from '@/components/dashboard/DailyLoop'
+import { AgentRequestsInbox, useAgentRequests } from '@/components/dashboard/AgentRequests'
+import { useDailyLoop } from '@/hooks/useDailyLoop'
 import {
   EMPTY_JOB_FILTERS,
   filterJobs,
@@ -51,7 +50,7 @@ import {
 
 type WorkbenchMode = 'full' | 'collect' | 'rescore' | 'monitor' | 'fill'
 type DashboardView = 'workbench' | 'jobs' | 'monitor'
-type StatsScope = 'today' | 'total'
+type ConfirmTab = 'pending' | 'greetings' | 'errors' | 'hr' | 'incidents' | 'requests'
 
 const TASK_STAGE_LABELS = [
   '开始采集岗位',
@@ -182,34 +181,15 @@ interface PreflightCheck {
 
 const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> = [
   {
-    mode: 'full',
-    title: '运行全流程',
-    description: '采集、评分、监测，投递前由你逐个确认（固定任务见下方“每日循环”）',
-  },
-  {
     mode: 'collect',
-    title: '单独采集',
+    title: '单通道采集',
     description: '按平台和条件搜索岗位',
-  },
-  {
-    mode: 'fill',
-    title: '补满审查列表',
-    description: '按全职/实习名额循环采集评分，凑够后交给你审查',
   },
   {
     mode: 'monitor',
     title: '单独监测',
     description: '跟进已投递岗位的 HR 回复',
   },
-]
-
-const statItems = [
-  { key: '采集总数', todayLabel: '今日新增岗位', totalLabel: '累计采集岗位' },
-  { key: '初筛通过', todayLabel: '今日初筛通过', totalLabel: '累计初筛通过', highlight: true },
-  { key: 'AI评分', todayLabel: '今日 AI 评分', totalLabel: '累计 AI 评分' },
-  { key: 'pending', todayLabel: '当前待确认', totalLabel: '当前待确认', highlight: true, current: true },
-  { key: 'approved_unsent', todayLabel: '已确认待投递', totalLabel: '已确认待投递', highlight: true, current: true },
-  { key: '发送', todayLabel: '今日已投递', totalLabel: '累计已投递', highlight: true },
 ]
 
 const taskMetricItems = [
@@ -462,8 +442,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const [notice, setNotice] = useState('')
 
   // Dashboard visualization state
-  const [activityData, setActivityData] = useState<ActivityData[]>([])
-  const [topCompanies, setTopCompanies] = useState<TopCompany[]>([])
   const [recentActivity, setRecentActivity] = useState<HistoryItem[]>([])
   const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([])
   const [preflightMode, setPreflightMode] = useState<WorkbenchMode>('full')
@@ -481,12 +459,15 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }, [])
   const [confirmedDeliveryIds, setConfirmedDeliveryIds] = useState<Set<string>>(new Set())
   const [todayFilters, setTodayFilters] = useState<JobFilters>({ ...EMPTY_JOB_FILTERS })
-  const [statsScope, setStatsScope] = useState<StatsScope>('today')
   const [collectDialogOpen, setCollectDialogOpen] = useState(false)
   const [collectDialogMode, setCollectDialogMode] = useState<'collect' | 'full'>('collect')
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [generatingGreetings, setGeneratingGreetings] = useState(false)
   const startedGreetTaskIdRef = useRef<string | null>(null)
+  const dailyLoop = useDailyLoop(setNotice)
+  const agentRequests = useAgentRequests()
+  const [activityTab, setActivityTab] = useState<'running' | 'queued'>('running')
+  const [confirmTab, setConfirmTab] = useState<ConfirmTab | null>(null)
 
   const todayJobs = useMemo(
     () => workbench.pending_confirmation.filter(job => !confirmedDeliveryIds.has(job.id)),
@@ -535,8 +516,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     const fetchVisualizationData = async () => {
       // One unavailable chart must not prevent the other overview cards loading.
       await Promise.allSettled([
-        fetchOverview('/api/activity?days=7', setActivityData),
-        fetchOverview('/api/top-companies?limit=5', setTopCompanies),
         fetchOverview('/api/history?limit=3', setRecentActivity),
       ])
     }
@@ -943,6 +922,70 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   }
 
   const showGettingStarted = !Object.values(workbench.funnel).some(count => count > 0)
+  const loopBlocksOthers = dailyLoop.running
+  const queuedTasks = (workbench.recent_tasks ?? []).filter(task => task.status === 'queued')
+  const confirmTabs: Array<{ key: ConfirmTab; label: string; count: number }> = [
+    { key: 'pending', label: '待确认岗位', count: todayJobs.length },
+    { key: 'greetings', label: '招呼语待选', count: pendingGreetingJobs.length },
+    { key: 'errors', label: '发送失败', count: workbench.send_errors.length },
+    { key: 'hr', label: 'HR 待办', count: workbench.needs_resume.length },
+    { key: 'incidents', label: '异常', count: dailyLoop.incidents.length },
+    { key: 'requests', label: '智能体请求', count: agentRequests.pending.length },
+  ]
+  // Until the user picks a tab, show the one that needs a decision most (a greeting to choose blocks sending).
+  const attention: ConfirmTab[] = ['greetings', 'errors', 'requests', 'incidents', 'pending', 'hr']
+  const shownConfirmTab: ConfirmTab = confirmTab ?? attention.find(key => (confirmTabs.find(tab => tab.key === key)?.count ?? 0) > 0) ?? 'pending'
+  const funnelToday = workbench.funnel_today ?? {}
+  const funnelTotal = workbench.funnel ?? {}
+  const approvedWaiting = workbench.approved_unsent?.length ?? 0
+  const pendingOnly = workbench.pending_confirmation.filter(job => job.status !== 'approved').length
+  const overviewTiles = [
+    { label: '今日新增岗位', value: funnelToday['采集总数'] || 0, sub: `累计 ${funnelTotal['采集总数'] || 0}` },
+    { label: '待投递岗位', value: approvedWaiting, sub: `另有 ${pendingOnly} 个待确认` },
+    { label: '已投递岗位', value: funnelToday['发送'] || 0, sub: `历史累计 ${funnelTotal['发送'] || 0}` },
+  ]
+  const renderModeCard = (item: { mode: WorkbenchMode; title: string; description: string }) => {
+    const isActive = activeTask?.mode === item.mode && !loopBlocksOthers
+    const disabled = Boolean((activeTask || loopBlocksOthers) && !isActive)
+    return (
+      <button
+        key={item.mode}
+        onClick={() => {
+          if (isActive) {
+            void handleModeClick(item.mode)
+            return
+          }
+          if (disabled) {
+            setNotice(loopBlocksOthers ? '每日循环运行中，请先停止每日循环。' : `当前正在运行${activeTask?.label || '其他任务'}，请先停止后再启动。`)
+            return
+          }
+          if (item.mode === 'collect') {
+            setCollectDialogMode('collect')
+            setCollectDialogOpen(true)
+          } else void handleModeClick(item.mode)
+        }}
+        aria-disabled={disabled}
+        className={cn(
+          'min-h-32 min-w-0 rounded-xl border p-4 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary md:p-5',
+          isActive
+            ? 'border-primary bg-primary text-primary-foreground'
+            : disabled
+              ? 'cursor-not-allowed border-card-border bg-card text-muted opacity-45'
+              : 'border-card-border bg-surface text-foreground hover:border-primary/60 hover:shadow-md'
+        )}
+      >
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-xl font-bold tracking-tight">
+            {modePending === item.mode ? (isActive ? '任务停止中' : '任务启动中') : isActive ? `${item.title}中` : item.title}
+          </div>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center">
+            {isActive ? <Square className="h-4 w-4 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
+          </span>
+        </div>
+        <p className={`text-xs leading-5 ${isActive ? 'text-primary-foreground/85' : 'text-muted'}`}>{item.description}</p>
+      </button>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -955,78 +998,85 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
           onRetry={retryPreflight}
         />
       )}
-      <section id="today-workbench" className="scroll-mt-6 rounded-2xl border border-card-border bg-card p-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <h2 className="text-lg font-bold tracking-tight">今日求职行动</h2>
-          <div className="flex items-center gap-2 text-xs text-muted">
-            <span className="mr-1 hidden sm:inline">{activeTask ? `${activeTask.label}中` : '当前空闲'}</span>
-            <Button variant="ghost" size="sm" className="h-7 px-1" onClick={runStandalonePreflight} disabled={refreshing || Boolean(modePending) || preflightRunning}>
-              <ShieldCheck className={cn('mr-1 h-3.5 w-3.5', preflightRunning && 'animate-spin')} />
-              {preflightRunning ? '预检中' : '全流程预检'}
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 px-1" onClick={refresh} disabled={refreshing} title={lastRefreshedAt ? `最后刷新：${lastRefreshedAt.toLocaleTimeString('zh-CN', { hour12: false })}` : undefined}>
-              <RefreshCw className={cn('mr-1 h-3.5 w-3.5', refreshing && 'animate-spin')} />
-              {refreshing ? '刷新中' : '刷新'}
-            </Button>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {modes.map(item => {
-            const isActive = activeTask?.mode === item.mode
-            const disabled = Boolean(activeTask && !isActive)
-            return (
-              <button
-                key={item.mode}
-                onClick={() => {
-                  if (isActive) {
-                    void handleModeClick(item.mode)
-                    return
-                  }
-                  if (disabled) {
-                    setNotice(`当前正在运行${activeTask?.label || '其他任务'}，请先停止后再启动岗位采集。`)
-                    return
-                  }
-                  if (item.mode === 'collect' || item.mode === 'full') {
-                    setCollectDialogMode(item.mode)
-                    setCollectDialogOpen(true)
-                  }
-                  else void handleModeClick(item.mode)
-                }}
-                aria-disabled={disabled}
-                className={cn(
-                  'min-w-0 rounded-xl border p-4 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary md:min-h-32 md:p-5',
-                  item.mode === 'full' ? 'col-span-2 min-h-28 md:col-span-1' : 'min-h-24',
-                  isActive
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : disabled
-                      ? 'cursor-not-allowed border-card-border bg-card text-muted opacity-45'
-                      : 'border-card-border bg-surface text-foreground hover:border-primary/60 hover:shadow-md'
-                )}
-              >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className={cn('font-bold tracking-tight', item.mode === 'full' ? 'text-2xl' : 'text-xl')}>
-                    {modePending === item.mode
-                      ? isActive ? '任务停止中' : '任务启动中'
-                      : isActive ? `${item.title}中` : item.title}
-                  </div>
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center">
-                    {isActive ? <Square className="h-4 w-4 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
-                  </span>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <section id="today-workbench" className="scroll-mt-6 rounded-2xl border border-card-border bg-card p-4 lg:col-span-2">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <h2 className="text-lg font-bold tracking-tight">今日行动</h2>
+            <div className="flex items-center gap-2 text-xs text-muted">
+              <Button variant="ghost" size="sm" className="h-7 px-1" onClick={runStandalonePreflight} disabled={refreshing || Boolean(modePending) || preflightRunning}>
+                <ShieldCheck className={cn('mr-1 h-3.5 w-3.5', preflightRunning && 'animate-spin')} />
+                {preflightRunning ? '预检中' : '启动预检'}
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 px-1" onClick={refresh} disabled={refreshing} title={lastRefreshedAt ? `最后刷新：${lastRefreshedAt.toLocaleTimeString('zh-CN', { hour12: false })}` : undefined}>
+                <RefreshCw className={cn('mr-1 h-3.5 w-3.5', refreshing && 'animate-spin')} />
+                {refreshing ? '刷新中' : '刷新'}
+              </Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <DailyLoopCard loop={dailyLoop} blocked={Boolean(activeTask)} onBlocked={() => setNotice(`当前正在运行${activeTask?.label || '其他任务'}，请先停止后再启动每日循环。`)} />
+            {modes.map(renderModeCard)}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-card-border bg-card p-4">
+          <h2 className="mb-3 text-lg font-bold tracking-tight">今日概览</h2>
+          <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
+            {overviewTiles.map(tile => (
+              <div key={tile.label} className="flex items-center justify-between gap-3 rounded-xl border border-card-border bg-surface px-3 py-2.5">
+                <div>
+                  <div className="text-xs text-muted">{tile.label}</div>
+                  <div className="text-[10px] font-bold text-muted">{tile.sub}</div>
                 </div>
-                <p className={`text-xs leading-5 ${isActive ? 'text-primary-foreground/85' : 'text-muted'}`}>{item.description}</p>
-              </button>
-            )
-          })}
-        </div>
-        <DailyLoopPanel setNotice={setNotice} />
-        <PlatformLimitNotice details={workbench.platform_limit_details ?? {}} />
+                <div className="text-2xl font-black text-primary">{tile.value}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <PlatformLimitNotice details={workbench.platform_limit_details ?? {}} />
         {!showGettingStarted && notice && <CompactNotice message={notice} />}
         {!showGettingStarted && preflightChecks.some(check => check.status !== 'pass') && (
           <PreflightPanel checks={preflightChecks} checking={Boolean(modePending) || preflightRunning} onRetry={retryPreflight} />
         )}
         {error && <CompactNotice message={error} danger />}
-        {visibleTask && (
+      {workbench.send_quota?.exhausted && (
+        <section className="rounded-xl border border-warning-border bg-warning-soft px-3 py-2 text-warning-strong">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold">今日发送额度已用完</h3>
+              <p className="mt-0.5 text-xs leading-5">
+                今日已发送 {workbench.send_quota.sent}/{workbench.send_quota.daily_limit} 条，未发送岗位已保留在“待发送招呼语”；明日额度恢复后再重试。
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => { window.location.href = '/config?section=throttle' }}>
+              去设置发送额度
+            </Button>
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-2xl border border-card-border bg-card p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-bold tracking-tight">今日活动</h2>
+          <div className="inline-flex rounded-full border border-card-border bg-surface p-1">
+            {([
+              { value: 'running' as const, label: '正在进行' },
+              { value: 'queued' as const, label: `等待队列${queuedTasks.length ? ` ${queuedTasks.length}` : ''}` },
+            ]).map(option => (
+              <button key={option.value} type="button" onClick={() => setActivityTab(option.value)}
+                className={`rounded-full px-3 py-1 text-xs font-black transition ${activityTab === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted hover:text-primary'}`}>
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {activityTab === 'running' ? (
+          <div className="space-y-3">
+            <DailyLoopProgress loop={dailyLoop} />
+            {visibleTask ? (
           <div className="mt-3 border-t border-card-border pt-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold">{visibleTask.label}</div>
@@ -1120,210 +1170,46 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               </div>
             )}
           </div>
+            ) : !dailyLoop.running && <p className="py-2 text-xs text-muted">当前没有正在进行的任务。</p>}
+            <details className="group rounded-xl border border-card-border bg-surface">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-bold [&::-webkit-details-marker]:hidden">
+                最近活动
+                <ChevronDown className="h-4 w-4 text-muted transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="px-3 pb-3">
+                <RecentActivity data={recentActivity} tasks={(workbench.recent_tasks ?? []).filter(task => task.status !== 'queued')} />
+              </div>
+            </details>
+          </div>
+        ) : queuedTasks.length ? (
+          <ul className="space-y-2">
+            {queuedTasks.map(task => (
+              <li key={task.id} className="rounded-xl border border-card-border bg-surface px-3 py-2 text-sm">
+                <span className="font-bold">{task.label}</span>
+                <span className="ml-2 text-xs text-muted">{task.last_log || '等待前面的任务完成'}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="py-2 text-xs text-muted">没有排队的任务。</p>
         )}
       </section>
 
-      {workbench.send_quota?.exhausted && (
-        <section className="rounded-xl border border-warning-border bg-warning-soft px-3 py-2 text-warning-strong">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-bold">今日发送额度已用完</h3>
-              <p className="mt-0.5 text-xs leading-5">
-                今日已发送 {workbench.send_quota.sent}/{workbench.send_quota.daily_limit} 条，未发送岗位已保留在“待发送招呼语”；明日额度恢复后再重试。
-              </p>
-            </div>
-            <Button variant="secondary" size="sm" onClick={() => { window.location.href = '/config?section=throttle' }}>
-              去设置发送额度
-            </Button>
-          </div>
-        </section>
-      )}
-
-      <section>
+      <section className="rounded-2xl border border-card-border bg-card p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-black">求职数据</h3>
-          </div>
-          <div className="inline-flex rounded-full border border-card-border bg-card p-1">
-            {([
-              { value: 'today' as const, label: '今日数据' },
-              { value: 'total' as const, label: '累计数据' },
-            ]).map(option => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setStatsScope(option.value)}
-                className={`rounded-full px-3 py-1.5 text-xs font-black transition ${
-                  statsScope === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted hover:text-primary'
-                }`}
-              >
-                {option.label}
+          <h2 className="text-lg font-bold tracking-tight">手动确认区</h2>
+          <div className="flex max-w-full gap-1 overflow-x-auto rounded-full border border-card-border bg-surface p-1">
+            {confirmTabs.map(tab => (
+              <button key={tab.key} type="button" onClick={() => setConfirmTab(tab.key)}
+                className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-black transition ${shownConfirmTab === tab.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted hover:text-primary'}`}>
+                {tab.label}
+                {tab.count > 0 && <span className={`ml-1 rounded-full px-1.5 ${shownConfirmTab === tab.key ? 'bg-primary-foreground/20' : 'bg-secondary text-primary'}`}>{tab.count}</span>}
               </button>
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
-          {statItems.map(item => {
-            // 待确认只数还没通过的；已通过的单独显示在“已确认待投递”。
-            const approvedWaitingCount = workbench.pending_confirmation.filter(job => job.status === 'approved').length
-            const currentValue = item.key === 'approved_unsent'
-              ? (workbench.approved_unsent?.length ?? 0)
-              : workbench.pending_confirmation.length - approvedWaitingCount
-            const selectedFunnel = statsScope === 'today' ? workbench.funnel_today : workbench.funnel
-            const alternateFunnel = statsScope === 'today' ? workbench.funnel : workbench.funnel_today
-            const value = item.current ? currentValue : (selectedFunnel[item.key] || 0)
-            const supportingText = item.current
-              ? (item.key === 'approved_unsent' ? '已通过，可一键投递' : '实时待处理数量')
-              : `${statsScope === 'today' ? '累计' : '今日'} ${alternateFunnel[item.key] || 0}`
-            return (
-              <div key={item.key} className="rounded-2xl border border-card-border bg-card p-4">
-                <div className="text-xs text-muted">{statsScope === 'today' ? item.todayLabel : item.totalLabel}</div>
-                <div className={`mt-1 text-2xl font-black ${item.highlight ? 'text-primary' : 'text-foreground'}`}>
-                  {value}
-                </div>
-                <div className="mt-1 text-[10px] font-bold text-muted">{supportingText}</div>
-              </div>
-            )
-          })}
-        </div>
-      </section>
-
-
-      {/* 数据可视化概览：7日趋势 + 高分公司 + 最近活动 */}
-      {(activityData.length > 0 || topCompanies.length > 0 || recentActivity.length > 0 || (workbench.recent_tasks?.length ?? 0) > 0) ? (
-        <section>
-          <div className="mb-3">
-            <h3 className="text-lg font-black">求职数据概览</h3>
-          </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <TrendChart data={activityData} />
-            </div>
-            <TopCompanies data={topCompanies} />
-          </div>
-          <div className="mt-3">
-            <RecentActivity data={recentActivity} tasks={workbench.recent_tasks ?? []} />
-          </div>
-        </section>
-      ) : (
-        <section>
-          <div className="mb-3">
-            <h3 className="text-lg font-black">开始你的求职之旅</h3>
-            <p className="mt-0.5 text-xs text-muted">配置好简历和 AI 接口后，点击上方按钮启动岗位采集</p>
-          </div>
-          <PipelineFlow />
-        </section>
-      )}
-      <section className="rounded-xl border border-card-border bg-card px-3 py-2">
-        <details className="group">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1 text-sm [&::-webkit-details-marker]:hidden">
-            <span className="font-semibold">HR 简历待办 <span className="ml-2 text-xs font-normal text-muted">{workbench.needs_resume.length ? `${workbench.needs_resume.length} 项待处理` : '暂无待办'}</span></span>
-            <ChevronDown className="h-4 w-4 shrink-0 text-muted transition-transform group-open:rotate-180" />
-          </summary>
-          <div className="mt-2 flex items-center justify-between gap-2 border-t border-card-border pt-2">
-            <p className="text-xs text-muted">下载后手动发给 HR，再标记已发送。</p>
-            <Button variant="ghost" size="sm" onClick={() => { window.location.href = '/monitor' }}>查看全部</Button>
-          </div>
-          <div className="divide-y divide-card-border">
-            {workbench.needs_resume.slice(0, 4).map(job => (
-              <div key={job.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                <span className="flex min-w-0 flex-wrap items-center gap-2 break-words text-sm"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></span>
-                <div className="flex max-w-full flex-wrap items-center gap-1">
-                  <Button variant="ghost" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-1 h-3.5 w-3.5" />跳转岗位链接</Button>
-                  <Button variant="ghost" size="sm" onClick={() => downloadResume(job)}><Download className="mr-1 h-3.5 w-3.5" />下载简历</Button>
-                  <Button variant="secondary" size="sm" onClick={() => markResumeSent(job)}>标记已发送</Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
-      </section>
-
-      {workbench.send_errors.length > 0 && (
-        <section className="rounded-3xl border border-danger-border bg-danger-soft p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-black text-danger">发送失败待处理</h3>
-              <p className="mt-1 text-xs text-danger/80">这些岗位已生成招呼语，但没有成功发送。你可以重试，或放弃已失效岗位。</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={workbench.send_errors.some(job => sendingGreetingIds.has(job.id))} onClick={() => sendReadyGreetings(workbench.send_errors.map(job => job.id))}>
-                {workbench.send_errors.some(job => sendingGreetingIds.has(job.id)) ? '正在重新发送...' : `重新发送全部 ${workbench.send_errors.length} 个`}
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => markFailedAsManuallySent(workbench.send_errors.map(job => job.id))}>全部我已手动投递</Button>
-              <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(workbench.send_errors.map(job => job.id))}>放弃全部</Button>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {workbench.send_errors.map(job => (
-              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
-              <div className="rounded-2xl border border-danger-border bg-card p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
-                    <div className="mt-1 text-xs text-danger">最近失败原因：{job.last_error || '发送失败，等待重试'}</div>
-                  </div>
-                  <span className="rounded-full bg-danger-soft px-2 py-1 text-[11px] font-black text-danger">发送失败</span>
-                </div>
-                <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.greeting || '招呼语已生成，等待重新发送。'}</p>
-                <div className="mt-3 flex gap-2">
-                  <Button size="sm" disabled={sendingGreetingIds.has(job.id)} onClick={() => sendReadyGreetings([job.id])}>
-                    {sendingGreetingIds.has(job.id) ? '正在重新发送...' : '重新发送'}
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => markFailedAsManuallySent([job.id])}>我已手动投递</Button>
-                  <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs([job.id])}>放弃</Button>
-                  <Button variant="secondary" size="sm" onClick={() => openJobDetail(job)}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
-                  <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
-                </div>
-              </div>
-              </QueuedShield>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {pendingGreetingJobs.length > 0 && (
-        <section className="rounded-xl border border-card-border bg-card p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-semibold">待发送招呼语 <span className="ml-1 text-xs font-normal text-muted">{pendingGreetingJobs.length} 条</span></h3>
-              <p className="mt-1 text-xs text-muted">选择只保存版本，发送需另行确认。</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {pendingGreetingReviewCount > 0 && (
-                <span className="rounded-full bg-warning-soft px-2 py-1 text-xs font-medium text-warning">
-                  {pendingGreetingReviewCount} 个待选择
-                </span>
-              )}
-              <Button
-                size="sm"
-                disabled={reviewedGreetingJobs.length === 0 || reviewedGreetingJobs.some(job => sendingGreetingIds.has(job.id) || busyGreetingIds.has(job.id) || Boolean(job.greeting_activity))}
-                onClick={() => sendReadyGreetings(reviewedGreetingJobs.map(job => job.id))}
-              >
-                发送已确认 {reviewedGreetingJobs.length} 个
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(pendingGreetingJobs.map(job => job.id))}>放弃全部</Button>
-            </div>
-          </div>
-          <div className="divide-y divide-card-border border-t border-card-border">
-            {pendingGreetingJobs.map(job => (
-              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
-                <GreetingReviewCard
-                  job={job}
-                  busy={sendingGreetingIds.has(job.id) || Boolean(job.greeting_activity) || queuedIds.has(job.id)}
-                  onBusyChange={onGreetingBusyChange}
-                  onSelect={(selection, greeting) => selectGreeting(job, selection, greeting)}
-                  onSend={() => sendReadyGreetings([job.id])}
-                  onReject={() => rejectSelectedJobs([job.id])}
-                  onDetail={() => openJobDetail(job)}
-                />
-              </QueuedShield>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="rounded-2xl border border-card-border bg-card p-4">
+        {shownConfirmTab === 'pending' && (
+          <div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-black">今日待确认</h3>
@@ -1386,6 +1272,118 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         ) : (
           <p className="py-2 text-xs text-muted">今天暂时没有待确认岗位。</p>
         )}
+          </div>
+        )}
+        {shownConfirmTab === 'greetings' && (
+          pendingGreetingJobs.length > 0 ? (
+            <div>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold">待发送招呼语 <span className="ml-1 text-xs font-normal text-muted">{pendingGreetingJobs.length} 条</span></h3>
+              <p className="mt-1 text-xs text-muted">选择只保存版本，发送需另行确认。</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pendingGreetingReviewCount > 0 && (
+                <span className="rounded-full bg-warning-soft px-2 py-1 text-xs font-medium text-warning">
+                  {pendingGreetingReviewCount} 个待选择
+                </span>
+              )}
+              <Button
+                size="sm"
+                disabled={reviewedGreetingJobs.length === 0 || reviewedGreetingJobs.some(job => sendingGreetingIds.has(job.id) || busyGreetingIds.has(job.id) || Boolean(job.greeting_activity))}
+                onClick={() => sendReadyGreetings(reviewedGreetingJobs.map(job => job.id))}
+              >
+                发送已确认 {reviewedGreetingJobs.length} 个
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(pendingGreetingJobs.map(job => job.id))}>放弃全部</Button>
+            </div>
+          </div>
+          <div className="divide-y divide-card-border border-t border-card-border">
+            {pendingGreetingJobs.map(job => (
+              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
+                <GreetingReviewCard
+                  job={job}
+                  busy={sendingGreetingIds.has(job.id) || Boolean(job.greeting_activity) || queuedIds.has(job.id)}
+                  onBusyChange={onGreetingBusyChange}
+                  onSelect={(selection, greeting) => selectGreeting(job, selection, greeting)}
+                  onSend={() => sendReadyGreetings([job.id])}
+                  onReject={() => rejectSelectedJobs([job.id])}
+                  onDetail={() => openJobDetail(job)}
+                />
+              </QueuedShield>
+            ))}
+          </div>
+            </div>
+          ) : <p className="py-2 text-xs text-muted">没有待选择的招呼语。</p>
+        )}
+        {shownConfirmTab === 'errors' && (
+          workbench.send_errors.length > 0 ? (
+            <div>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-black text-danger">发送失败待处理</h3>
+              <p className="mt-1 text-xs text-danger/80">这些岗位已生成招呼语，但没有成功发送。你可以重试，或放弃已失效岗位。</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" disabled={workbench.send_errors.some(job => sendingGreetingIds.has(job.id))} onClick={() => sendReadyGreetings(workbench.send_errors.map(job => job.id))}>
+                {workbench.send_errors.some(job => sendingGreetingIds.has(job.id)) ? '正在重新发送...' : `重新发送全部 ${workbench.send_errors.length} 个`}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => markFailedAsManuallySent(workbench.send_errors.map(job => job.id))}>全部我已手动投递</Button>
+              <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(workbench.send_errors.map(job => job.id))}>放弃全部</Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {workbench.send_errors.map(job => (
+              <QueuedShield key={job.id} queued={queuedIds.has(job.id)}>
+              <div className="rounded-2xl border border-danger-border bg-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 font-black"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></div>
+                    <div className="mt-1 text-xs text-danger">最近失败原因：{job.last_error || '发送失败，等待重试'}</div>
+                  </div>
+                  <span className="rounded-full bg-danger-soft px-2 py-1 text-[11px] font-black text-danger">发送失败</span>
+                </div>
+                <p className="mt-3 line-clamp-2 text-sm leading-6 text-muted">{job.greeting || '招呼语已生成，等待重新发送。'}</p>
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" disabled={sendingGreetingIds.has(job.id)} onClick={() => sendReadyGreetings([job.id])}>
+                    {sendingGreetingIds.has(job.id) ? '正在重新发送...' : '重新发送'}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => markFailedAsManuallySent([job.id])}>我已手动投递</Button>
+                  <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs([job.id])}>放弃</Button>
+                  <Button variant="secondary" size="sm" onClick={() => openJobDetail(job)}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
+                  <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>
+                </div>
+              </div>
+              </QueuedShield>
+            ))}
+          </div>
+            </div>
+          ) : <p className="py-2 text-xs text-muted">没有发送失败的岗位。</p>
+        )}
+        {shownConfirmTab === 'hr' && (
+          workbench.needs_resume.length > 0 ? (
+            <div>
+          <div className="mt-2 flex items-center justify-between gap-2 border-t border-card-border pt-2">
+            <p className="text-xs text-muted">下载后手动发给 HR，再标记已发送。</p>
+            <Button variant="ghost" size="sm" onClick={() => { window.location.href = '/monitor' }}>查看全部</Button>
+          </div>
+          <div className="divide-y divide-card-border">
+            {workbench.needs_resume.slice(0, 4).map(job => (
+              <div key={job.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span className="flex min-w-0 flex-wrap items-center gap-2 break-words text-sm"><span>{job.company}｜{job.title}</span><OutsourcingBadge job={job} /></span>
+                <div className="flex max-w-full flex-wrap items-center gap-1">
+                  <Button variant="ghost" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-1 h-3.5 w-3.5" />跳转岗位链接</Button>
+                  <Button variant="ghost" size="sm" onClick={() => downloadResume(job)}><Download className="mr-1 h-3.5 w-3.5" />下载简历</Button>
+                  <Button variant="secondary" size="sm" onClick={() => markResumeSent(job)}>标记已发送</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+            </div>
+          ) : <p className="py-2 text-xs text-muted">暂无 HR 简历待办。</p>
+        )}
+        {shownConfirmTab === 'incidents' && <DailyLoopIncidents loop={dailyLoop} />}
+        {shownConfirmTab === 'requests' && <AgentRequestsInbox {...agentRequests} />}
       </section>
 
       {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJob(null)} onChanged={() => void refresh()} />}

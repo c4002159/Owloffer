@@ -176,7 +176,7 @@ describe('DashboardPage workbench task panel', () => {
     workbenchPayload = baseWorkbench({ funnel: { collected: 2 } })
     render(<DashboardPage view="workbench" />)
 
-    expect(await screen.findByRole('heading', { name: '今日求职行动' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '今日行动' })).toBeTruthy()
     expect(screen.queryByRole('region', { name: '开始使用' })).toBeNull()
   })
 

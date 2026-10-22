@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom'
 import { Activity } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
+import { BRAND_NAME } from '@/lib/owl'
 
 const pageTitles: Record<string, string> = {
   '/': '工作台',
@@ -11,7 +12,7 @@ const pageTitles: Record<string, string> = {
 
 export function Header() {
   const location = useLocation()
-  const title = pageTitles[location.pathname] || 'BossHunter'
+  const title = pageTitles[location.pathname] || BRAND_NAME
 
   return (
     <header className="h-16 border-b border-card-border bg-surface flex items-center justify-between px-6">

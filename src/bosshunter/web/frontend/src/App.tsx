@@ -4,6 +4,7 @@ import { Header } from './components/layout/Header'
 import DashboardPage from './pages/DashboardPage'
 import ConfigPage from './pages/ConfigPage'
 import { OnboardingTour } from './components/onboarding/OnboardingTour'
+import { StarPrompt } from './components/layout/StarPrompt'
 
 function JobsPage() {
   return <DashboardPage view="jobs" />
@@ -31,6 +32,7 @@ export default function App() {
           </main>
         </div>
         <OnboardingTour />
+        <StarPrompt />
       </div>
     </BrowserRouter>
   )
