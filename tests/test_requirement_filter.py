@@ -47,3 +47,27 @@ def test_degrees_outside_the_list_are_dropped():
     assert requirement_reason(CONFIG, "liepin", "经验不限", "大专").startswith("学历要求（大专）")
     assert requirement_reason(CONFIG, "liepin", "经验不限", "博士").startswith("学历要求（博士）")
     assert requirement_reason(CONFIG, "liepin", "经验不限", "硕士") == ""
+
+
+def test_every_collector_applies_the_picked_limits_to_what_it_collects():
+    from bosshunter.collection.models import JobCandidate
+    from bosshunter.collection.platforms.job51 import Job51Collector
+    from bosshunter.collection.platforms.liepin import LiepinCollector
+    from bosshunter.collection.platforms.zhilian import ZhilianCollector
+    from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector
+
+    def job(platform, experience="经验不限", education="本科", jd="负责Agent开发"):
+        return JobCandidate(platform=platform, source_job_id="1", title="Agent工程师", company="某公司", salary="20-30K", experience=experience,
+                            education=education, jd=jd, source_keyword="Agent")
+
+    for platform, make in (("liepin", LiepinCollector), ("zhilian", ZhilianCollector), ("zhilian_campus", ZhilianCampusCollector)):
+        collector = make(config=CONFIG)
+        assert collector._filter_reason(job(platform)) == ""
+        assert "经验" in collector._filter_reason(job(platform, experience="3-5年"))
+        assert "经验" in collector._filter_reason(job(platform, jd="要求3年以上Java开发经验"))
+        assert "学历" in collector._filter_reason(job(platform, education="大专"))
+        assert make(config={})._filter_reason(job(platform, experience="3-5年", education="大专")) == ""   # nothing picked: no limit
+    cfg51 = Job51Collector(config=CONFIG)
+    kwargs = dict(allow_internship=True, salary_min=0, salary_max=1000)
+    assert cfg51._collector_filter_reason(job("51job"), "Agent", **kwargs) == ""
+    assert "经验" in cfg51._collector_filter_reason(job("51job", experience="3-5年·本科"), "Agent", **kwargs)
