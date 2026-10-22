@@ -50,12 +50,11 @@ class FakeServer:
         if path.startswith("/api/jobs/search"):
             items = self.confirm if "confirm" in path else self.waiting if "waiting" in path else self.manual
             return {"items": items}
-        if path == "/api/jobs/status":
-            self.approved += body["job_ids"]
-            return {}
         if path == "/api/workbench/greetings":
             return self._start({})
         if path == "/api/workbench/deliver":
+            self.approved += body["job_ids"]
+            assert body["skip_invalid"] is True
             return self._start({"send_success": 3, "send_failed": 1})
         raise AssertionError(path)
 
@@ -80,7 +79,7 @@ def test_a_round_collects_then_approves_greets_and_delivers_but_leaves_campus_to
     assert collects[1]["platform_order"] == ["liepin"] and collects[1]["target_new"] == 80
     assert set(server.approved) == {"liepin:1"}                                         # campus and other platforms stay untouched
     greetings = [body["job_ids"] for path, body in posts if path == "/api/workbench/greetings"]
-    assert ["zhilian_campus:1"] in greetings and ["liepin:1"] in greetings            # the user copies campus greetings by hand
+    assert ["zhilian_campus:1"] in greetings and ["liepin:1"] not in greetings          # the delivery task writes its own greetings
     assert any(path == "/api/workbench/deliver" for path, _ in posts)
     state = loop.snapshot()
     assert state["totals"]["liepin"]["collected"] >= 7 and state["totals"]["liepin"]["delivered"] >= 3

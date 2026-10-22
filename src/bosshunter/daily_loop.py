@@ -231,9 +231,10 @@ class DailyLoop:
         added = self._collect(platform)
         if self._over():
             return added
-        if platform not in MANUAL_ONLY and self.state.get("options", {}).get("auto_approve", True):
-            self._approve(platform)
-        self._greet_and_deliver(platform)
+        if platform in MANUAL_ONLY:
+            self._greet_for_manual(platform)
+        elif self.state.get("options", {}).get("auto_approve", True):
+            self._deliver(platform)
         return added
 
     def _get(self, path: str) -> dict:
@@ -299,60 +300,48 @@ class DailyLoop:
             self.incident(platform, "collect", str(item.get("reason_code") or state), f"{name}采集异常（{state}）：{item.get('message') or ''}",
                           "\n".join((last.get("logs") or [])[-8:]))
 
-    def _approve(self, platform: str) -> None:
-        self._set(step="approve", message=f"{PLATFORM_NAMES.get(platform, platform)}：批准待确认岗位")
-        ids: list[str] = []
-        offset = 0
-        while True:
-            page = self._get(f"/api/jobs/search?queue_view=confirm&limit=100&offset={offset}")
-            items = page.get("items") or []
-            ids += [str(i["id"]) for i in items if str(i.get("source_platform") or "boss") == platform and str(i.get("source_platform") or "boss") not in MANUAL_ONLY]
-            if len(items) < 100:
-                break
-            offset += 100
-        for start in range(0, len(ids), 100):
-            chunk = ids[start:start + 100]
-            try:
-                self.api("POST", "/api/jobs/status", {"job_ids": chunk, "status": "approved"})
-                self._bump(platform, "approved", len(chunk))
-            except ApiError as exc:
-                self.incident(platform, "approve", "approve_failed", f"批准岗位失败：{exc}")
-
-    def _greet_and_deliver(self, platform: str) -> None:
-        name = PLATFORM_NAMES.get(platform, platform)
-        self._set(step="greet", message=f"{name}：生成招呼语")
-        wanted = "manual" if platform in MANUAL_ONLY else "approved"
-        ids = self._missing_greeting_ids(platform, wanted)
-        if ids:
-            try:
-                self.api("POST", "/api/workbench/greetings", {"job_ids": ids})
-                self._wait_idle(f"{name}：生成招呼语")
-            except ApiError as exc:
-                self.incident(platform, "greet", "greeting_failed", f"生成招呼语失败：{exc}")
-        if platform in MANUAL_ONLY or self._over():
-            return
-        self._set(step="deliver", message=f"{name}：投递")
-        try:
-            result = self.api("POST", "/api/workbench/deliver", {"scope": "approved"})
-        except ApiError as exc:
-            if "没有已通过" not in str(exc):                       # nothing approved is not a problem
-                self.incident(platform, "deliver", str(exc.payload.get("code") or "deliver_refused"), f"{name}投递没有启动：{exc}")
-            return
-        last = self._wait_idle(f"{name}：投递中", limit_minutes=240)
-        self._report_delivery(platform, last, result)
-
-    def _missing_greeting_ids(self, platform: str, wanted: str) -> list[str]:
-        view = "manual" if wanted == "manual" else "waiting"
+    def _ids(self, platform: str, view: str, *, missing_greeting: bool = False) -> list[str]:
         ids: list[str] = []
         offset = 0
         while True:
             page = self._get(f"/api/jobs/search?queue_view={view}&limit=100&offset={offset}")
             items = page.get("items") or []
-            ids += [str(i["id"]) for i in items if str(i.get("source_platform") or "boss") == platform and not str(i.get("greeting") or "").strip()]
+            ids += [str(i["id"]) for i in items if str(i.get("source_platform") or "boss") == platform
+                    and (not missing_greeting or not str(i.get("greeting") or "").strip())]
             if len(items) < 100:
                 break
             offset += 100
         return ids
+
+    def _greet_for_manual(self, platform: str) -> None:
+        name = PLATFORM_NAMES.get(platform, platform)
+        self._set(step="greet", message=f"{name}：生成招呼语（留给你手动投递）")
+        ids = self._ids(platform, "manual", missing_greeting=True)
+        if not ids:
+            return
+        try:
+            self.api("POST", "/api/workbench/greetings", {"job_ids": ids})
+            self._wait_idle(f"{name}：生成招呼语")
+        except ApiError as exc:
+            self.incident(platform, "greet", "greeting_failed", f"生成招呼语失败：{exc}")
+
+    def _deliver(self, platform: str) -> None:
+        """Approve and deliver in one step: the delivery task takes the postings waiting for confirmation (and the ones
+        already approved), writes their greetings and sends them."""
+        name = PLATFORM_NAMES.get(platform, platform)
+        self._set(step="deliver", message=f"{name}：批准并投递")
+        ids = list(dict.fromkeys(self._ids(platform, "confirm") + self._ids(platform, "waiting")))
+        if not ids or self._over():
+            return
+        try:
+            result = self.api("POST", "/api/workbench/deliver", {"job_ids": ids, "skip_invalid": True})
+        except ApiError as exc:
+            if exc.status != 409 or "没有可投递" not in str(exc):      # nothing deliverable is not a problem
+                self.incident(platform, "deliver", str(exc.payload.get("code") or "deliver_refused"), f"{name}投递没有启动：{exc}")
+            return
+        self._bump(platform, "approved", len(ids))
+        last = self._wait_idle(f"{name}：投递中", limit_minutes=240)
+        self._report_delivery(platform, last, result)
 
     def _report_delivery(self, platform: str, last: dict, started: dict) -> None:
         name = PLATFORM_NAMES.get(platform, platform)
