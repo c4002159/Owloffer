@@ -4,15 +4,15 @@ import { ArrowLeft, ArrowRight, X } from 'lucide-react'
 
 export const START_ONBOARDING_EVENT = 'bosshunter:start-onboarding'
 
-type TourStep = { route: string; target: string; title: string; body: string; click: boolean; waitForSave?: boolean; placement?: 'above'; scroll?: false }
+type TourStep = { route: string; target: string; title: string; body: string; click: boolean; waitForSave?: boolean; placement?: 'above'; scroll?: false; category?: string }
 
 const steps: TourStep[] = [
   { route: '/', target: 'nav-config', title: '找到配置入口', body: '点击左侧“配置”，我们从真实的设置页面开始。', click: true },
-  { route: '/config', target: 'resume-upload', title: '上传简历', body: '在高亮区域点击或拖入简历。已有简历可以直接进入下一步。', click: false },
-  { route: '/config', target: 'search-keywords', title: '填写搜索关键词', body: '在已启用平台的搜索关键词中输入目标岗位，按回车确认。若平台都未启用，先打开一个平台开关。', click: false },
-  { route: '/config', target: 'search-city', title: '选择搜索城市', body: '搜索并选中希望求职的城市。若平台都未启用，先打开一个平台开关。', click: false, placement: 'above' },
-  { route: '/config', target: 'ai-section', title: '打开 AI 设置', body: '点击“AI 设置”，找到服务商、模型和 API Key。', click: true },
-  { route: '/config', target: 'ai-fields', title: '连接 AI', body: '选择服务商并填写下方的模型与 API Key；如果已通过环境变量配置，可保留 Key 输入框为空。', click: false, placement: 'above' },
+  { route: '/config', target: 'resume-upload', title: '上传简历', body: '在高亮区域点击或拖入简历。已有简历可以直接进入下一步。', click: false, category: 'profile' },
+  { route: '/config', target: 'search-keywords', title: '填写搜索关键词', body: '在关键词设置里输入目标岗位，按回车确认；也可以点 AI 推荐词，并选择要应用到哪些平台。', click: false, category: 'search' },
+  { route: '/config', target: 'search-city', title: '选择搜索城市', body: '搜索并选中希望求职的城市。若平台都未启用，先打开一个平台开关。', click: false, placement: 'above', category: 'search' },
+  { route: '/config', target: 'ai-section', title: '打开系统设置', body: '点击“系统”，找到 AI 服务商、模型和 API Key。', click: true },
+  { route: '/config', target: 'ai-fields', title: '连接 AI', body: '选择服务商并填写下方的模型与 API Key；如果已通过环境变量配置，可保留 Key 输入框为空。', click: false, placement: 'above', category: 'system' },
   { route: '/config', target: 'config-save', title: '保存配置', body: '有修改时点击高亮的“保存”。按钮恢复禁用后，表示当前没有待保存修改。', click: false, waitForSave: true, scroll: false },
   { route: '/config', target: 'nav-workbench', title: '返回工作台', body: '点击左侧“工作台”，继续检查本地运行环境。', click: true },
   { route: '/', target: 'chrome-guide', title: '连接 Chrome', body: '点击高亮的说明链接，按文档开启远程调试并登录招聘平台。完成后回到这里。', click: false },
@@ -75,6 +75,7 @@ export function OnboardingTour() {
       }
     }
     setHighlight(null)
+    if (step.category && location.pathname === step.route) window.dispatchEvent(new CustomEvent('bosshunter-config-category', { detail: step.category }))
     locate()
     if (!target) {
       lookupObserver = new MutationObserver(locate)
@@ -117,7 +118,7 @@ export function OnboardingTour() {
     <svg aria-hidden="true" className="pointer-events-none fixed inset-0 z-50 h-full w-full" viewBox={`0 0 ${viewport.width} ${viewport.height}`} preserveAspectRatio="none">
       <path d={`M0 0H${viewport.width}V${viewport.height}H0z ${hole}`} fill="rgba(0, 0, 0, 0.68)" fillRule="evenodd" />
     </svg>
-    {highlight && <div aria-hidden="true" className="pointer-events-none fixed z-[51] rounded-xl border-2 border-primary shadow-[0_0_0_4px_rgba(251,101,17,0.22)]" style={{ left: highlight.x, top: highlight.y, width: highlight.width, height: highlight.height }} />}
+    {highlight && <div aria-hidden="true" className="pointer-events-none fixed z-[51] rounded-xl border-2 border-primary shadow-[0_0_0_4px_rgba(47,107,255,0.22)]" style={{ left: highlight.x, top: highlight.y, width: highlight.width, height: highlight.height }} />}
     <div role="dialog" aria-label="交互引导" className="fixed z-[52] rounded-2xl border border-primary/40 bg-card p-4 text-foreground shadow-2xl" style={{ top: tooltipTop, left: tooltipLeft, width: tooltipWidth }}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-[11px] font-bold text-primary">开始使用 · {index + 1}/{steps.length}</span>

@@ -17,6 +17,10 @@ import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-reac
 import { useState, useEffect, useRef } from 'react'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 import { AgentAccessPanel } from '@/components/config/AgentAccessPanel'
+import { ResumeLibrary } from '@/components/config/ResumeLibrary'
+import { KeywordSettings } from '@/components/config/KeywordSettings'
+import { AiExtras, AutomationSettings, BrowserSettings, FreshnessSettings, SafetyExtras, ScoringExtras, TimezoneNotice } from '@/components/config/ExtraSettings'
+import { createContext, useContext } from 'react'
 
 const AI_SERVICES = {
   anthropic: {
@@ -50,6 +54,23 @@ const AI_SERVICES = {
 } as const
 
 type AiService = keyof typeof AI_SERVICES
+
+const CATEGORIES = [
+  { key: 'profile', label: '求职档案', hint: '简历库、个人信息、求职偏好、过滤规则', sections: ['profile'] },
+  { key: 'search', label: '搜索与关键词', hint: '各平台的关键词、城市、页数、筛选', sections: ['keywords', 'search'] },
+  { key: 'scoring', label: '评分与过滤', hint: '评分阈值与分数门槛', sections: ['scoring'] },
+  { key: 'delivery', label: '投递与自动化', hint: '自动投递、发送额度、发送窗口', sections: ['delivery'] },
+  { key: 'monitor', label: '监测与跟进', hint: 'HR 回复检查、自动跟进', sections: ['monitor', 'follow_up'] },
+  { key: 'safety', label: '安全与反监测', hint: '页面上限、风险暂停、采集节奏', sections: ['collection'] },
+  { key: 'agent', label: '智能体连接', hint: 'Claude / Codex 的令牌、权限、连接方式', sections: ['agent_access'] },
+  { key: 'system', label: '系统', hint: 'AI 服务、浏览器、时区、去重', sections: ['ai', 'browser', 'dedup'] },
+] as const
+type CategoryKey = (typeof CATEGORIES)[number]['key']
+const SECTION_TO_CATEGORY: Record<string, CategoryKey> = {
+  profile: 'profile', search: 'search', keywords: 'search', scoring: 'scoring', delivery: 'delivery', throttle: 'delivery', monitor: 'monitor', follow_up: 'monitor',
+  collection: 'safety', safety: 'safety', agent_access: 'agent', agent: 'agent', ai: 'system', browser: 'system', dedup: 'system', system: 'system',
+}
+const ActiveSections = createContext<readonly string[]>([])
 type PlatformId = 'boss' | 'zhilian' | 'zhilian_campus' | '51job' | 'liepin'
 
 const BOSS_FILTER_OPTIONS = {
@@ -69,6 +90,15 @@ export default function ConfigPage() {
     search: true,
     ...(requestedSection ? { [requestedSection]: true } : {}),
   }))
+  const [category, setCategory] = useState<CategoryKey>(() => SECTION_TO_CATEGORY[requestedSection || ''] ?? 'profile')
+  useEffect(() => {
+    const onCategory = (event: Event) => {
+      const next = (event as CustomEvent<string>).detail
+      if (CATEGORIES.some(item => item.key === next)) setCategory(next as CategoryKey)
+    }
+    window.addEventListener('bosshunter-config-category', onCategory)
+    return () => window.removeEventListener('bosshunter-config-category', onCategory)
+  }, [])
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [modelList, setModelList] = useState<{ loading: boolean; models: string[]; message?: string; error?: boolean }>({ loading: false, models: [] })
   const modelRequest = useRef<AbortController | null>(null)
@@ -294,8 +324,25 @@ export default function ConfigPage() {
   const guidePlatform = (['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[])
     .find(platform => config.platforms?.[platform]?.enabled ?? platform === 'boss')
 
+  const activeCategory = CATEGORIES.find(item => item.key === category) ?? CATEGORIES[0]
   return (
-    <div className="h-full overflow-y-auto space-y-4 pr-4">
+    <div className="flex h-full min-h-0 flex-col gap-3 md:flex-row md:gap-5">
+      <nav aria-label="设置分类" className="flex shrink-0 gap-1 overflow-x-auto md:w-48 md:flex-col md:overflow-visible">
+        {CATEGORIES.map(item => (
+          <button
+            key={item.key}
+            type="button"
+            data-tour={item.key === 'system' ? 'ai-section' : undefined}
+            aria-current={item.key === category ? 'page' : undefined}
+            onClick={() => setCategory(item.key)}
+            className={`whitespace-nowrap rounded-xl px-3 py-2 text-left text-sm transition-colors ${item.key === category ? 'bg-secondary font-black text-primary' : 'text-muted hover:bg-surface hover:text-foreground'}`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <ActiveSections.Provider value={activeCategory.sections}>
+    <div className="h-full min-w-0 flex-1 overflow-y-auto space-y-4 pr-4">
         {/* Actions bar */}
         <div className="flex items-center justify-between sticky top-0 bg-background z-10 py-2">
           <div className="flex items-center gap-2">
@@ -312,18 +359,12 @@ export default function ConfigPage() {
           </div>
         </div>
 
-        {windowError && <p className="text-xs text-danger">发送时间窗口有误，请展开「反监测设置」修正后保存：{windowError}</p>}
+        {windowError && <p className="text-xs text-danger">发送时间窗口有误，请到「投递与自动化」修正后保存：{windowError}</p>}
 
         {/* Profile Section */}
-        <SectionCard title="个人信息" sectionKey="profile" expanded={expandedSections} toggle={toggleSection}>
+        <SectionCard title="简历与个人信息" sectionKey="profile" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
-            <div data-tour="resume-upload">
-              <ResumeUploadSection
-                currentResumePath={config.profile?.resume_path || ''}
-                updateConfig={updateConfig}
-              />
-              <ExtraResumesSection />
-            </div>
+            <ResumeLibrary currentResumePath={config.profile?.resume_path || ''} updateConfig={updateConfig} />
             <div className="grid grid-cols-2 gap-4">
               <Field label="最高学历">
                 <Select value={config.profile?.education || ''} onChange={e => updateConfig('profile.education', e.target.value)}>
@@ -434,11 +475,17 @@ export default function ConfigPage() {
                 if (v) updateConfig('profile.filter_unparsed_salary', false)
               }} />
             </div>
+            <FreshnessSettings config={config} updateConfig={updateConfig} />
           </div>
         </SectionCard>
 
+        {/* Keyword Section */}
+        <SectionCard title="关键词设置" sectionKey="keywords" expanded={expandedSections} toggle={toggleSection}>
+          <KeywordSettings config={config} platformSearch={platformSearch} updatePlatformSearch={updatePlatformSearch} updateConfig={updateConfig} />
+        </SectionCard>
+
         {/* Search Section */}
-        <SectionCard title="搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
+        <SectionCard title="各平台搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
             <p className="rounded-xl border border-card-border bg-surface px-3 py-2 text-xs leading-5 text-muted">
               前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘没有投简历入口或没有合适简历时自动降级为发定制招呼语，投递成功后再追发招呼语由 automation.external_greeting_send 控制（默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。BossHunter 只在 BOSS 上监听回复。
@@ -463,25 +510,7 @@ export default function ConfigPage() {
                     <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
                   </div>
                   {enabled && <div className="mt-4 space-y-3">
-                    <Field label="搜索关键词" dataTour={platform === guidePlatform ? 'search-keywords' : undefined} hint="每个岗位是一个独立词条：输入后回车添加，或点下方推荐词条。">
-                      <KeywordRecommendations
-                        keywords={Array.isArray(search.keywords) ? search.keywords : []}
-                        onChange={value => updatePlatformSearch(platform, 'keywords', value)}
-                        internKeywords={Array.isArray(config.search?.intern_keywords) ? config.search.intern_keywords : []}
-                        onInternChange={value => updateConfig('search.intern_keywords', value)}
-                      />
-                      {platform === 'boss' && <KeywordPerformance />}
-                      <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
-                    </Field>
-                    {platform === 'boss' && (
-                      <Field label="实习关键词（开发 / 产品）" hint="“补满”时单独用这些词搜实习岗位，名额在 config.yaml 的 automation.internship_quota。">
-                        <TagsInput
-                          value={Array.isArray(config.search?.intern_keywords) ? config.search.intern_keywords : []}
-                          onChange={value => updateConfig('search.intern_keywords', value)}
-                          placeholder="如：AI开发实习生、产品实习生"
-                        />
-                      </Field>
-                    )}
+                    <p className="text-xs text-muted">搜索关键词 {Array.isArray(search.keywords) ? search.keywords.length : 0} 个（在上方「关键词设置」里统一编辑）。</p>
                     <Field label="搜索城市" dataTour={platform === guidePlatform && platform !== 'boss' ? 'search-city' : undefined}>
                       {platform === 'boss' ? <CityMultiSelect
                         tourTarget={platform === guidePlatform ? 'search-city' : undefined}
@@ -610,6 +639,7 @@ export default function ConfigPage() {
             <Field label="每轮最大候选数">
               <Input type="number" value={config.scoring?.max_candidates || 20} onChange={e => updateConfig('scoring.max_candidates', Number(e.target.value))} min={1} max={100} />
             </Field>
+            <ScoringExtras config={config} updateConfig={updateConfig} />
           </div>
         </SectionCard>
 
@@ -749,6 +779,15 @@ export default function ConfigPage() {
                 </p>
               )}
             </div>
+            <AiExtras config={config} updateConfig={updateConfig} />
+          </div>
+        </SectionCard>
+
+        {/* Browser and time */}
+        <SectionCard title="浏览器与时间" sectionKey="browser" expanded={expandedSections} toggle={toggleSection}>
+          <div className="space-y-4">
+            <TimezoneNotice />
+            <BrowserSettings config={config} updateConfig={updateConfig} />
           </div>
         </SectionCard>
 
@@ -799,6 +838,14 @@ export default function ConfigPage() {
               <Input type="number" value={config.safety?.daily_platform_page_limit ?? 1100} onChange={e => updateConfig('safety.daily_platform_page_limit', Number(e.target.value))} min={1} max={2000} />
               <p className="mt-1 text-xs text-muted">合计 BOSS 搜索页、详情页、自动投递和监测打开的页面；默认 1100 次，可容纳 60 次搜索与 900 次详情，另余 140 次供其他操作使用。其他平台不占用。</p>
             </Field>
+            <SafetyExtras config={config} updateConfig={updateConfig} />
+          </div>
+        </SectionCard>
+
+        {/* Delivery Section */}
+        <SectionCard title="投递与自动化" sectionKey="delivery" expanded={expandedSections} toggle={toggleSection}>
+          <div className="space-y-4">
+            <AutomationSettings config={config} updateConfig={updateConfig} />
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="每日发送上限">
                 <Input type="number" value={config.throttle?.daily_limit || 30} onChange={e => updateConfig('throttle.daily_limit', Number(e.target.value))} />
@@ -905,6 +952,8 @@ export default function ConfigPage() {
           <AgentAccessPanel />
         </SectionCard>
     </div>
+      </ActiveSections.Provider>
+    </div>
   )
 }
 
@@ -912,7 +961,9 @@ export default function ConfigPage() {
 function SectionCard({ title, sectionKey, expanded, toggle, children }: {
   title: string; sectionKey: string; expanded: Record<string, boolean>; toggle: (k: string) => void; children: React.ReactNode
 }) {
-  const isExpanded = expanded[sectionKey] ?? false
+  const active = useContext(ActiveSections)
+  if (!active.includes(sectionKey)) return null
+  const isExpanded = expanded[sectionKey] ?? true
   return (
     <Card>
       <button
