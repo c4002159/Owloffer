@@ -3839,7 +3839,10 @@ def api_daily_loop_start():
 	loop = _get_daily_loop()
 	if loop.running():
 		return _json_response({"error": "每日循环已经在运行", **loop.snapshot()}, 409)
-	return _json_response(loop.start(body))
+	try:
+		return _json_response(loop.start(body))
+	except (ValueError, TypeError) as exc:
+		return _json_response({"error": str(exc)}, 400)
 
 
 @app.route("/api/daily-loop/stop", method="POST")

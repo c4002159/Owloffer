@@ -20,6 +20,8 @@ export interface DailyLoopState {
   running?: boolean
   started_at?: string
   end_at?: string
+  start_at?: string
+  delivery_cap?: number
   round?: number
   platform?: string
   step?: string
@@ -35,6 +37,17 @@ const STEP_LABELS: Record<string, string> = {
 
 const TOTAL_LABELS: Record<string, string> = { collected: '新增', approved: '已批准', delivered: '已投递', failed: '失败' }
 
+const SETTINGS_KEY = 'bosshunter.dailyLoop.settings'
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}')
+    return { start: String(saved.start || '07:00'), end: String(saved.end || '20:00'), cap: String(saved.cap ?? '150') }
+  } catch {
+    return { start: '07:00', end: '20:00', cap: '150' }
+  }
+}
+
 function clock(iso?: string) {
   const match = /T(\d{2}:\d{2})/.exec(iso || '')
   return match ? match[1] : ''
@@ -44,6 +57,17 @@ export function DailyLoopPanel({ setNotice }: { setNotice: (message: string) => 
   const [state, setState] = useState<DailyLoopState>({})
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState<string>('')
+  const [settings, setSettings] = useState(loadSettings)
+
+  const change = (patch: Partial<typeof settings>) => {
+    const next = { ...settings, ...patch }
+    setSettings(next)
+    try {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next))
+    } catch {
+      // the settings just are not remembered
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -68,10 +92,10 @@ export function DailyLoopPanel({ setNotice }: { setNotice: (message: string) => 
   }
 
   const start = async () => {
-    if (!window.confirm('启动每日循环？\n\n会按“智联校招 50 → 智联 → BOSS → 前程无忧 → 猎聘（各 80）”依次采集，每个平台采完自动批准待确认岗位并投递（智联校招除外，留给你手动投递），投完再采下一轮，到结束时间自动停止。')) return
+    if (!window.confirm('启动每日循环？\n\n会按“智联校招 50 → 智联 → BOSS → 前程无忧 → 猎聘（各 80）”依次采集，每个平台采完自动批准待确认岗位并投递（智联校招除外，留给你手动投递），投完再采下一轮，到结束时间或所有平台都到投递上限就自动停止。')) return
     setBusy(true)
     try {
-      setState(await post('/api/daily-loop/start'))
+      setState(await post('/api/daily-loop/start', { start_time: settings.start, end_time: settings.end, delivery_cap: Math.max(Number.parseInt(settings.cap, 10) || 0, 0) }))
       setNotice('每日循环已启动。')
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : '启动失败')
@@ -120,8 +144,15 @@ export function DailyLoopPanel({ setNotice }: { setNotice: (message: string) => 
           <div className="text-lg font-black tracking-tight">每日循环{running && <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-[11px] font-bold text-primary-foreground">运行中</span>}</div>
           <p className="mt-1 text-xs leading-5 text-muted">
             固定流程：先采智联校招 50 个，再依次采智联、BOSS、前程无忧、猎聘（各 80 个）；每个平台采完自动批准并投递（智联校招留给你手动投递），投完再采下一轮；出错只记录、不中断。
-            {state.end_at && running ? ` 预计 ${clock(state.end_at)} 结束。` : ''}
+            {running && state.end_at ? ` 运行到 ${clock(state.end_at)}，每个平台最多投递 ${state.delivery_cap || '不限'} 个。` : ''}
           </p>
+          {!running && (
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs font-bold text-foreground">
+              <label className="flex items-center gap-1">开始<input type="time" value={settings.start} onChange={event => change({ start: event.target.value })} className="rounded-lg border border-card-border bg-card px-2 py-1" /></label>
+              <label className="flex items-center gap-1">结束<input type="time" value={settings.end} onChange={event => change({ end: event.target.value })} className="rounded-lg border border-card-border bg-card px-2 py-1" /></label>
+              <label className="flex items-center gap-1">每个平台投递上限<input type="number" min={0} max={1000} value={settings.cap} onChange={event => change({ cap: event.target.value })} className="w-20 rounded-lg border border-card-border bg-card px-2 py-1" />（0 = 不限）</label>
+            </div>
+          )}
         </div>
         <button
           type="button"

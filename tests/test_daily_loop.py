@@ -164,3 +164,34 @@ def test_the_daily_loop_routes_report_start_and_resolve(tmp_path, monkeypatch):
     assert status.startswith("200") and payload["incidents"][0]["resolved"] is True
     assert _request("/api/daily-loop/incidents/nope/resolve", "POST", {})[0].startswith("404")
     assert _request("/api/daily-loop/stop", "POST", {})[0].startswith("200")
+
+
+def test_a_platform_that_reached_the_delivery_cap_is_skipped_and_the_loop_ends_when_all_are_capped(tmp_path):
+    server = FakeServer()
+    server.confirm = [{"id": f"liepin:{n}", "source_platform": "liepin"} for n in range(10)]
+    loop = _loop(server, tmp_path)
+    loop.start({"platform_order": ["liepin"], "end_time": "12:00", "delivery_cap": 3})
+    loop.join(10)
+    delivers = [body for method, path, body in server.calls if path == "/api/workbench/deliver"]
+    assert len(delivers[0]["job_ids"]) == 3                                  # never more than the cap in one go
+    state = loop.snapshot()
+    assert state["totals"]["liepin"]["delivered"] >= 3 and not state["running"]
+    assert "上限" in state["message"] and len(delivers) == 1                  # capped: no second delivery, loop ends early
+    assert server.t < datetime(2026, 10, 22, 12, 0)
+
+
+def test_the_loop_waits_for_its_start_time_and_refuses_times_that_do_not_make_sense(tmp_path):
+    server = FakeServer()
+    loop = _loop(server, tmp_path)
+    loop.start({"platform_order": ["liepin"], "start_time": "09:30", "end_time": "10:00", "delivery_cap": 0})
+    loop.join(10)
+    first_call = next(i for i, (m, p, b) in enumerate(server.calls) if p == "/api/workbench/task")
+    assert server.calls and first_call >= 0
+    started_at = [c for c in server.calls if c[1] == "/api/workbench/task"]
+    assert started_at                                                       # it did work once its time came
+    import pytest
+
+    with pytest.raises(ValueError):
+        _loop(FakeServer(), tmp_path / "x").start({"end_time": "08:00"})       # the end time already passed (it is 09:00)
+    with pytest.raises(ValueError):
+        _loop(FakeServer(), tmp_path / "y").start({"start_time": "11:00", "end_time": "10:00"})

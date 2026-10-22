@@ -26,6 +26,8 @@ MANUAL_ONLY = {"zhilian_campus"}                 # collected, scored and greeted
 POLL_SECONDS = 60
 IDLE_SECONDS = 600                              # nothing to collect (window closed, all paused): look again later
 MAX_COLLECT_MINUTES = 90
+DEFAULT_END = "20:00"
+DEFAULT_CAP = 150                               # deliveries per platform and day; 0 = no limit
 MAX_INCIDENTS = 300
 GREETING_STATUSES = {"ready", "approved", "error"}      # the statuses the greeting API accepts (not the unscored ones)
 PLATFORM_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘"}
@@ -131,13 +133,18 @@ class DailyLoop:
             now = self.now()
             order = [p for p in (options.get("platform_order") or DEFAULT_ORDER) if p in DEFAULT_TARGETS]
             targets = {**DEFAULT_TARGETS, **{k: int(v) for k, v in (options.get("targets") or {}).items() if k in DEFAULT_TARGETS}}
-            end = parse_end_time(options.get("end_time") or "14:00", now)
-            if end <= now:                                    # started after the end time: work until the end of the day
-                end = datetime.combine(now.date(), day_time(23, 59))
+            end = parse_end_time(options.get("end_time") or DEFAULT_END, now)
+            if end <= now:
+                raise ValueError(f"结束时间 {end:%H:%M} 已经过了，请把结束时间调到现在之后")
+            begin = parse_end_time(options["start_time"], now) if options.get("start_time") else None
+            if begin is not None and begin >= end:
+                raise ValueError("开始时间必须早于结束时间")
+            cap = max(int(options.get("delivery_cap", DEFAULT_CAP) or 0), 0)
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds"),
+                "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
-                "totals": {}, "incidents": [], "options": {k: options[k] for k in ("end_time", "auto_approve") if k in options},
+                "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "auto_approve", "delivery_cap") if k in options},
                 "stopped_reason": "",
             }
             self._save()
@@ -173,7 +180,20 @@ class DailyLoop:
     # ------------------------------------------------------------------ the loop
     def _over(self) -> bool:
         end = datetime.fromisoformat(self.state["end_at"])
-        return self._stop.is_set() or self.now() >= end
+        return self._stop.is_set() or self.now() >= end or self._all_capped()
+
+    def _delivered(self, platform: str) -> int:
+        return int((self.state.get("totals") or {}).get(platform, {}).get("delivered", 0))
+
+    def _capped(self, platform: str) -> bool:
+        cap = int(self.state.get("delivery_cap") or 0)
+        return cap > 0 and platform not in MANUAL_ONLY and self._delivered(platform) >= cap
+
+    def _all_capped(self) -> bool:
+        """Every platform that delivers has reached the daily delivery limit: nothing more to do today."""
+        cap = int(self.state.get("delivery_cap") or 0)
+        platforms = [p for p in self.state.get("order", []) if p not in MANUAL_ONLY]
+        return cap > 0 and bool(platforms) and all(self._capped(p) for p in platforms)
 
     def _wait(self, seconds: float) -> None:
         waited = 0.0
@@ -181,8 +201,19 @@ class DailyLoop:
             self.sleep(min(self.poll_seconds, seconds - waited))
             waited += self.poll_seconds
 
+    def _wait_for_start(self) -> None:
+        begin = self.state.get("start_at")
+        if not begin:
+            return
+        start = datetime.fromisoformat(begin)
+        while self.now() < start and not self._over():
+            self._set(step="waiting", message=f"等待开始时间 {start:%H:%M}")
+            self.sleep(self.poll_seconds)
+        self._set(start_at="")
+
     def _run(self) -> None:
         try:
+            self._wait_for_start()
             idle_rounds = 0
             while not self._over():
                 with self._lock:
@@ -205,7 +236,7 @@ class DailyLoop:
             self._finish()
 
     def _finish(self) -> None:
-        stopped = self.state.get("stopped_reason") or "end_time"
+        stopped = self.state.get("stopped_reason") or ("cap" if self._all_capped() else "end_time")
         if self._over() or stopped:
             try:
                 status = self.api("GET", "/api/workbench", None)
@@ -214,7 +245,8 @@ class DailyLoop:
                     self.api("POST", f"/api/workbench/task/{active['id']}/stop", {})
             except Exception:
                 pass
-        self._set(running=False, step="finished", message="每日循环结束", platform="", summary=self.summary())
+        message = "各平台都已达到投递上限，每日循环结束" if self._all_capped() else "每日循环结束"
+        self._set(running=False, step="finished", message=message, platform="", summary=self.summary())
 
     def summary(self) -> dict[str, Any]:
         with self._lock:
@@ -224,6 +256,9 @@ class DailyLoop:
     # ------------------------------------------------------------------ one platform
     def _platform(self, platform: str) -> int:
         self._set(platform=platform, step="check", message=f"{PLATFORM_NAMES.get(platform, platform)}：检查状态")
+        if self._capped(platform):
+            self._set(message=f"{PLATFORM_NAMES.get(platform, platform)}：已达到投递上限 {self.state.get('delivery_cap')}，跳过")
+            return 0
         status = self._get("/api/workbench")
         if platform in (status.get("platform_limit_details") or {}):
             detail = status["platform_limit_details"][platform]
@@ -333,6 +368,9 @@ class DailyLoop:
         name = PLATFORM_NAMES.get(platform, platform)
         self._set(step="deliver", message=f"{name}：批准并投递")
         ids = list(dict.fromkeys(self._ids(platform, "confirm") + self._ids(platform, "waiting")))
+        cap = int(self.state.get("delivery_cap") or 0)
+        if cap > 0:
+            ids = ids[:max(cap - self._delivered(platform), 0)]            # never deliver past the day's limit
         if not ids or self._over():
             return
         try:
