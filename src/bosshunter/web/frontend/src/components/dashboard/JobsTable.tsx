@@ -136,14 +136,14 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                 <th className="w-10 px-3 py-3 text-center font-bold">选</th>
                 <th className="px-4 py-3 text-left font-bold">公司</th>
                 <th className="px-4 py-3 text-left font-bold">职位</th>
-                <th className="px-4 py-3 text-left font-bold">城市</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('薪资', 'salary')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('学历 / 招聘类型', 'education')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('匹配度', 'score')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('活跃度', 'recruit_score')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('状态', 'status')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('招聘者活跃', 'hr_active')}</th>
-                <th className="px-4 py-3 text-left">{sortableHeader('时间', 'created_at')}</th>
+                <th className="whitespace-nowrap px-4 py-3 text-left font-bold">城市</th>
+                <th className="whitespace-nowrap px-4 py-3 text-left">{sortableHeader('薪资', 'salary')}</th>
+                <th className="min-w-[120px] whitespace-nowrap px-4 py-3 text-left">{sortableHeader('学历 / 招聘类型', 'education')}</th>
+                <th className="whitespace-nowrap px-4 py-3 text-left">{sortableHeader('匹配度', 'score')}</th>
+                <th className="whitespace-nowrap px-4 py-3 text-left">{sortableHeader('活跃度', 'recruit_score')}</th>
+                <th className="min-w-[110px] whitespace-nowrap px-4 py-3 text-left">{sortableHeader('状态', 'status')}</th>
+                <th className="whitespace-nowrap px-4 py-3 text-left">{sortableHeader('招聘者活跃', 'hr_active')}</th>
+                <th className="whitespace-nowrap px-4 py-3 text-left">{sortableHeader('时间', 'created_at')}</th>
                 {hasActions && <th className="min-w-[210px] px-3 py-3 text-center font-bold">操作</th>}
               </tr>
             </thead>
@@ -188,8 +188,8 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         </div>
                       </td>
                       <td className="max-w-[220px] truncate px-4 py-3 font-bold text-foreground">{job.title}</td>
-                      <td className="px-4 py-3 text-muted">{job.city || '未识别'}</td>
-                      <td className="px-4 py-3 text-muted">{job.salary || '-'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-muted">{job.city || '未识别'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-muted">{job.salary || '-'}</td>
                       <td className="px-4 py-3 text-xs">
                         <div className="font-bold text-foreground">{job.education || '学历未识别'}</div>
                         <div className="mt-1 text-muted">职位类型：{job.employment_type === 'internship' ? '实习' : job.employment_type === 'full_time' ? '全职' : job.employment_type === 'part_time' ? '兼职' : '待核实'}</div>
@@ -203,7 +203,30 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         <span className={`font-mono font-black ${job.recruit_score == null ? 'text-muted' : getScoreColor(job.recruit_score)}`}>{job.recruit_score ?? '-'}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusVariant(job.status) as any}>{inDelivery ? ({ delivering: '投递中', waiting: '排队投递', scoring: '评分中' } as Record<string, string>)[busyReasons[job.id]] || '任务处理中' : getStatusLabel(job.status)}</Badge>
+                        <div className="relative inline-flex items-center gap-1" onClick={event => event.stopPropagation()}>
+                          <Badge variant={statusVariant(job.status) as any}>{inDelivery ? ({ delivering: '投递中', waiting: '排队投递', scoring: '评分中' } as Record<string, string>)[busyReasons[job.id]] || '任务处理中' : getStatusLabel(job.status)}</Badge>
+                          {onStatusChange && !alreadySent && !inDelivery && (
+                            <>
+                              <ChevronDown className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+                              <select
+                                value=""
+                                aria-label={`修改 ${job.company} ${job.title} 状态`}
+                                title="修改状态"
+                                onChange={event => {
+                                  const status = event.target.value
+                                  if (status) onStatusChange(job, status)
+                                }}
+                                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                              >
+                                <option value="">修改状态…</option>
+                                <option value="ready">待确认</option>
+                                <option value="filtered">已过滤</option>
+                                <option value="skipped">已跳过</option>
+                                <option value="rejected">已拒绝</option>
+                              </select>
+                            </>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted">{job.hr_active || '活跃度未知'}</td>
                       <td className="px-4 py-3 text-xs text-muted">
@@ -254,24 +277,6 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                               >
                                 <Ban className="h-3.5 w-3.5" />{blockingJobId === job.id ? '处理中…' : blockedRule ? '已屏蔽' : '屏蔽公司'}
                               </button>
-                            )}
-                            {onStatusChange && !alreadySent && (
-                              <select
-                                defaultValue=""
-                                aria-label={`修改 ${job.company} ${job.title} 状态`}
-                                onChange={event => {
-                                  const status = event.target.value
-                                  if (status) onStatusChange(job, status)
-                                  event.currentTarget.value = ''
-                                }}
-                                className="rounded-lg border border-card-border bg-card px-2 py-1.5 text-[11px] font-bold text-foreground"
-                              >
-                                <option value="">修改状态</option>
-                                <option value="ready">待确认</option>
-                                <option value="filtered">已过滤</option>
-                                <option value="skipped">已跳过</option>
-                                <option value="rejected">已拒绝</option>
-                              </select>
                             )}
                           </div>
                         </td>

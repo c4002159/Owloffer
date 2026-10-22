@@ -470,7 +470,8 @@ describe('DashboardPage scoring dialog confirm behaviour', () => {
 
   async function openScoringDialog() {
     render(<DashboardPage view="jobs" />)
-    fireEvent.click(await screen.findByText('评分选项'))
+    fireEvent.click(await screen.findByRole('button', { name: '更多' }))
+    fireEvent.click(await screen.findByText('评分选项…'))
     expect(await screen.findByText('符合条件')).toBeTruthy()
   }
 

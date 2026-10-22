@@ -134,3 +134,13 @@ def test_the_details_say_when_it_happened_and_when_a_cooldown_ends(tmp_path):
     assert details["zhilian"]["until"] == "" and "T" in details["zhilian"]["since"]       # local time, set when it happened
     assert details["zhilian"]["reason"].startswith("采集异常已暂停")
     conn.close()
+
+
+def test_manual_view_also_lists_failed_deliveries(pool):
+    conn = get_db(pool / "data" / "bosshunter.db")
+    conn.execute("INSERT INTO jobs (id, title, company, jd, source_platform, status, score) VALUES ('f1', '失败岗位', '某公司', ?, 'boss', 'error', 80)", ("x" * 100,))
+    conn.commit()
+    conn.close()
+    status, payload = _request("/api/jobs/search?limit=50&queue_view=manual")
+    assert status.startswith("200"), payload
+    assert {item["id"] for item in payload["items"]} == {"z1", "z4", "f1"}

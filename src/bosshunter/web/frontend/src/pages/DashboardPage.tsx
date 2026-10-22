@@ -26,7 +26,7 @@ import {
   useDebouncedValue,
   type JobFilters,
 } from '@/lib/jobFilters'
-import { getActionLabel, getStatusLabel, POOL_VIEW_LABELS, POOL_VIEW_QUEUE, POOL_VIEW_STATUSES, type PoolView } from '@/lib/status'
+import { getActionLabel, getStatusLabel, POOL_TABS, POOL_VIEW_LABELS, POOL_VIEW_QUEUE, POOL_VIEW_STATUSES, type PoolView } from '@/lib/status'
 import { describeGreetTaskOutcome, greetPauseReasonLabel } from '@/lib/greetTask'
 import { cn } from '@/lib/utils'
 import {
@@ -36,11 +36,14 @@ import {
   Download,
   ExternalLink,
   Eye,
+  EyeOff,
   MessageCircle,
+  MoreHorizontal,
   Pencil,
   Play,
   RefreshCw,
   ShieldCheck,
+  SlidersHorizontal,
   Send,
   Sparkles,
   Square,
@@ -1846,6 +1849,8 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const [recycleLoading, setRecycleLoading] = useState(false)
   const [permanentDeleteIds, setPermanentDeleteIds] = useState<string[]>([])
   const [permanentDeleteAcknowledged, setPermanentDeleteAcknowledged] = useState(false)
+  const [poolPanel, setPoolPanel] = useState<'filter' | 'hide' | null>(null)
+  const activeFilterCount = Object.values(filters).filter(value => Array.isArray(value) ? value.length > 0 : value !== '').length
   const { items, total, allTotal, cityOptions, loading, error, refresh: refreshJobs, fetchAllIds } = useJobSearch(filters, page, pageSize, sortBy, sortOrder, hideHandled && poolView === 'pending', POOL_VIEW_STATUSES[poolView], POOL_VIEW_QUEUE[poolView])
   const { workbench: deliveryWorkbench } = useDashboard('workbench')
   const deliveryTask = deliveryWorkbench.task?.mode === 'deliver'
@@ -2349,8 +2354,8 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
           <BriefcaseBusiness className="h-6 w-6 text-primary" />
         </div>
       </div>
-      <div className="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="岗位池视图">
-        {(['pending', 'waiting', 'failed', 'manual', 'history'] as PoolView[]).map(view => (
+      <div className="mb-2 flex snap-x gap-2 overflow-x-auto pb-1" role="tablist" aria-label="岗位池视图">
+        {POOL_TABS.map(view => (
           <button
             key={view}
             type="button"
@@ -2363,70 +2368,93 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
               setSelectedIds([])
               setPage(0)
             }}
-            className={`rounded-full px-4 py-2 text-sm font-black transition-colors ${poolView === view ? 'bg-primary text-primary-foreground shadow-sm' : 'border border-card-border bg-card text-muted hover:text-primary'}`}
+            className={`shrink-0 snap-start whitespace-nowrap rounded-full px-4 py-2 text-sm font-black transition-colors ${poolView === view ? 'bg-primary text-primary-foreground shadow-sm' : 'border border-card-border bg-card text-muted hover:text-primary'}`}
           >
             {POOL_VIEW_LABELS[view]}{viewCounts[view] != null ? `（${viewCounts[view]}）` : ''}
           </button>
         ))}
-        <span className="text-xs text-muted">
-          {{
-            pending: '等你确认的岗位：待评分、已评分、待确认。',
-            waiting: '已确认、等待投递的岗位：可以一键投递，也可以打开平台自己投，再在“修改状态”里标记已投递。',
-            failed: '程序投递失败的岗位：可以重试，也可以打开平台自己投，再在“修改状态”里标记已投递（就会进入历史记录）。',
-            manual: '智联招聘只能手动投递：这里是通过筛选的智联岗位（已和数据库去重，近期投过的公司不再出现）。打开岗位链接自己投，再在“修改状态”里标记已投递。',
-            history: '已有结果的岗位：已投递、已回复、已拒绝、已过滤、已跳过。',
-          }[poolView]}
-        </span>
       </div>
-      <JobFilterBar
-        filters={filters}
-        onChange={setFilters}
-        onReset={() => setFilters({ ...EMPTY_JOB_FILTERS })}
-        resultCount={total}
-        totalCount={allTotal}
-        invalidSalary={hasInvalidSalaryRange(filters)}
-        showStatus
-        statusOptions={POOL_VIEW_STATUSES[poolView]}
-        showSource
-        cityOptions={cityOptions}
-      />
+      <p className="mb-3 text-xs text-muted">
+        {{
+          pending: '等你确认的岗位：待评分、已评分、待确认。',
+          waiting: '已确认、等待投递的岗位：可以一键投递，也可以打开平台自己投，再在状态里标记已投递。',
+          failed: '程序投递失败的岗位。',
+          manual: '需要你手动投递的岗位：智联（校招）、投递失败的岗位。打开平台自己投，再点“我已发送”或在状态里标记已投递。',
+          history: '已有结果的岗位：已投递、已回复、已拒绝、已过滤、已跳过。',
+        }[poolView]}
+      </p>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <Button variant="secondary" size="sm" aria-expanded={poolPanel === 'filter'} onClick={() => setPoolPanel(poolPanel === 'filter' ? null : 'filter')}>
+          <SlidersHorizontal className="mr-1 h-3.5 w-3.5" />筛选
+          {activeFilterCount > 0 && <span className="ml-1 rounded-full bg-secondary px-1.5 font-black text-primary">{activeFilterCount}</span>}
+          <ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${poolPanel === 'filter' ? 'rotate-180' : ''}`} />
+        </Button>
+        <Button variant="secondary" size="sm" aria-expanded={poolPanel === 'hide'} onClick={() => setPoolPanel(poolPanel === 'hide' ? null : 'hide')}>
+          <EyeOff className="mr-1 h-3.5 w-3.5" />隐藏
+          {poolView === 'pending' && hideHandled && <span className="ml-1 rounded-full bg-secondary px-1.5 font-black text-primary">1</span>}
+          <ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${poolPanel === 'hide' ? 'rotate-180' : ''}`} />
+        </Button>
+        <span className="text-muted">筛选结果 {total} / 总数 {allTotal}</span>
+      </div>
+      {poolPanel === 'filter' && (
+        <JobFilterBar
+          filters={filters}
+          onChange={setFilters}
+          onReset={() => setFilters({ ...EMPTY_JOB_FILTERS })}
+          resultCount={total}
+          totalCount={allTotal}
+          invalidSalary={hasInvalidSalaryRange(filters)}
+          showStatus
+          statusOptions={POOL_VIEW_STATUSES[poolView]}
+          showSource
+          cityOptions={cityOptions}
+        />
+      )}
+      {poolPanel === 'hide' && (
+        <div className="mb-3 rounded-xl border border-card-border bg-surface p-3 text-xs">
+          {poolView === 'pending' ? (
+            <label className="flex cursor-pointer items-center gap-1.5 font-bold text-foreground" title="同一家公司只要有岗位已通过、已投递或已拒绝，它的其他岗位就先隐藏（这家公司已处理的岗位本身仍显示）">
+              <input type="checkbox" className="accent-primary" checked={hideHandled} onChange={event => { setHideHandled(event.target.checked); setPage(0) }} />
+              隐藏已处理公司的其他岗位
+            </label>
+          ) : <span className="text-muted">这个视图没有可隐藏的项。</span>}
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
-        {poolView === 'pending' && <label className="flex cursor-pointer items-center gap-1.5 rounded-full border border-card-border bg-card px-3 py-2 font-bold text-foreground" title="同一家公司只要有岗位已通过、已投递或已拒绝，它的其他岗位就先隐藏（这家公司已处理的岗位本身仍显示）">
-          <input type="checkbox" className="accent-primary" checked={hideHandled} onChange={event => { setHideHandled(event.target.checked); setPage(0) }} />
-          隐藏已处理公司的其他岗位
-        </label>}
         <Button variant="secondary" size="sm" disabled={!items.length} onClick={() => void toggleAllMatching()}>
           {allMatchingSelected ? '取消选择全部' : `选择全部${total ? `（${total}）` : ''}`}
         </Button>
         <span className="rounded-full bg-secondary px-3 py-2 font-bold text-primary">已选择 {selectedIds.length} 条</span>
         {selectedIds.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])}>清空选择</Button>}
-        <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>{poolView === 'manual' ? '批量删除（移入回收站）' : '移入回收站'}</Button>
-        {poolView === 'manual' && (
-          <Button size="sm" disabled={!selectedIds.length} onClick={() => void markSelectedManuallySent()}>批量标记已投递</Button>
-        )}
-        {poolView !== 'history' && <>
+        <Button variant="destructive" size="sm" disabled={!selectedIds.length} onClick={() => void softDelete(selectedIds)}>
+          <Trash2 className="mr-1 h-3.5 w-3.5" />批量移入回收站
+        </Button>
+        {poolView !== 'history' && (
           <Button size="sm" disabled={!selectedIds.length} onClick={() => void deliverSelectedJobs()}>
             <Send className="mr-1 h-4 w-4" />一键投递已选
           </Button>
-          <Button size="sm" onClick={() => void deliverAllApproved()}>
-            <Send className="mr-1 h-4 w-4" />投递全部已通过
-          </Button>
-        </>}
-        <Button variant="secondary" size="sm" disabled={!selectedIds.length} onClick={() => void markCompaniesRejected()}>
-          标记公司已拒绝
-        </Button>
+        )}
         <Button size="sm" onClick={() => void startQuickScoring()} disabled={quickScoring || !total}>
-          {quickScoring ? '启动评分中…' : '一键 AI 评分'}
+          <Sparkles className="mr-1 h-3.5 w-3.5" />{quickScoring ? '启动评分中…' : '一键 AI 评分'}
         </Button>
-        <Button variant="secondary" size="sm" onClick={() => setShowScoreDialog(true)}>评分选项</Button>
+        <DropMenu label="更多" icon={<MoreHorizontal className="mr-1 h-3.5 w-3.5" />}>
+          {poolView !== 'history' && <DropItem onClick={() => void deliverAllApproved()}>投递全部已通过</DropItem>}
+          <DropItem disabled={!selectedIds.length} onClick={() => void markCompaniesRejected()}>标记所选岗位的公司已拒绝</DropItem>
+          {poolView === 'manual' && <DropItem disabled={!selectedIds.length} onClick={() => void markSelectedManuallySent()}>批量标记已投递</DropItem>}
+          <DropItem onClick={() => setShowScoreDialog(true)}>评分选项…</DropItem>
+        </DropMenu>
         <ExportMenu onExport={exportJobs} hasSelection={selectedIds.length > 0} hasFiltered={total > 0} />
       </div>
       {notice && <div className="sticky top-2 z-30 mb-4 rounded-xl bg-secondary px-4 py-3 text-sm text-primary shadow-md">{notice}</div>}
       {(deliveryTask || waitingJobs.length > 0 || failedJobs.length > 0) && (
-        <div className="mb-4 rounded-2xl border border-card-border bg-surface p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <details className="group mb-4 rounded-2xl border border-card-border bg-surface p-4" open={deliveryTask?.status === 'running'}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-black [&::-webkit-details-marker]:hidden">
+            <span>投递队列 <span className="ml-2 text-xs font-bold text-muted">{!deliveryTask ? '未启动' : deliveryTask.status === 'running' ? '处理中' : deliveryTask.status === 'completed' ? '已完成' : deliveryTask.status}{waitingJobs.length ? ` · 待发送 ${waitingJobs.length}` : ''}{failedJobs.length ? ` · 失败 ${failedJobs.length}` : ''}</span></span>
+            <ChevronDown className="h-4 w-4 text-muted transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="text-sm font-black">投递队列</div>
+              <div className="sr-only">投递队列</div>
               <p className="mt-1 text-xs text-muted">只展示已人工确认的发送任务：BOSS、前程无忧和猎聘可进入此队列，智联需手动投递。</p>
             </div>
             <div className="flex items-center gap-2">
@@ -2459,7 +2487,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
             {deliveryTask && <div className="mt-1 text-xs text-muted">任务 ID：{deliveryTask.id}</div>}
             {String(deliveryTask?.logs?.[deliveryTask.logs.length - 1] || '').includes('发送时间窗口已截止') && <div className="mt-1 text-xs text-muted">发送只在设置的时间窗口内进行（配置里的 throttle.send_windows，默认 09:00-17:00）；窗口外点投递不会执行，明天窗口开启后再点，或在配置里调整窗口。</div>}
           </div>
-        </div>
+        </details>
       )}
       {error && <div className="mb-4 rounded-xl border border-danger-border bg-danger-soft px-4 py-3 text-sm text-danger">{error}</div>}
       <JobsTable
@@ -2493,6 +2521,39 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   )
 }
 
+function DropMenu({ label, icon, children, align = 'left' }: { label: string; icon?: ReactNode; children: ReactNode; align?: 'left' | 'right' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  return (
+    <div ref={ref} className="relative">
+      <Button variant="secondary" size="sm" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)}>
+        {icon}{label}<ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </Button>
+      {open && (
+        <div role="menu" onClick={() => setOpen(false)} className={`absolute top-full z-30 mt-1 min-w-48 rounded-xl border border-card-border bg-card p-1 shadow-lg ${align === 'right' ? 'right-0' : 'left-0'}`}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DropItem({ children, onClick, disabled = false }: { children: ReactNode; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button type="button" role="menuitem" disabled={disabled} onClick={onClick} className="block w-full whitespace-nowrap rounded-lg px-3 py-2 text-left text-xs font-bold text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-45">
+      {children}
+    </button>
+  )
+}
+
 function ExportMenu({
   onExport,
   hasSelection,
@@ -2504,18 +2565,19 @@ function ExportMenu({
 }) {
   const [format, setFormat] = useState<'xlsx' | 'csv'>('xlsx')
   return (
-    <div className="ml-auto flex flex-wrap items-center gap-2">
-      <select
-        value={format}
-        onChange={event => setFormat(event.target.value as 'xlsx' | 'csv')}
-        className="rounded-xl border border-card-border bg-card px-2 py-2 text-xs outline-none focus:border-primary"
-      >
-        <option value="xlsx">XLSX</option>
-        <option value="csv">CSV</option>
-      </select>
-      <Button variant="secondary" size="sm" disabled={!hasFiltered} onClick={() => onExport(format, 'filtered')}>导出筛选结果</Button>
-      <Button variant="secondary" size="sm" disabled={!hasSelection} onClick={() => onExport(format, 'selected')}>导出所选岗位</Button>
-      <Button variant="secondary" size="sm" onClick={() => onExport(format, 'all')}>导出全部岗位</Button>
+    <div className="ml-auto">
+      <DropMenu label="导出" icon={<Download className="mr-1 h-3.5 w-3.5" />} align="right">
+        <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-muted" onClick={event => event.stopPropagation()}>
+          格式
+          <select value={format} onChange={event => setFormat(event.target.value as 'xlsx' | 'csv')} className="rounded-lg border border-card-border bg-card px-2 py-1 text-xs outline-none focus:border-primary">
+            <option value="xlsx">XLSX</option>
+            <option value="csv">CSV</option>
+          </select>
+        </div>
+        <DropItem disabled={!hasFiltered} onClick={() => onExport(format, 'filtered')}>导出筛选结果</DropItem>
+        <DropItem disabled={!hasSelection} onClick={() => onExport(format, 'selected')}>导出所选岗位</DropItem>
+        <DropItem onClick={() => onExport(format, 'all')}>导出全部岗位</DropItem>
+      </DropMenu>
     </div>
   )
 }

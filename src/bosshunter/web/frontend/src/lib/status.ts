@@ -58,8 +58,8 @@ export const POOL_VIEW_STATUSES: Record<PoolView, string[]> = {
   waiting: ['approved', 'ready'],
   // 发送失败（需要重试或人工投递）
   failed: ['error'],
-  // 智联：只能手动投递，岗位由服务端按公司去重后列出
-  manual: ['pending', 'scored', 'ready', 'approved'],
+  // 只能手动投递的岗位（服务端按公司去重后列出）加上程序投递失败、要手动处理的岗位
+  manual: ['pending', 'scored', 'ready', 'approved', 'error'],
   // 已投递、已回复、简历已发、待手动发简历、已跟进、已拒绝、已过滤、已跳过
   history: ['sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent', 'rejected', 'filtered', 'skipped'],
 }
@@ -67,10 +67,13 @@ export const POOL_VIEW_STATUSES: Record<PoolView, string[]> = {
 // 同一个状态可能属于两个视图（ready 有无招呼语），服务端按 queue_view 区分。
 export const POOL_VIEW_QUEUE: Record<PoolView, string | null> = { pending: 'confirm', waiting: 'waiting', failed: 'failed', manual: 'manual', history: null }
 
+/** The tabs of the job pool (failed deliveries are part of the manual tab). */
+export const POOL_TABS: PoolView[] = ['pending', 'waiting', 'manual', 'history']
+
 export const POOL_VIEW_LABELS: Record<PoolView, string> = {
   pending: '待确认',
   waiting: '待投递',
   failed: '投递失败',
-  manual: '手动投递（智联）',
+  manual: '手动投递',
   history: '历史投递记录',
 }

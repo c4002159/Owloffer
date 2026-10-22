@@ -1322,12 +1322,13 @@ def api_job_search():
 	elif queue_view == "waiting":    # confirmed (or greeting ready) and waiting to be delivered, by the program or by hand
 		conditions.append("(status = 'approved' OR (status = 'ready' AND TRIM(COALESCE(greeting, '')) != ''))")
 		conditions.append(_not_manual_clause())
-	elif queue_view == "manual":     # 智联：只能手动投递；已投递过的公司和同公司重复岗位不再列出
-		conditions.append(f"{_manual_clause()} AND status IN ('pending', 'scored', 'ready', 'approved')")
+	elif queue_view == "manual":     # 只能手动投递的岗位（已和数据库去重），加上程序投递失败、要手动处理的岗位
+		manual_part = f"{_manual_clause()} AND status IN ('pending', 'scored', 'ready', 'approved')"
 		excluded = _manual_delivery_duplicates()
 		if excluded:
-			conditions.append(f"id NOT IN ({','.join('?' for _ in excluded)})")
+			manual_part += f" AND id NOT IN ({','.join('?' for _ in excluded)})"
 			params.extend(excluded)
+		conditions.append(f"(({manual_part}) OR status = 'error')")
 	elif queue_view == "failed":     # a delivery was tried and failed
 		conditions.append("status = 'error'")
 	if keyword:
