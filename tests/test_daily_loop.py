@@ -16,7 +16,8 @@ class FakeServer:
         self.confirm = [{"id": "liepin:1", "source_platform": "liepin"}, {"id": "zhilian_campus:1", "source_platform": "zhilian_campus"},
                         {"id": "zhilian:9", "source_platform": "zhilian"}]
         self.waiting = [{"id": "liepin:1", "source_platform": "liepin", "greeting": ""}]
-        self.manual = [{"id": "zhilian_campus:1", "source_platform": "zhilian_campus", "greeting": ""}]
+        self.manual = [{"id": "zhilian_campus:1", "source_platform": "zhilian_campus", "greeting": "", "status": "ready"},
+                       {"id": "zhilian_campus:2", "source_platform": "zhilian_campus", "greeting": "", "status": "pending"}]
         self.approved: list[str] = []
 
     def now(self):

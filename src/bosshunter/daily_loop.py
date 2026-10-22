@@ -27,6 +27,7 @@ POLL_SECONDS = 60
 IDLE_SECONDS = 600                              # nothing to collect (window closed, all paused): look again later
 MAX_COLLECT_MINUTES = 90
 MAX_INCIDENTS = 300
+GREETING_STATUSES = {"ready", "approved", "error"}      # the statuses the greeting API accepts (not the unscored ones)
 PLATFORM_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘"}
 
 
@@ -300,14 +301,15 @@ class DailyLoop:
             self.incident(platform, "collect", str(item.get("reason_code") or state), f"{name}采集异常（{state}）：{item.get('message') or ''}",
                           "\n".join((last.get("logs") or [])[-8:]))
 
-    def _ids(self, platform: str, view: str, *, missing_greeting: bool = False) -> list[str]:
+    def _ids(self, platform: str, view: str, *, missing_greeting: bool = False, statuses: set[str] | None = None) -> list[str]:
         ids: list[str] = []
         offset = 0
         while True:
             page = self._get(f"/api/jobs/search?queue_view={view}&limit=100&offset={offset}")
             items = page.get("items") or []
             ids += [str(i["id"]) for i in items if str(i.get("source_platform") or "boss") == platform
-                    and (not missing_greeting or not str(i.get("greeting") or "").strip())]
+                    and (not missing_greeting or not str(i.get("greeting") or "").strip())
+                    and (statuses is None or str(i.get("status") or "") in statuses)]
             if len(items) < 100:
                 break
             offset += 100
@@ -316,7 +318,7 @@ class DailyLoop:
     def _greet_for_manual(self, platform: str) -> None:
         name = PLATFORM_NAMES.get(platform, platform)
         self._set(step="greet", message=f"{name}：生成招呼语（留给你手动投递）")
-        ids = self._ids(platform, "manual", missing_greeting=True)
+        ids = self._ids(platform, "manual", missing_greeting=True, statuses=GREETING_STATUSES)
         if not ids:
             return
         try:
