@@ -47,6 +47,7 @@ from bosshunter.db import (
 )
 from bosshunter.collection.platforms.job51 import _is_relevant_to_keyword, _terms_match_title, resume_terms
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
+from bosshunter.requirement_filter import requirement_reason
 from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
 
@@ -395,7 +396,7 @@ class LiepinCollector:
                 terms = self._resume_terms_cache = resume_terms(self.config, self.safety_conn)
             if not _terms_match_title(candidate.title, terms):
                 return "职位与搜索关键词、简历关键词都不相关"
-        return ""
+        return requirement_reason(self.config, "liepin", candidate.experience, candidate.education, candidate.jd)
 
     def _salary_block_reason(self, candidate: JobCandidate) -> str | None:
         """薪资硬过滤（与 quick_score 同规则）；返回拦截原因，None 表示通过。"""

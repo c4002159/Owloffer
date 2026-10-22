@@ -774,6 +774,25 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
     }
   }
 
+  const markFailedAsManuallySent = async (ids: string[]) => {
+    if (!ids.length) return
+    if (!window.confirm(`请确认：这 ${ids.length} 个岗位你都已经在平台上手动投递完成。此操作只更新 BossHunter 本地记录，不会向平台发送任何内容。`)) return
+    try {
+      const res = await fetch('/api/jobs/manual-sent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: ids, confirmed: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '标记失败')
+      setSelected(prev => prev.filter(id => !ids.includes(id)))
+      await refresh()
+      setNotice(`已将 ${data.affected_count ?? ids.length} 个岗位标记为“已发送”。`)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '标记失败')
+    }
+  }
+
   const markSelectedCompaniesRejected = async (ids: string[]) => {
     if (!ids.length) return
     if (!window.confirm(`确认把所选 ${ids.length} 个岗位的公司标记为“已拒绝”吗？
@@ -1229,6 +1248,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               <Button size="sm" disabled={workbench.send_errors.some(job => sendingGreetingIds.has(job.id))} onClick={() => sendReadyGreetings(workbench.send_errors.map(job => job.id))}>
                 {workbench.send_errors.some(job => sendingGreetingIds.has(job.id)) ? '正在重新发送...' : `重新发送全部 ${workbench.send_errors.length} 个`}
               </Button>
+              <Button variant="secondary" size="sm" onClick={() => markFailedAsManuallySent(workbench.send_errors.map(job => job.id))}>全部我已手动投递</Button>
               <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs(workbench.send_errors.map(job => job.id))}>放弃全部</Button>
             </div>
           </div>
@@ -1248,6 +1268,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                   <Button size="sm" disabled={sendingGreetingIds.has(job.id)} onClick={() => sendReadyGreetings([job.id])}>
                     {sendingGreetingIds.has(job.id) ? '正在重新发送...' : '重新发送'}
                   </Button>
+                  <Button variant="secondary" size="sm" onClick={() => markFailedAsManuallySent([job.id])}>我已手动投递</Button>
                   <Button variant="secondary" size="sm" onClick={() => rejectSelectedJobs([job.id])}>放弃</Button>
                   <Button variant="secondary" size="sm" onClick={() => openJobDetail(job)}><Eye className="mr-2 h-4 w-4" />查看详情</Button>
                   <Button variant="secondary" size="sm" disabled={!job.url} onClick={() => window.open(job.url, '_blank', 'noopener,noreferrer')}><ExternalLink className="mr-2 h-4 w-4" />跳转岗位链接</Button>

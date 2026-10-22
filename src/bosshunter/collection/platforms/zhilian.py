@@ -18,6 +18,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse, urlunparse
 
 from bosshunter.collection.platforms import zhilian_replay as zr
+from bosshunter.requirement_filter import requirement_reason
 
 from bosshunter.ai.prefilter import freshness_filter_result, salary_filter_result
 from bosshunter.browser import (
@@ -946,7 +947,7 @@ class ZhilianCollector:
         allow_internship = bool(profile.get("allow_internship", False))
         if not allow_internship and _is_internship(candidate.title):
             return "当前设置不接受实习岗位"
-        return ""
+        return requirement_reason(self.config, "zhilian", candidate.experience, candidate.education, candidate.jd)
 
     def _relevance_reason(self, candidate: JobCandidate) -> str:
         """The search is fuzzy: a title that speaks neither of the searched words nor of the resume is not worth opening."""

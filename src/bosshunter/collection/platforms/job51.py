@@ -49,6 +49,7 @@ from bosshunter.db import (
     upsert_page_progress,
 )
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
+from bosshunter.requirement_filter import requirement_reason
 from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
 
@@ -710,7 +711,7 @@ class Job51Collector:
             return "职位与搜索关键词、简历关键词都不相关"
         if not _salary_within_range(candidate.salary, salary_min, salary_max, self.config.get("profile")):
             return "薪资不符合设置范围"
-        return ""
+        return requirement_reason(self.config, "51job", candidate.experience, candidate.education, candidate.jd)
 
     @staticmethod
     def _item_to_candidate(
