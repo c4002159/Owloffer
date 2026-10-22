@@ -118,6 +118,14 @@ def connect(ctx: click.Context) -> None:
     console.print("\n[bold green]连接检测完成[/bold green]")
 
 
+@cli.command()
+def mcp() -> None:
+    """启动 MCP 服务器（stdio），让 Claude 或 Codex 查看和控制 BossHunter（需要环境变量 BOSSHUNTER_TOKEN）"""
+    from bosshunter.mcp_server import serve
+
+    serve()
+
+
 @cli.command(name="github-sync")
 @click.option("--user", "username", default=None, help="GitHub 用户名（默认读取 profile.github_username）")
 @click.pass_context

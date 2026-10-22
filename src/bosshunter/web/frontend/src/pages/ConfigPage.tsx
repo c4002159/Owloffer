@@ -16,6 +16,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
+import { AgentAccessPanel } from '@/components/config/AgentAccessPanel'
 
 const AI_SERVICES = {
   anthropic: {
@@ -897,6 +898,11 @@ export default function ConfigPage() {
               <Input value={config.dedup?.history_file || ''} onChange={e => updateConfig('dedup.history_file', e.target.value)} />
             </Field>
           </div>
+        </SectionCard>
+
+        {/* Agent access: Claude / Codex through MCP */}
+        <SectionCard title="智能体连接（Claude / Codex）" sectionKey="agent_access" expanded={expandedSections} toggle={toggleSection}>
+          <AgentAccessPanel />
         </SectionCard>
     </div>
   )

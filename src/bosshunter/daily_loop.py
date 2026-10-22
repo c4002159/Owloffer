@@ -55,10 +55,12 @@ class DailyLoop:
         sleep: Callable[[float], None] = time.sleep,
         poll_seconds: float = POLL_SECONDS,
         idle_seconds: float = IDLE_SECONDS,
+        on_event: Callable[..., Any] | None = None,
     ):
         self.path = Path(state_path)
         self.api, self.now, self.sleep = api, now, sleep
         self.poll_seconds, self.idle_seconds = poll_seconds, idle_seconds
+        self.on_event = on_event
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -79,6 +81,13 @@ class DailyLoop:
         except OSError:
             pass
 
+    def _news(self, kind: str, message: str, **kwargs: Any) -> None:
+        if self.on_event is not None:
+            try:
+                self.on_event(kind, message, **kwargs)
+            except Exception:
+                pass
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return json.loads(json.dumps(self.state, ensure_ascii=False))
@@ -98,6 +107,7 @@ class DailyLoop:
                     item["last_seen"] = self.now().isoformat(timespec="seconds")
                     self._save()
                     return
+            self._news("incident", f"{PLATFORM_NAMES.get(platform, '全局')}：{message}", level="warning", platform=platform, data={"code": code, "step": step})
             items.append({
                 "id": uuid.uuid4().hex[:8], "time": self.now().isoformat(timespec="seconds"), "last_seen": self.now().isoformat(timespec="seconds"),
                 "platform": platform, "platform_name": PLATFORM_NAMES.get(platform, platform), "step": step, "code": code,
@@ -247,6 +257,7 @@ class DailyLoop:
                 pass
         message = "各平台都已达到投递上限，每日循环结束" if self._all_capped() else "每日循环结束"
         self._set(running=False, step="finished", message=message, platform="", summary=self.summary())
+        self._news("loop", f"{message}：{json.dumps(self.summary(), ensure_ascii=False)}", level="info")
 
     def summary(self) -> dict[str, Any]:
         with self._lock:

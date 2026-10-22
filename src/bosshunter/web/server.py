@@ -3823,7 +3823,7 @@ def _get_daily_loop():
 
 	path = DATA_DIR / "daily_loop.json"
 	if _daily_loop is None or _daily_loop.path != path:
-		_daily_loop = DailyLoop(path, _loopback_api)
+		_daily_loop = DailyLoop(path, _loopback_api, on_event=lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs))
 	return _daily_loop
 
 
@@ -3855,6 +3855,212 @@ def api_daily_loop_resolve(incident_id):
 	if not _get_daily_loop().resolve_incident(incident_id):
 		return _json_response({"error": "异常记录不存在"}, 404)
 	return _json_response(_get_daily_loop().snapshot())
+
+
+# ─── Agent access (Claude / Codex through MCP) ───────────
+
+_agent_access = None
+
+
+def _get_agent_access():
+	global _agent_access
+	from bosshunter.agent_access import AgentAccess
+
+	path = DATA_DIR / "agent_access.json"
+	if _agent_access is None or _agent_access.path != path:
+		_agent_access = AgentAccess(path)
+	return _agent_access
+
+
+def _agent_error(status: int, code: str, message: str, **extra):
+	return _json_response({"error": message, "code": code, **extra}, status)
+
+
+def _agent_gate(action: str):
+	"""Check the bearer token and what the agent may do. Returns (None, decision) or (error response, None)."""
+	from bosshunter.agent_access import AccessDenied
+
+	access = _get_agent_access()
+	header = request.headers.get("Authorization", "")
+	token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+	if not access.verify(token):
+		return _agent_error(401, "bad_token", "访问令牌无效或还没有生成（在设置的「智能体连接」里生成）"), None
+	try:
+		return None, access.authorize(action)
+	except AccessDenied as exc:
+		return _agent_error(403, exc.code, exc.message, mode=access.mode), None
+
+
+def _agent_ids_for(platform: str) -> list[str]:
+	loop = _get_daily_loop()
+	return list(dict.fromkeys(loop._ids(platform, "confirm") + loop._ids(platform, "waiting")))
+
+
+def _execute_agent_action(action: str, params: dict) -> dict:
+	"""Do what an agent asked (directly in auto mode, or after the user approved a request)."""
+	access = _get_agent_access()
+	loop = _get_daily_loop()
+	if action == "daily_loop_start":
+		if loop.running():
+			return {"ok": True, "message": "每日循环已经在运行", "loop": loop.snapshot()}
+		state = loop.start(params if isinstance(params, dict) else {})
+		access.emit("agent", "智能体启动了每日循环", level="info")
+		return {"ok": True, "loop": state}
+	if action == "daily_loop_stop":
+		access.emit("agent", "智能体停止了每日循环", level="warning")
+		return {"ok": True, "loop": loop.stop("智能体请求停止")}
+	if action == "incident_resolve":
+		done = loop.resolve_incident(str(params.get("incident_id") or ""))
+		return {"ok": done, "message": "已标记处理" if done else "异常记录不存在"}
+	if action == "deliver":
+		ids = [str(i) for i in params.get("job_ids") or []]
+		if not ids and params.get("platform"):
+			ids = _agent_ids_for(str(params["platform"]))
+		ids = ids[:max(1, min(int(params.get("limit") or 150), 300))]
+		if not ids:
+			return {"ok": False, "message": "没有可投递的岗位"}
+		result = _loopback_api("POST", "/api/workbench/deliver", {"job_ids": ids, "skip_invalid": True})
+		access.emit("agent", f"智能体批准并投递了 {len(ids)} 个岗位", level="info", data={"count": len(ids)})
+		return {"ok": True, "requested": len(ids), "task": result}
+	return {"ok": False, "message": f"未知操作 {action}"}
+
+
+def _agent_do(action: str, params: dict, source: str = "agent"):
+	from bosshunter.daily_loop import ApiError
+
+	error, decision = _agent_gate(action)
+	if error is not None:
+		return error
+	access = _get_agent_access()
+	if decision == "ask":
+		item = access.create_request(action, params, source)
+		return _json_response({"ok": False, "status": "awaiting_user", "request_id": item["id"],
+		                       "message": "需要用户确认：已在设置的「智能体连接」里创建请求，等用户同意后才会执行"}, 202)
+	try:
+		return _json_response(_execute_agent_action(action, params))
+	except ApiError as exc:
+		return _agent_error(exc.status or 500, "action_failed", str(exc))
+	except (ValueError, TypeError) as exc:
+		return _agent_error(400, "bad_request", str(exc))
+
+
+@app.route("/api/agent/control/status")
+def api_agent_control_status():
+	error, _ = _agent_gate("status")
+	if error is not None:
+		return error
+	loop = _get_daily_loop().snapshot()
+	incidents = [i for i in loop.get("incidents", []) if not i.get("resolved")]
+	try:
+		bench = _loopback_api("GET", "/api/workbench")
+	except Exception:
+		bench = {}
+	task = bench.get("task") or {}
+	return _json_response({
+		"permission_mode": _get_agent_access().mode,
+		"daily_loop": {k: loop.get(k) for k in ("running", "round", "platform", "step", "message", "started_at", "end_at", "delivery_cap", "totals")},
+		"open_incidents": incidents[-20:],
+		"task": {k: task.get(k) for k in ("mode", "label", "status")} if task else None,
+		"platform_limits": bench.get("platform_limit_details") or {},
+		"funnel_today": bench.get("funnel_today"),
+		"send_quota": bench.get("send_quota"),
+		"pending_requests": _get_agent_access().pending_requests(),
+	})
+
+
+@app.route("/api/agent/control/events")
+def api_agent_control_events():
+	error, _ = _agent_gate("events")
+	if error is not None:
+		return error
+	try:
+		since, limit = int(request.params.get("since", 0)), int(request.params.get("limit", 50))
+	except ValueError:
+		return _agent_error(400, "bad_request", "since 和 limit 必须是整数")
+	return _json_response(_get_agent_access().events_since(since, limit))
+
+
+@app.route("/api/agent/control/requests/<request_id>")
+def api_agent_control_request(request_id):
+	error, _ = _agent_gate("status")
+	if error is not None:
+		return error
+	item = _get_agent_access().get_request(request_id)
+	return _json_response(item) if item else _agent_error(404, "not_found", "请求不存在")
+
+
+@app.route("/api/agent/control/daily-loop/start", method="POST")
+def api_agent_control_loop_start():
+	return _agent_do("daily_loop_start", request.json if isinstance(request.json, dict) else {})
+
+
+@app.route("/api/agent/control/daily-loop/stop", method="POST")
+def api_agent_control_loop_stop():
+	return _agent_do("daily_loop_stop", {})
+
+
+@app.route("/api/agent/control/incidents/<incident_id>/resolve", method="POST")
+def api_agent_control_incident_resolve(incident_id):
+	return _agent_do("incident_resolve", {"incident_id": incident_id})
+
+
+@app.route("/api/agent/control/deliver", method="POST")
+def api_agent_control_deliver():
+	return _agent_do("deliver", request.json if isinstance(request.json, dict) else {})
+
+
+@app.route("/api/agent-access")
+def api_agent_access_state():
+	import sys
+
+	return _json_response({**_get_agent_access().public_state(), "connection": {
+		"python": sys.executable, "base_url": f"http://127.0.0.1:{_SERVER_PORT}", "project_dir": str(BASE_DIR),
+	}})
+
+
+@app.route("/api/agent-access/token", method="POST")
+def api_agent_access_token():
+	return _json_response({"token": _get_agent_access().generate_token()})
+
+
+@app.route("/api/agent-access/token/revoke", method="POST")
+def api_agent_access_token_revoke():
+	_get_agent_access().revoke_token()
+	return _json_response(_get_agent_access().public_state())
+
+
+@app.route("/api/agent-access/mode", method="POST")
+def api_agent_access_mode():
+	body = request.json if isinstance(request.json, dict) else {}
+	access = _get_agent_access()
+	try:
+		if "mode" in body:
+			access.set_mode(str(body["mode"]))
+		if "enabled" in body:
+			access.set_enabled(bool(body["enabled"]))
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 400)
+	return _json_response(access.public_state())
+
+
+@app.route("/api/agent-access/requests/<request_id>/<decision>", method="POST")
+def api_agent_access_decide(request_id, decision):
+	from bosshunter.daily_loop import ApiError
+
+	if decision not in {"approve", "deny"}:
+		return _json_response({"error": "decision 必须是 approve 或 deny"}, 400)
+	access = _get_agent_access()
+	try:
+		item = access.decide(request_id, decision == "approve")
+	except KeyError:
+		return _json_response({"error": "请求不存在或已处理"}, 404)
+	result = None
+	if decision == "approve":
+		try:
+			result = _execute_agent_action(item["action"], item["params"])
+		except (ApiError, ValueError, TypeError) as exc:
+			result = {"ok": False, "message": str(exc)}
+	return _json_response({"request": item, "result": result, **access.public_state()})
 
 
 # ─── Resume APIs ─────────────────────────────────────────
