@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState, type ChangeEvent, type DragEvent } fr
 import { ChevronDown, ExternalLink, Loader2, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ResumeDualPreview } from '@/components/config/ResumeDualPreview'
 import { resumeSizeLabel, shouldSyncResumePath, type ResumeInfo } from '@/lib/resumeDisplay'
 
 interface DirectionResume {
@@ -31,7 +30,8 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
   const [newDirection, setNewDirection] = useState('')
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewPath, setPreviewPath] = useState('')
+  const [previewText, setPreviewText] = useState('')
   const [error, setError] = useState('')
 
   const loadMain = useCallback(async () => {
@@ -81,7 +81,7 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
     setUploading(true)
     setError('')
     const direction = newDirection.trim()
-    const asDefault = !main && !direction                      // the first file without a direction becomes the default resume
+    const asDefault = !main                                    // the first file becomes the default resume
     try {
       const form = new FormData()
       form.append('file', file)
@@ -93,6 +93,10 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
         const { success: _success, ...info } = data
         setMain(info as ResumeInfo)
         updateConfig('profile.resume_path', data.path, { markDirty: false })
+        if (direction) {
+          await fetch('/api/resumes', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: data.path, direction }) })
+          await loadMain()
+        }
       } else {
         await loadExtras()
       }
@@ -124,10 +128,39 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
       const data = await res.json().catch(() => null)
       if (!res.ok || !data?.success) throw new Error((data && data.error) || '删除简历失败')
       setMain(null)
-      setPreviewOpen(false)
+      setPreviewPath('')
       updateConfig('profile.resume_path', '', { markDirty: false })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '删除简历失败')
+    }
+  }
+
+  const setDefault = async (resume: DirectionResume) => {
+    setError('')
+    try {
+      const res = await fetch('/api/resumes/default', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: resume.path }) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '设置默认失败')
+      updateConfig('profile.resume_path', data.path, { markDirty: false })
+      await Promise.all([loadMain(), loadExtras()])
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '设置默认失败')
+    }
+  }
+
+  const togglePreview = async (path: string) => {
+    if (previewPath === path) {
+      setPreviewPath('')
+      return
+    }
+    setPreviewPath(path)
+    setPreviewText('读取中…')
+    try {
+      const res = await fetch(`/api/resumes/content?path=${encodeURIComponent(path)}`)
+      const data = await res.json()
+      setPreviewText(res.ok ? data.content || '（空）' : data.error || '读取失败')
+    } catch {
+      setPreviewText('网络错误，无法读取')
     }
   }
 
@@ -142,7 +175,8 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || '保存方向失败')
-      setExtras(prev => prev.map(item => (item.path === resume.path ? { ...item, direction: direction.trim() } : item)))
+      if (main && resume.path === main.path) setMain({ ...main, direction: direction.trim() } as ResumeInfo & { direction?: string })
+      else setExtras(prev => prev.map(item => (item.path === resume.path ? { ...item, direction: direction.trim() } : item)))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存方向失败')
     }
@@ -160,6 +194,11 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
     }
   }
 
+  const mainDirection = (main as (ResumeInfo & { direction?: string }) | null)?.direction ?? ''
+  const rows: Array<DirectionResume & { isDefault: boolean }> = [
+    ...(main ? [{ path: main.path, filename: main.filename, size_label: resumeSizeLabel(main), uploaded_at: main.uploaded_at, direction: mainDirection, original_preview_url: main.original_preview_url, isDefault: true }] : []),
+    ...extras.map(item => ({ ...item, isDefault: false })),
+  ]
   const rowClass = 'flex flex-wrap items-center gap-3 rounded-md border border-card-border bg-surface p-3'
   return (
     <div
@@ -172,69 +211,51 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
       <div>
         <h3 className="text-sm font-black text-foreground">简历文件</h3>
         <p className="mt-1 text-xs leading-5 text-muted">
-          可以放很多份。给文件填上「适用方向」后，岗位的方向和它一致（或岗位标题含该方向词）时，评分、招呼语和定制简历就用这一份；没有匹配的方向时用标为「默认」的那份。
+          每份简历都有自己的「适用方向」：岗位的方向和它一致（或岗位标题含该方向词）时，评分、招呼语和定制简历就用这一份。没有任何方向匹配时，用标为「默认」的那份，默认可以随时更换。
         </p>
       </div>
       <datalist id="resume-direction-options">{directions.map(name => <option key={name} value={name} />)}</datalist>
 
       <div className="space-y-2">
-        {main && (
-          <div>
+        {rows.map(resume => (
+          <div key={resume.path}>
             <div className={rowClass}>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-bold text-foreground">{main.filename}</span>
-                  <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-black text-primary">默认</span>
-                </div>
+                <div className="truncate text-sm font-bold text-foreground">{resume.filename}</div>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted">
-                  <span>{resumeSizeLabel(main)}</span>
-                  {main.uploaded_at && <span>上传于 {main.uploaded_at}</span>}
+                  {resume.size_label && <span>{resume.size_label}</span>}
+                  {resume.uploaded_at && <span>上传于 {resume.uploaded_at}</span>}
                 </div>
               </div>
-              <span className="w-56 text-xs text-muted">没有匹配方向时使用</span>
-              {main.original_preview_url && (
-                <a href={main.original_preview_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
+              <Input
+                list="resume-direction-options"
+                defaultValue={resume.direction}
+                placeholder="适用方向，如：Agent / AI应用"
+                aria-label={`${resume.filename} 的适用方向`}
+                className="w-56"
+                onBlur={event => void saveDirection(resume, event.target.value)}
+              />
+              {resume.isDefault ? (
+                <span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-black text-primary" title="没有任何方向匹配时使用这一份">默认</span>
+              ) : (
+                <button type="button" onClick={() => void setDefault(resume)} className="rounded-full border border-card-border px-2.5 py-1 text-[11px] font-bold text-muted hover:border-primary/40 hover:text-primary" title="没有任何方向匹配时用这一份">设为默认</button>
+              )}
+              {resume.original_preview_url && (
+                <a href={resume.original_preview_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
                   原 PDF<ExternalLink className="h-3 w-3" />
                 </a>
               )}
-              <button type="button" aria-expanded={previewOpen} onClick={() => setPreviewOpen(open => !open)} className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
-                预览<ChevronDown className={`h-3 w-3 transition-transform ${previewOpen ? 'rotate-180' : ''}`} />
+              <button type="button" aria-expanded={previewPath === resume.path} onClick={() => void togglePreview(resume.path)} className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
+                预览<ChevronDown className={`h-3 w-3 transition-transform ${previewPath === resume.path ? 'rotate-180' : ''}`} />
               </button>
-              <Button type="button" variant="ghost" size="icon" onClick={() => void removeMain()} aria-label="删除简历">
+              <Button type="button" variant="ghost" size="icon" onClick={() => void (resume.isDefault ? removeMain() : removeExtra(resume))} aria-label={`删除 ${resume.filename}`}>
                 <Trash2 className="h-4 w-4 text-danger" />
               </Button>
             </div>
-            {previewOpen && <ResumeDualPreview key={`${main.path}:${main.cache_buster || ''}`} info={main} />}
-          </div>
-        )}
-        {extras.map(resume => (
-          <div key={resume.path} className={rowClass}>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-bold text-foreground">{resume.filename}</div>
-              <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted">
-                {resume.size_label && <span>{resume.size_label}</span>}
-                {resume.uploaded_at && <span>上传于 {resume.uploaded_at}</span>}
-              </div>
-            </div>
-            <Input
-              list="resume-direction-options"
-              defaultValue={resume.direction}
-              placeholder="适用方向，如：Agent / AI应用"
-              aria-label={`${resume.filename} 的适用方向`}
-              className="w-56"
-              onBlur={event => void saveDirection(resume, event.target.value)}
-            />
-            {resume.original_preview_url && (
-              <a href={resume.original_preview_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
-                原 PDF<ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-            <Button type="button" variant="ghost" size="icon" onClick={() => void removeExtra(resume)} aria-label="删除方向简历">
-              <Trash2 className="h-4 w-4 text-danger" />
-            </Button>
+            {previewPath === resume.path && <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-card-border bg-card p-3 text-xs leading-5 text-muted">{previewText}</pre>}
           </div>
         ))}
-        {!main && !extras.length && <p className="rounded-md border border-dashed border-card-border px-3 py-6 text-center text-xs text-muted">还没有简历：点下面的「添加简历文件」，或把文件拖到这里（.md、.docx、.pdf）。</p>}
+        {!rows.length && <p className="rounded-md border border-dashed border-card-border px-3 py-6 text-center text-xs text-muted">还没有简历：点下面的「添加简历文件」，或把文件拖到这里（.md、.docx、.pdf）。</p>}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -242,7 +263,7 @@ export function ResumeLibrary({ currentResumePath, updateConfig }: ResumeLibrary
           list="resume-direction-options"
           value={newDirection}
           onChange={event => setNewDirection(event.target.value)}
-          placeholder={main ? '新文件的适用方向（可先留空，之后再改）' : '适用方向（留空则作为默认简历）'}
+          placeholder={main ? '新文件的适用方向（可先留空，之后再改）' : '适用方向（可留空）'}
           aria-label="新简历的适用方向"
           className="w-72"
         />

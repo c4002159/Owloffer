@@ -1,9 +1,10 @@
 """Several resumes: a default one plus direction-specific ones chosen per job.
 
 ``profile.resume_path`` stays the default resume (every existing code path keeps
-working). ``profile.resumes`` lists extra resumes, each with a free-text
-``direction``. A job uses the extra resume whose direction matches the job's
-role category, otherwise the default one.
+working); its own direction, if any, is ``profile.resume_direction``.
+``profile.resumes`` lists the other resumes, each with a free-text ``direction``.
+A job uses the resume whose direction matches the job's role category, otherwise
+the default one: every resume is the same kind of thing, only one is the fallback.
 """
 
 from pathlib import Path
@@ -34,7 +35,8 @@ def resume_path_for_job(config: dict, job: dict | None, plan: dict | None = None
     if not category:
         category = direction_for_keyword(str(job.get("source_keyword") or ""), plan)
     title = str(job.get("title") or "").lower()
-    for entry in extra_resumes(config):
+    candidates = extra_resumes(config) + [{"path": default, "direction": str((config.get("profile") or {}).get("resume_direction") or "").strip()}]
+    for entry in candidates:
         direction = entry["direction"]
         if not direction or not Path(entry["path"]).exists():
             continue

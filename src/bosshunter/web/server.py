@@ -4085,6 +4085,7 @@ def api_resume_get():
 			# Point AI/config at Markdown after PDF-only or legacy PDF paths.
 			config.setdefault("profile", {})["resume_path"] = canonical
 			_write_config(config)
+		info["direction"] = str((config.get("profile") or {}).get("resume_direction") or "")
 		return _json_response(info)
 	except ResumeUploadError as e:
 		return _json_response({"error": str(e)}, 400)
@@ -4192,6 +4193,17 @@ def api_resume_delete():
 
 # ─── Direction resumes (several resumes, picked per job) ───
 
+def _is_default_resume(config: dict, raw_path: str) -> bool:
+	"""Whether ``raw_path`` is the configured default resume."""
+	default = str((config.get("profile") or {}).get("resume_path") or "").strip()
+	if not default or not raw_path.strip():
+		return False
+	try:
+		return resolve_resume_filesystem_path(raw_path, BASE_DIR) == resolve_resume_filesystem_path(default, BASE_DIR)
+	except (OSError, ValueError):
+		return False
+
+
 def _extra_resume_entry(config: dict, raw_path: str):
 	"""The configured extra-resume entry whose path matches ``raw_path`` (security: only configured files)."""
 	from bosshunter.resumes import extra_resumes
@@ -4289,6 +4301,10 @@ def api_resumes_patch():
 	try:
 		body = request.json or {}
 		config = load_config(CONFIG_PATH)
+		if _is_default_resume(config, str(body.get("path") or "")):
+			config.setdefault("profile", {})["resume_direction"] = str(body.get("direction") or "").strip()[:60]
+			_write_config(config)
+			return _json_response({"success": True})
 		entry = _extra_resume_entry(config, str(body.get("path") or ""))
 		if entry is None:
 			return _json_response({"error": "未找到这份方向简历"}, 404)
@@ -4300,6 +4316,46 @@ def api_resumes_patch():
 		]
 		_write_config(config)
 		return _json_response({"success": True})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/resumes/default", method="POST")
+def api_resumes_set_default():
+	"""Make a listed resume the default (fallback) one; the old default takes its place in the list."""
+	try:
+		body = request.json or {}
+		config = load_config(CONFIG_PATH)
+		entry = _extra_resume_entry(config, str(body.get("path") or ""))
+		if entry is None:
+			return _json_response({"error": "未找到这份简历"}, 404)
+		profile = config.setdefault("profile", {})
+		old_path = str(profile.get("resume_path") or "").strip()
+		old_direction = str(profile.get("resume_direction") or "").strip()
+		others = [e for e in profile.get("resumes") or [] if isinstance(e, dict) and e.get("path") != entry["path"]]
+		if old_path and not is_default_resume_placeholder(old_path):
+			others.append({"path": old_path, "direction": old_direction})
+		profile["resumes"] = others
+		profile["resume_path"] = entry["path"]
+		profile["resume_direction"] = entry["direction"]
+		_write_config(config)
+		return _json_response({"success": True, "path": entry["path"]})
+	except Exception as e:
+		return _json_response({"error": str(e)}, 500)
+
+
+@app.route("/api/resumes/content")
+def api_resumes_content():
+	"""The text of the default resume or of a listed one (for the preview)."""
+	try:
+		config = load_config(CONFIG_PATH)
+		raw_path = str(request.query.get("path") or "")
+		if not _is_default_resume(config, raw_path) and _extra_resume_entry(config, raw_path) is None:
+			return _json_response({"error": "未找到这份简历"}, 404)
+		info = load_resume_info(resolve_resume_filesystem_path(raw_path, BASE_DIR))
+		if info is None:
+			return _json_response({"error": "简历文件无法读取"}, 404)
+		return _json_response({"content": info.get("content") or "", "filename": info.get("filename")})
 	except Exception as e:
 		return _json_response({"error": str(e)}, 500)
 
