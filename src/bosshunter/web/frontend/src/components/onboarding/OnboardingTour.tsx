@@ -63,7 +63,10 @@ export function OnboardingTour() {
     const locate = () => {
       if (location.pathname !== step.route) return
       target = document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`)
-      if (!target) return
+      if (!target) {
+        window.dispatchEvent(new CustomEvent('offerowl-reveal', { detail: step.target }))
+        return
+      }
       lookupObserver?.disconnect()
       if (step.scroll !== false) target.scrollIntoView({ block: 'center', behavior: 'auto' })
       measure()
@@ -117,13 +120,13 @@ export function OnboardingTour() {
     <svg aria-hidden="true" className="pointer-events-none fixed inset-0 z-50 h-full w-full" viewBox={`0 0 ${viewport.width} ${viewport.height}`} preserveAspectRatio="none">
       <path d={`M0 0H${viewport.width}V${viewport.height}H0z ${hole}`} fill="rgba(0, 0, 0, 0.68)" fillRule="evenodd" />
     </svg>
-    {highlight && <div aria-hidden="true" className="pointer-events-none fixed z-[51] rounded-xl border-2 border-primary shadow-[0_0_0_4px_rgba(251,101,17,0.22)]" style={{ left: highlight.x, top: highlight.y, width: highlight.width, height: highlight.height }} />}
-    <div role="dialog" aria-label="交互引导" className="fixed z-[52] rounded-2xl border border-primary/40 bg-card p-4 text-foreground shadow-2xl" style={{ top: tooltipTop, left: tooltipLeft, width: tooltipWidth }}>
+    {highlight && <div aria-hidden="true" className="pointer-events-none fixed z-[51] rounded-lg border-2 border-primary shadow-[0_0_0_4px_rgba(251,101,17,0.22)]" style={{ left: highlight.x, top: highlight.y, width: highlight.width, height: highlight.height }} />}
+    <div role="dialog" aria-label="交互引导" className="fixed z-[52] rounded-xl border border-primary/40 bg-card p-4 text-foreground shadow-2xl" style={{ top: tooltipTop, left: tooltipLeft, width: tooltipWidth }}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-[11px] font-bold text-primary">开始使用 · {index + 1}/{steps.length}</span>
         <button type="button" onClick={() => setIndex(null)} aria-label="退出引导" className="rounded p-1 text-muted hover:bg-surface hover:text-foreground"><X className="h-4 w-4" /></button>
       </div>
-      <h2 className="mt-1 text-base font-black">{step.title}</h2>
+      <h2 className="mt-1 text-base font-semibold">{step.title}</h2>
       <p className="mt-2 text-sm leading-6 text-muted">{step.body}</p>
       {!highlight && <p className="mt-2 text-xs text-warning">当前步骤不在此页。<button type="button" className="font-bold underline" onClick={() => navigate(step.route)}>前往当前步骤</button></p>}
       <div className="mt-4 flex items-center justify-between border-t border-card-border pt-3">

@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { BriefcaseBusiness, Github, LayoutDashboard, Radar, Settings } from 'lucide-react'
+import { BriefcaseBusiness, LayoutDashboard, Radar, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 const navItems = [
@@ -8,8 +8,6 @@ const navItems = [
   { to: '/monitor', icon: Radar, label: '监测执行' },
   { to: '/config', icon: Settings, label: '配置' },
 ]
-
-const GITHUB_URL = 'https://github.com/powerycy/BossHunter'
 
 interface SidebarProps {
   pendingReplies?: number
@@ -43,12 +41,10 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
     <aside className="flex w-16 shrink-0 flex-col border-r border-card-border bg-card md:w-60">
       <div className="flex h-16 shrink-0 items-center justify-center border-b border-card-border md:justify-start md:px-5">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/20">
-            <span className="font-black text-sm">BH</span>
-          </div>
+          <img src="/offerowl-128.png" alt="OfferOwl" width={40} height={40} className="h-10 w-10 shrink-0 rounded-full" />
           <div className="hidden md:block">
-            <div className="font-black text-sm tracking-tight text-foreground">BossHunter</div>
-            <div className="text-[11px] text-muted">v2.4.0 · 本地控制台</div>
+            <div className="font-semibold text-base tracking-tight text-foreground">OfferOwl</div>
+            <div className="text-[11px] text-muted">求职助手 · 本地</div>
           </div>
         </div>
       </div>
@@ -60,9 +56,9 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
             to={item.to}
             data-tour={item.to === '/config' ? 'nav-config' : item.to === '/' ? 'nav-workbench' : undefined}
             className={({ isActive }) =>
-              `relative flex items-center justify-center gap-3 rounded-xl px-1 py-3 text-[10px] transition-colors md:justify-between md:px-3 md:text-sm ${
+              `relative flex items-center justify-center gap-3 rounded-lg px-1 py-3 text-[10px] transition-colors md:justify-between md:px-3 md:text-sm ${
                 isActive
-                  ? 'bg-secondary text-primary font-black'
+                  ? 'bg-secondary text-primary font-semibold'
                   : 'text-muted hover:text-foreground hover:bg-surface'
               }`
             }
@@ -78,22 +74,6 @@ export function Sidebar({ pendingReplies: pendingRepliesProp }: SidebarProps) {
         ))}
       </nav>
 
-      <div className="space-y-3 border-t border-card-border px-2 py-4 md:px-4">
-        <a
-          href={GITHUB_URL}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="BossHunter GitHub"
-          className="relative flex items-center justify-center rounded-xl border border-card-border bg-surface px-3 py-3 text-xs font-black text-foreground transition-colors hover:border-primary/60 hover:text-primary md:rounded-2xl"
-        >
-          <Github className="h-4 w-4 shrink-0 md:absolute md:left-3" />
-          <span className="mx-auto hidden items-center justify-center gap-2 md:flex">
-            <span className="text-xl leading-none text-star">★</span>
-            BossHunter
-          </span>
-        </a>
-        <p className="hidden text-center text-[11px] leading-5 text-muted md:block">❤️  欢迎点 Star 支持维护  ❤️</p>
-      </div>
     </aside>
   )
 }

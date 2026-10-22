@@ -75,7 +75,7 @@ export function PlatformLimitNotice({ details }: { details: Record<string, Platf
   }
 
   return (
-    <div role="alert" className="space-y-1.5 rounded-xl border border-warning bg-warning-soft px-4 py-3 text-sm text-warning-strong">
+    <div role="alert" className="space-y-1.5 rounded-lg border border-warning bg-warning-soft px-4 py-3 text-sm text-warning-strong">
       {rows.map(([platform, detail]) => {
         const { kind, text } = describe(detail.reason)
         const at = clock(detail.since)
@@ -83,7 +83,7 @@ export function PlatformLimitNotice({ details }: { details: Record<string, Platf
         return (
           <div key={platform} className="flex items-start justify-between gap-3">
             <div>
-              <span className="font-black">{PLATFORM_LABELS[platform] || platform}</span>
+              <span className="font-semibold">{PLATFORM_LABELS[platform] || platform}</span>
               <span className="font-bold">{at ? ` · ${at} ${kind}` : ` · ${kind}`}</span>
               <span>：{text}</span>
               <span className="ml-1 text-xs">

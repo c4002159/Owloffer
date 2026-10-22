@@ -39,7 +39,7 @@ function TaskList({ tasks }: { tasks: TaskSummary[] }) {
   const ahead = shown.filter(task => task.status === 'queued')
   return (
     <div className="mb-3 space-y-1.5 border-b border-card-border pb-3">
-      <div className="text-[11px] font-black text-muted">任务</div>
+      <div className="text-[11px] font-semibold text-muted">任务</div>
       {shown.map(task => {
         const state = TASK_STATUS[task.status] ?? { label: task.status, className: 'bg-card text-muted' }
         const position = task.status === 'queued' ? ahead.indexOf(task) + 1 : 0
@@ -47,7 +47,7 @@ function TaskList({ tasks }: { tasks: TaskSummary[] }) {
         return (
           <div key={task.id} className="space-y-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${state.className}`}>{task.status === 'queued' ? `${state.label} ${position} 号` : state.label}</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${state.className}`}>{task.status === 'queued' ? `${state.label} ${position} 号` : state.label}</span>
               <span className="text-xs font-bold text-foreground">{task.label}</span>
               <span className="min-w-0 flex-1 truncate text-[11px] text-muted">{task.error || task.stop_reason || task.last_log}</span>
               <time className="shrink-0 text-[11px] text-muted" dateTime={task.updated_at}>{task.updated_at.slice(5, 16).replace('T', ' ')}</time>
@@ -93,7 +93,7 @@ export function RecentActivity({ data, tasks = [] }: RecentActivityProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="font-black text-foreground">最近活动</CardTitle>
+          <CardTitle className="font-semibold text-foreground">最近活动</CardTitle>
         </CardHeader>
         <CardContent>
           <TaskList tasks={tasks} />
@@ -106,7 +106,7 @@ export function RecentActivity({ data, tasks = [] }: RecentActivityProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="font-black text-foreground">最近活动</CardTitle>
+        <CardTitle className="font-semibold text-foreground">最近活动</CardTitle>
       </CardHeader>
       <CardContent className="p-4 pt-0">
         <TaskList tasks={tasks} />

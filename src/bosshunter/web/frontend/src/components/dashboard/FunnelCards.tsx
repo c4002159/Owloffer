@@ -28,7 +28,7 @@ export function FunnelCards({ data }: FunnelCardsProps) {
               <CardTitle className="text-xs text-muted font-bold">{step.key}</CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
-              <div className={`text-2xl font-black ${step.color}`}>{count}</div>
+              <div className={`text-2xl font-semibold ${step.color}`}>{count}</div>
               {rate && <p className="text-xs text-muted mt-1">转化率 {rate}</p>}
             </CardContent>
           </Card>

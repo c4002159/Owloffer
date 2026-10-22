@@ -58,10 +58,10 @@ export function BlockedCompaniesDialog({ blocked, onChange, onClose }: BlockedCo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="屏蔽公司管理">
-      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-card-border bg-card p-5 shadow-xl">
+      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-card-border bg-card p-5 shadow-xl">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-base font-black text-foreground">屏蔽公司管理</h3>
+            <h3 className="text-base font-semibold text-foreground">屏蔽公司管理</h3>
             <p className="mt-1 text-xs text-muted">加入后不再采集、评分，也不会再进入审查列表。修改后请回到页面点“保存”。</p>
           </div>
           <button type="button" aria-label="关闭" onClick={onClose} className="text-muted hover:text-foreground"><X className="h-4 w-4" /></button>

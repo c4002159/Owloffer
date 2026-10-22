@@ -33,7 +33,7 @@ export function TrendChart({ data }: TrendChartProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="font-black text-foreground">7 日趋势</CardTitle>
+        <CardTitle className="font-semibold text-foreground">7 日趋势</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="h-[200px]">

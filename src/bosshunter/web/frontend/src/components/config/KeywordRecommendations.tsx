@@ -70,7 +70,7 @@ export function KeywordRecommendations({ keywords, onChange, internKeywords = []
   }
 
   return (
-    <div className="mb-3 rounded-xl border border-card-border bg-card p-3">
+    <div className="mb-3 rounded-lg border border-card-border bg-card p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs font-bold text-foreground"><Sparkles className="h-3.5 w-3.5 text-primary" />AI 推荐关键词</div>
         <Button size="sm" variant="secondary" onClick={() => void generate()} disabled={loading}>

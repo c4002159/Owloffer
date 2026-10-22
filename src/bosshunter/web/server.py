@@ -102,6 +102,7 @@ from bosshunter.scoring_run_store import (
 )
 from bosshunter.scoring_selection import preview_scoring, select_scoring_jobs, validate_options
 from bosshunter.web.greeting_activity import GreetingActivityRegistry
+from bosshunter.web.system_info import make_backup, recent_task_logs, system_info
 from bosshunter.web.preflight import check_ai_connection, collect_preflight_checks, error_messages
 from bosshunter.web.resume_info import (
 	build_resume_info_payload,
@@ -3102,6 +3103,29 @@ def api_config_download():
 		response.headers["Content-Disposition"] = "attachment; filename=config.yaml"
 		return _config_download_payload(load_config(CONFIG_PATH))
 	abort(404, "config.yaml not found")
+
+
+@app.route("/api/system/info")
+def api_system_info():
+	return _json_response(system_info(BASE_DIR, DATA_DIR, CONFIG_PATH, __version__))
+
+
+@app.route("/api/system/backup")
+def api_system_backup():
+	try:
+		backup = make_backup(DATA_DIR / "bosshunter.db")
+	except FileNotFoundError as exc:
+		return _json_response({"error": str(exc)}, 404)
+	try:
+		return static_file(backup.name, root=str(backup.parent), download=backup.name, mimetype="application/octet-stream")
+	finally:
+		# static_file reads lazily; the temp dir is tiny and lives in the OS temp area.
+		pass
+
+
+@app.route("/api/system/logs")
+def api_system_logs():
+	return _json_response({"tasks": recent_task_logs(task_runner.status())})
 
 
 # ─── Local Agent API ───────────────────────────────────────

@@ -12,8 +12,13 @@ import { BlockedCompaniesDialog } from '@/components/config/BlockedCompaniesDial
 import { KeywordRecommendations } from '@/components/config/KeywordRecommendations'
 import { KeywordPerformance } from '@/components/config/KeywordPerformance'
 import { SendWindowsInput, sendWindowsError } from '@/components/config/SendWindowsInput'
+import { AiAdvancedFields, AutomationFields, BrowserFields, FreshnessFields, SafetyExtraFields, ScoringExtraFields } from '@/components/config/ExtraSettings'
+import { CONFIG_GROUPS, ConfigViewContext, RESTART_SECTIONS, groupOfSection, useConfigView, useSettingsSearch, type GroupKey } from '@/components/config/ConfigView'
+import { SystemPanel } from '@/components/config/SystemPanel'
+import { diffConfig } from '@/lib/configDiff'
+import { ApplyBadge } from '@/components/config/ExtraSettings'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2, Search } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 
@@ -60,7 +65,7 @@ const BOSS_FILTER_OPTIONS = {
 } as const
 
 export default function ConfigPage() {
-  const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
+  const { config, originalConfig, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
   const windowError = config ? sendWindowsError(config.throttle?.send_windows ?? ['09:00-16:00']) : null
   const requestedSection = new URLSearchParams(window.location.search).get('section')
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => ({
@@ -68,6 +73,26 @@ export default function ConfigPage() {
     search: true,
     ...(requestedSection ? { [requestedSection]: true } : {}),
   }))
+  const [group, setGroup] = useState<GroupKey>(() => (requestedSection ? groupOfSection(requestedSection) : 'job'))
+  const [query, setQuery] = useState('')
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const targetGroup: Record<string, GroupKey> = {
+      'resume-upload': 'job', 'search-keywords': 'collect', 'search-city': 'collect', 'ai-section': 'system', 'ai-fields': 'system',
+    }
+    const onReveal = (event: Event) => {
+      const next = targetGroup[String((event as CustomEvent).detail)]
+      if (next) { setQuery(''); setGroup(next) }
+    }
+    window.addEventListener('offerowl-reveal', onReveal)
+    return () => window.removeEventListener('offerowl-reveal', onReveal)
+  }, [])
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [riskAck, setRiskAck] = useState(false)
+  const changes = previewOpen ? diffConfig(originalConfig, config) : []
+  const hasRisky = changes.some(c => c.risky)
+  const hasRestart = changes.some(c => c.restart)
+  useSettingsSearch(rootRef, query, [config, expandedSections, group])
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [modelList, setModelList] = useState<{ loading: boolean; models: string[]; message?: string; error?: boolean }>({ loading: false, models: [] })
   const modelRequest = useRef<AbortController | null>(null)
@@ -159,7 +184,7 @@ export default function ConfigPage() {
         message: check ? `${check.message}：${check.detail}` : (data.messages?.[0] || 'AI 接口未返回检测结果'),
       })
     } catch {
-      setAiTest({ testing: false, ok: false, message: '无法连接本地检测接口，请确认 BossHunter 后端正在运行。' })
+      setAiTest({ testing: false, ok: false, message: '无法连接本地检测接口，请确认 OfferOwl 后端正在运行。' })
     }
   }
 
@@ -269,8 +294,8 @@ export default function ConfigPage() {
   if (error || !config) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="max-w-md rounded-2xl border border-card-border bg-surface p-6 text-center">
-          <div className="text-sm font-black text-foreground">配置加载失败</div>
+        <div className="max-w-md rounded-xl border border-card-border bg-surface p-6 text-center">
+          <div className="text-sm font-semibold text-foreground">配置加载失败</div>
           <p className="mt-2 text-xs leading-6 text-muted">
             请确认后端服务已启动：在项目根目录运行 bosshunter web，或启动 127.0.0.1:8686 后刷新页面。
           </p>
@@ -294,7 +319,8 @@ export default function ConfigPage() {
     .find(platform => config.platforms?.[platform]?.enabled ?? platform === 'boss')
 
   return (
-    <div className="h-full overflow-y-auto space-y-4 pr-4">
+    <ConfigViewContext.Provider value={{ group, query }}>
+    <div ref={rootRef} className="h-full overflow-y-auto space-y-4 pr-4">
         {/* Actions bar */}
         <div className="flex items-center justify-between sticky top-0 bg-background z-10 py-2">
           <div className="flex items-center gap-2">
@@ -307,11 +333,59 @@ export default function ConfigPage() {
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={resetConfig}><RotateCcw className="w-3 h-3 mr-1" />重置</Button>
-            <Button data-tour="config-save" size="sm" onClick={saveConfig} disabled={saving || !dirty || !!windowError}><Save className="w-3 h-3 mr-1" />{saving ? '保存中...' : '保存'}</Button>
+            <Button data-tour="config-save" size="sm" onClick={() => { setRiskAck(false); setPreviewOpen(true) }} disabled={saving || !dirty || !!windowError}><Save className="w-3 h-3 mr-1" />{saving ? '保存中...' : '保存'}</Button>
           </div>
         </div>
 
+        {previewOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="确认保存">
+            <div className="max-h-[80vh] w-full max-w-xl overflow-y-auto rounded-lg border border-card-border bg-background p-5 shadow-xl">
+              <h3 className="text-sm font-semibold text-foreground">确认保存 {changes.length} 项改动</h3>
+              <div className="mt-3 divide-y divide-card-border rounded-md border border-card-border">
+                {changes.length === 0 && <p className="p-3 text-xs text-muted">没有检测到与已保存配置的差异。</p>}
+                {changes.map(c => (
+                  <div key={c.path} className={`p-3 text-xs ${c.risky ? 'bg-danger-soft' : ''}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{c.label}</span>
+                      {c.risky && <span className="rounded bg-danger-solid px-1.5 py-0.5 text-[10px] text-danger-solid-foreground">高风险</span>}
+                      {c.restart && <ApplyBadge kind="restart" />}
+                    </div>
+                    <div className="mt-1 text-muted break-all"><span className="line-through">{c.before}</span> → <span className="text-foreground">{c.after}</span></div>
+                    {c.risky && <p className="mt-1 text-danger-strong">{c.risky}</p>}
+                  </div>
+                ))}
+              </div>
+              {hasRestart && <p className="mt-3 text-xs text-warning-strong">其中包含需要重启服务才生效的设置。</p>}
+              {hasRisky && (
+                <label className="mt-3 flex items-center gap-2 text-xs text-foreground">
+                  <input type="checkbox" checked={riskAck} onChange={e => setRiskAck(e.target.checked)} />
+                  我已了解上述高风险改动的影响
+                </label>
+              )}
+              <div className="mt-4 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setPreviewOpen(false)}>返回修改</Button>
+                <Button size="sm" disabled={saving || (hasRisky && !riskAck)} onClick={async () => { await saveConfig(); setPreviewOpen(false) }}>确认保存</Button>
+              </div>
+            </div>
+          </div>
+        )}
         {windowError && <p className="text-xs text-danger">发送时间窗口有误，请展开「反监测设置」修正后保存：{windowError}</p>}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1 rounded-lg border border-card-border bg-surface p-1">
+            {CONFIG_GROUPS.map(g => (
+              <button
+                key={g.key}
+                onClick={() => { setGroup(g.key); setQuery('') }}
+                className={`rounded-md px-3 py-1 text-xs transition-colors ${!query && group === g.key ? 'bg-primary text-primary-foreground' : 'text-muted hover:text-foreground'}`}
+              >{g.label}</button>
+            ))}
+          </div>
+          <div className="relative ml-auto w-56">
+            <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
+            <Input aria-label="搜索设置项" className="pl-7" placeholder="搜索设置项…" value={query} onChange={e => setQuery(e.target.value)} />
+          </div>
+        </div>
 
         {/* Profile Section */}
         <SectionCard title="个人信息" sectionKey="profile" expanded={expandedSections} toggle={toggleSection}>
@@ -398,7 +472,7 @@ export default function ConfigPage() {
               />
               <p className="mt-1 text-xs text-muted">按岗位薪资区间下限判断；下限超过最高薪资 × 放宽倍数时会在 AI 评分前跳过。</p>
             </Field>
-            <div className="flex items-center justify-between rounded-xl border border-card-border bg-surface px-3 py-2">
+            <div className="flex items-center justify-between rounded-lg border border-card-border bg-surface px-3 py-2">
               <div>
                 <label className="text-xs text-foreground">过滤面议/无法解析薪资</label>
                 <p className="mt-1 text-xs text-muted">{config.profile?.allow_internship ? '已接受实习，自动关闭此过滤，避免日薪岗位被误排除。' : '关闭后这类岗位会保留给 AI 综合判断。'}</p>
@@ -439,8 +513,8 @@ export default function ConfigPage() {
         {/* Search Section */}
         <SectionCard title="搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
-            <p className="rounded-xl border border-card-border bg-surface px-3 py-2 text-xs leading-5 text-muted">
-              前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘没有投简历入口或没有合适简历时自动降级为发定制招呼语，投递成功后再追发招呼语由 automation.external_greeting_send 控制（默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。BossHunter 只在 BOSS 上监听回复。
+            <p className="rounded-lg border border-card-border bg-surface px-3 py-2 text-xs leading-5 text-muted">
+              前程无忧和猎聘支持一键投递（只有页面确认投递成功才记为已发送）；猎聘没有投简历入口或没有合适简历时自动降级为发定制招呼语，投递成功后再追发招呼语由 automation.external_greeting_send 控制（默认关闭），前程无忧的 HR 走微信沟通，招呼语只生成供你复制。智联只自动采集、评分和生成招呼语，投递后请手动标记“已发送”。OfferOwl 只在 BOSS 上监听回复。
             </p>
             {(['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[]).map(platform => {
               const search = platformSearch(platform)
@@ -453,9 +527,9 @@ export default function ConfigPage() {
               const cityInput = cities.join(', ')
               const bossFilters = search.filters && typeof search.filters === 'object' ? search.filters : {}
               return (
-                <div key={platform} data-tour={!guidePlatform && platform === 'boss' ? 'search-city' : undefined} className={`rounded-2xl border p-4 ${enabled ? 'border-primary/30 bg-surface' : 'border-card-border bg-card opacity-70'}`}>
+                <div key={platform} data-tour={!guidePlatform && platform === 'boss' ? 'search-city' : undefined} className={`rounded-xl border p-4 ${enabled ? 'border-primary/30 bg-surface' : 'border-card-border bg-card opacity-70'}`}>
                   <div data-tour={!guidePlatform && platform === 'boss' ? 'search-keywords' : undefined} className="flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-2 text-sm font-black text-foreground">
+                    <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <input type="checkbox" checked={enabled} onChange={event => setPlatformEnabled(platform, event.target.checked)} className="h-4 w-4 accent-primary" />
                       {label}
                     </label>
@@ -519,8 +593,8 @@ export default function ConfigPage() {
                         </Select>
                       </Field>
                     </div>
-                    {platform === 'boss' && <div className="space-y-3 rounded-xl border border-card-border bg-card p-3">
-                      <p className="text-xs font-black text-foreground">BOSS 搜索筛选（可选）</p>
+                    {platform === 'boss' && <div className="space-y-3 rounded-lg border border-card-border bg-card p-3">
+                      <p className="text-xs font-semibold text-foreground">BOSS 搜索筛选（可选）</p>
                       <div className="grid gap-3 md:grid-cols-2">
                         <Field label="职位类型">
                           <Select value={Array.isArray(bossFilters.job_type) ? bossFilters.job_type[0] || '' : ''} onChange={event => updateBossFilter(search, 'job_type', event.target.value, false)}>
@@ -575,7 +649,7 @@ export default function ConfigPage() {
                   <option value="boss,zhilian,51job,liepin">BOSS → 智联 → 前程无忧 → 猎聘</option>
                 </Select>
               </Field>
-              <div className="flex items-center justify-between rounded-xl border border-card-border bg-surface px-3 py-2 text-xs font-bold text-muted">
+              <div className="flex items-center justify-between rounded-lg border border-card-border bg-surface px-3 py-2 text-xs font-bold text-muted">
                 采集后自动评分
                 <Switch checked={config.collection?.auto_score_default ?? false} onChange={value => updateConfig('collection.auto_score_default', value)} />
               </div>
@@ -592,7 +666,18 @@ export default function ConfigPage() {
             <Field label="每轮最大候选数">
               <Input type="number" value={config.scoring?.max_candidates || 20} onChange={e => updateConfig('scoring.max_candidates', Number(e.target.value))} min={1} max={100} />
             </Field>
+            <ScoringExtraFields config={config} updateConfig={updateConfig} />
           </div>
+        </SectionCard>
+
+        {/* Freshness / filters Section */}
+        <SectionCard title="岗位过滤与新鲜度" sectionKey="freshness" expanded={expandedSections} toggle={toggleSection}>
+          <FreshnessFields config={config} updateConfig={updateConfig} />
+        </SectionCard>
+
+        {/* Automation Section */}
+        <SectionCard title="自动化设置" sectionKey="automation" expanded={expandedSections} toggle={toggleSection}>
+          <AutomationFields config={config} updateConfig={updateConfig} />
         </SectionCard>
 
         {/* AI Section */}
@@ -608,7 +693,7 @@ export default function ConfigPage() {
                 ))}
               </Select>
               <p className="mt-1 text-xs text-muted">
-                BossHunter 会自动配置协议和服务地址；也可安全复用环境变量 {
+                OfferOwl 会自动配置协议和服务地址；也可安全复用环境变量 {
                   AI_SERVICES[(config.ai?.service || (config.ai?.provider === 'openai_compatible' ? 'custom' : 'anthropic')) as AiService].keyEnv
                 }，不会在前端显示其内容。
               </p>
@@ -700,10 +785,10 @@ export default function ConfigPage() {
               </div>
               <Switch checked={config.ai?.scoring_second_review ?? false} onChange={v => updateConfig('ai.scoring_second_review', v)} />
             </div>
-            {(config.profile?.ai_greeting_enabled ?? true) && <div className="rounded-2xl border border-primary/20 bg-surface-muted p-4">
+            {(config.profile?.ai_greeting_enabled ?? true) && <div className="rounded-xl border border-primary/20 bg-surface-muted p-4">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <label className="text-sm font-black text-foreground">招呼语质量提醒</label>
+                  <label className="text-sm font-semibold text-foreground">招呼语质量提醒</label>
                   <p className="mt-1 text-xs leading-5 text-muted">可选检查一次，只提供建议，不拒绝或自动改写文案。默认关闭。</p>
                 </div>
                 <Switch
@@ -713,10 +798,10 @@ export default function ConfigPage() {
                 />
               </div>
             </div>}
-            <div className="rounded-2xl border border-card-border bg-surface p-3">
+            <div className="rounded-xl border border-card-border bg-surface p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-black text-foreground">AI 连接检测</div>
+                  <div className="text-sm font-semibold text-foreground">AI 连接检测</div>
                   <p className="mt-1 text-xs text-muted">不会消耗对话 Token；检测已保存的 Key、Base URL 和服务可用性。</p>
                 </div>
                 <Button variant="secondary" size="sm" onClick={handleAiTest} disabled={aiTest.testing}>
@@ -730,6 +815,10 @@ export default function ConfigPage() {
                   {aiTest.message}
                 </p>
               )}
+            </div>
+            <div className="border-t border-card-border pt-4">
+              <h4 className="mb-3 text-xs font-semibold text-foreground">高级参数</h4>
+              <AiAdvancedFields config={config} updateConfig={updateConfig} />
             </div>
           </div>
         </SectionCard>
@@ -820,6 +909,7 @@ export default function ConfigPage() {
                 <Input type="number" value={config.throttle?.day_off_probability || 0.05} onChange={e => updateConfig('throttle.day_off_probability', Number(e.target.value))} step={0.01} min={0} max={1} />
               </Field>
             </div>
+            <SafetyExtraFields config={config} updateConfig={updateConfig} />
           </div>
         </SectionCard>
 
@@ -846,9 +936,9 @@ export default function ConfigPage() {
             <Field label="每轮最多发简历数">
               <Input type="number" value={config.monitor?.max_resume_sends_per_cycle || 5} onChange={e => updateConfig('monitor.max_resume_sends_per_cycle', Number(e.target.value))} min={1} />
             </Field>
-            <div className="flex items-center justify-between rounded-2xl border border-card-border bg-surface p-4">
+            <div className="flex items-center justify-between rounded-xl border border-card-border bg-surface p-4">
               <div>
-                <label className="text-sm font-black text-foreground">检测到 HR 问题时自动回复</label>
+                <label className="text-sm font-semibold text-foreground">检测到 HR 问题时自动回复</label>
                 <p className="mt-1 text-xs text-muted">默认关闭。关闭时只生成回复建议，需要你在“监测执行”中确认后发送。</p>
               </div>
               <Switch checked={config.monitor?.auto_reply_hr_questions ?? false} onChange={v => updateConfig('monitor.auto_reply_hr_questions', v)} />
@@ -881,7 +971,16 @@ export default function ConfigPage() {
             </Field>
           </div>
         </SectionCard>
+
+        {/* Browser Section */}
+        <SectionCard title="浏览器设置" sectionKey="browser" expanded={expandedSections} toggle={toggleSection}>
+          <BrowserFields config={config} updateConfig={updateConfig} />
+        </SectionCard>
+        <SectionCard title="时区、数据与日志" sectionKey="system" expanded={expandedSections} toggle={toggleSection}>
+          <SystemPanel />
+        </SectionCard>
     </div>
+    </ConfigViewContext.Provider>
   )
 }
 
@@ -889,15 +988,21 @@ export default function ConfigPage() {
 function SectionCard({ title, sectionKey, expanded, toggle, children }: {
   title: string; sectionKey: string; expanded: Record<string, boolean>; toggle: (k: string) => void; children: React.ReactNode
 }) {
-  const isExpanded = expanded[sectionKey] ?? false
+  const { group, query } = useConfigView()
+  const searching = query.trim() !== ''
+  if (!searching && groupOfSection(sectionKey) !== group) return null
+  const isExpanded = searching || (expanded[sectionKey] ?? false)
   return (
-    <Card>
+    <Card data-section={sectionKey} data-title={title}>
       <button
         data-tour={sectionKey === 'ai' ? 'ai-section' : undefined}
         className="w-full flex items-center justify-between p-4 transition-colors hover:bg-surface"
         onClick={() => toggle(sectionKey)}
       >
-        <span className="text-sm font-black text-foreground">{title}</span>
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">{title}</span>
+          {RESTART_SECTIONS.has(sectionKey) && <ApplyBadge kind="restart" />}
+        </span>
         {isExpanded ? <ChevronDown className="w-4 h-4 text-foreground" /> : <ChevronRight className="w-4 h-4 text-foreground" />}
       </button>
       {isExpanded && <div className="px-4 pb-4">{children}</div>}
@@ -907,7 +1012,7 @@ function SectionCard({ title, sectionKey, expanded, toggle, children }: {
 
 function Field({ label, children, hint, dataTour }: { label: string; children: React.ReactNode; hint?: string; dataTour?: string }) {
   return (
-    <div data-tour={dataTour}>
+    <div data-tour={dataTour} data-field>
       <div className="mb-1.5 flex items-baseline justify-between gap-2">
         <label className="block text-xs text-foreground">{label}</label>
         {hint && <span className="text-[11px] leading-4 text-muted">{hint}</span>}

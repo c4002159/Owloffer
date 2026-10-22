@@ -33,6 +33,8 @@ export function useConfig() {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const configRef = useRef<Record<string, any> | null>(null)
+  const [originalConfig, setOriginalConfig] = useState<Record<string, any> | null>(null)
+  const originalRef = useRef<Record<string, any> | null>(null)
 
   const fetchConfig = async () => {
     try {
@@ -46,6 +48,8 @@ export function useConfig() {
       const configData = await configRes.json()
       const schemaData = await schemaRes.json()
       configRef.current = configData
+      originalRef.current = JSON.parse(JSON.stringify(configData))
+      setOriginalConfig(originalRef.current)
       setConfig(configData)
       setSchema(schemaData)
       setDirty(false)
@@ -73,6 +77,9 @@ export function useConfig() {
     // Server-persisted fields (e.g. resume upload) sync local state without dirtying.
     if (options?.markDirty !== false) {
       setDirty(true)
+    } else if (originalRef.current) {
+      originalRef.current = writeConfigPath(originalRef.current, path, value)
+      setOriginalConfig(originalRef.current)
     }
   }, [])
 
@@ -109,5 +116,5 @@ export function useConfig() {
     fetchConfig()
   }
 
-  return { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig }
+  return { config, originalConfig, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig }
 }

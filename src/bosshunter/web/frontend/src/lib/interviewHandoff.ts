@@ -23,7 +23,7 @@ function localRoot(raw: string): URL {
 export function interviewTarget(raw: string, sourceOrigin: string): URL {
   const target = localRoot(raw.trim())
   const source = localRoot(sourceOrigin)
-  if (target.origin === source.origin) throw new Error('面试工作台地址不能是 BossHunter 自己的地址。')
+  if (target.origin === source.origin) throw new Error('面试工作台地址不能是 OfferOwl 自己的地址。')
   target.searchParams.set('import', 'job')
   target.searchParams.set('source', source.origin)
   return target

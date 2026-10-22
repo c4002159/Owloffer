@@ -39,7 +39,7 @@ export function JobFilterBar({
   const updateMulti = (key: keyof JobFilters, value: string[]) => onChange({ ...filters, [key]: value })
 
   return (
-    <div className={cn(!compact && "mb-4 rounded-2xl border border-card-border bg-surface p-3")}>
+    <div className={cn(!compact && "mb-4 rounded-xl border border-card-border bg-surface p-3")}>
       <div className={cn("grid min-w-0", compact ? "grid-cols-2 gap-1.5 xl:grid-cols-4" : "grid-cols-1 gap-2 md:grid-cols-2 2xl:grid-cols-4")}>
         <label className={cn("relative min-w-0", compact ? "col-span-2 xl:col-span-1" : "md:col-span-2 2xl:col-span-1")}>
           <Search className={cn("pointer-events-none absolute text-muted", compact ? "left-2 top-2 h-3 w-3" : "left-3 top-2.5 h-4 w-4")} />

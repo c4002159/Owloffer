@@ -34,10 +34,10 @@ export function CityMultiSelect({
   return (
     <div className="space-y-2">
       <div data-tour={tourTarget} className="flex gap-2">
-        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索城市名或 BOSS 编码" className="min-w-0 flex-1 rounded-xl border border-card-border bg-surface px-3 py-2 text-xs outline-none focus:border-primary" />
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索城市名或 BOSS 编码" className="min-w-0 flex-1 rounded-lg border border-card-border bg-surface px-3 py-2 text-xs outline-none focus:border-primary" />
         <Button type="button" variant="secondary" size="sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? '刷新中...' : '刷新城市列表'}</Button>
       </div>
-      <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto rounded-xl border border-card-border bg-surface p-2">
+      <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto rounded-lg border border-card-border bg-surface p-2">
         {visible.map(city => {
           const selected = value.includes(city.name)
           return <button key={city.code} type="button" onClick={() => toggle(city.name)} className={`rounded-lg border px-2 py-1 text-xs transition-colors ${selected ? 'border-primary/50 bg-primary/20 text-primary' : 'border-card-border bg-card text-muted hover:border-primary/40 hover:text-foreground'}`}>{city.name} · {city.code}</button>

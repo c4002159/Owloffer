@@ -177,8 +177,8 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <span className="max-w-[160px] truncate font-black text-foreground">{job.company}</span>
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${job.source_platform === 'boss' || !job.source_platform ? 'bg-secondary text-primary' : 'bg-info-soft text-info'}`}>
+                          <span className="max-w-[160px] truncate font-semibold text-foreground">{job.company}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${job.source_platform === 'boss' || !job.source_platform ? 'bg-secondary text-primary' : 'bg-info-soft text-info'}`}>
                             {PLATFORM_SHORT_LABELS[job.source_platform || 'boss'] || 'BOSS'}
                           </span>
                           <OutsourcingBadge job={job} />
@@ -197,10 +197,10 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                         <div className="mt-1 text-muted">{job.recruitment_type === 'campus' ? '校招' : job.recruitment_type === 'experienced' ? '社招' : '类型未识别'}</div>
                       </td>
                       <td className="px-4 py-3" title="匹配度：只衡量和你经历的契合度">
-                        <span className={`font-mono font-black ${getScoreColor(job.score)}`}>{job.score || '-'}</span>
+                        <span className={`font-mono font-semibold ${getScoreColor(job.score)}`}>{job.score || '-'}</span>
                       </td>
                       <td className="px-4 py-3" title={job.recruit_detail || '活跃度：衡量岗位像不像真在招'}>
-                        <span className={`font-mono font-black ${job.recruit_score == null ? 'text-muted' : getScoreColor(job.recruit_score)}`}>{job.recruit_score ?? '-'}</span>
+                        <span className={`font-mono font-semibold ${job.recruit_score == null ? 'text-muted' : getScoreColor(job.recruit_score)}`}>{job.recruit_score ?? '-'}</span>
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={statusVariant(job.status) as any}>{inDelivery ? ({ delivering: '投递中', waiting: '排队投递', scoring: '评分中' } as Record<string, string>)[busyReasons[job.id]] || '任务处理中' : getStatusLabel(job.status)}</Badge>
@@ -284,20 +284,20 @@ export function JobsTable({ jobs, page, pageSize, total, onPageChange, selectedI
                             <InterviewPreparation key={job.id} job={job} />
                           </div>
                           <div className="grid grid-cols-1 gap-4 text-sm lg:grid-cols-3">
-                            <div className="rounded-2xl border border-card-border bg-card p-4">
-                              <p className="mb-2 text-xs font-black text-primary">JD摘要</p>
+                            <div className="rounded-xl border border-card-border bg-card p-4">
+                              <p className="mb-2 text-xs font-semibold text-primary">JD摘要</p>
                               <p className="line-clamp-6 leading-6 text-muted">{job.jd || '无'}</p>
                             </div>
-                            <div className="rounded-2xl border border-card-border bg-card p-4">
-                              <p className="mb-2 text-xs font-black text-primary">招呼语</p>
+                            <div className="rounded-xl border border-card-border bg-card p-4">
+                              <p className="mb-2 text-xs font-semibold text-primary">招呼语</p>
                               <p className="line-clamp-6 whitespace-pre-wrap leading-6 text-muted">{job.greeting || '未生成'}</p>
                             </div>
-                            <div className="rounded-2xl border border-card-border bg-card p-4">
-                              <p className="mb-2 text-xs font-black text-primary">匹配度理由</p>
+                            <div className="rounded-xl border border-card-border bg-card p-4">
+                              <p className="mb-2 text-xs font-semibold text-primary">匹配度理由</p>
                               <p className="line-clamp-6 whitespace-pre-wrap leading-6 text-muted">{job.score_reason || '无'}</p>
                               {job.recruit_detail && (
                                 <>
-                                  <p className="mb-1 mt-3 text-xs font-black text-primary">活跃度依据</p>
+                                  <p className="mb-1 mt-3 text-xs font-semibold text-primary">活跃度依据</p>
                                   <p className="line-clamp-4 whitespace-pre-wrap leading-6 text-muted">{job.recruit_detail}</p>
                                 </>
                               )}

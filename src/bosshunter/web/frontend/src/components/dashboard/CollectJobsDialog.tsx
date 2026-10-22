@@ -296,18 +296,18 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="岗位采集">
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-card-border bg-card p-6 shadow-2xl">
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl border border-card-border bg-card p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-xs font-black tracking-[0.18em] text-primary">COLLECT JOBS</div>
-            <h2 className="mt-1 text-2xl font-black">{mode === 'full' ? '全流程采集设置' : '岗位采集'}</h2>
+            <div className="text-xs font-semibold tracking-[0.18em] text-primary">COLLECT JOBS</div>
+            <h2 className="mt-1 text-2xl font-semibold">{mode === 'full' ? '全流程采集设置' : '岗位采集'}</h2>
             <p className="mt-1 text-sm leading-6 text-muted">平台会按队列严格串行执行；每个平台只设置最大页数和排序。</p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={starting} aria-label="关闭"><X className="h-5 w-5" /></Button>
         </div>
 
-        {mode === 'collect' && <div className="mt-4 rounded-2xl border border-card-border bg-surface p-4">
-          <div className="text-sm font-black">继续未完成的 BOSS 采集</div>
+        {mode === 'collect' && <div className="mt-4 rounded-xl border border-card-border bg-surface p-4">
+          <div className="text-sm font-semibold">继续未完成的 BOSS 采集</div>
           <p className="mt-1 text-xs leading-5 text-muted">沿用原任务的搜索条件，从中断页恢复；已完成的组合不再重复搜索。想查看最新岗位，请使用下方“重新采集”。</p>
           {resumableRuns.length > 0 ? <>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -323,12 +323,12 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
         </div>}
 
         {activeTask?.progress?.platforms && (
-          <div className="mt-4 rounded-2xl border border-primary/20 bg-secondary p-4">
-            <div className="text-sm font-black text-primary">采集进行中</div>
+          <div className="mt-4 rounded-xl border border-primary/20 bg-secondary p-4">
+            <div className="text-sm font-semibold text-primary">采集进行中</div>
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {Object.entries(activeTask.progress.platforms).map(([platform, state]) => (
-                <div key={platform} className="rounded-xl border border-card-border bg-card p-3 text-sm">
-                  <div className="flex items-center justify-between font-black"><span>{PLATFORM_LABELS[platform] || platform}</span><span>新增 {state.new}</span></div>
+                <div key={platform} className="rounded-lg border border-card-border bg-card p-3 text-sm">
+                  <div className="flex items-center justify-between font-semibold"><span>{PLATFORM_LABELS[platform] || platform}</span><span>新增 {state.new}</span></div>
                   <div className="mt-1 text-xs text-muted">{state.status} · {state.city || '等待'} · {state.keyword || ''} · 第 {state.page || 0}/{state.max_pages || 0} 页</div>
                   <div className="mt-1 text-xs text-muted">扫描 {state.seen || 0} · 重复 {state.duplicate || 0} · 过滤 {state.filtered || 0} · 解析失败 {state.parse_failed || 0} · 保存失败 {state.save_failed || 0}</div>
                   {state.message && <div className="mt-1 text-xs text-primary">{state.message}</div>}
@@ -344,9 +344,9 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
             const label = PLATFORM_LABELS[platform]
             const platformCities = platform === 'zhilian' || platform === 'zhilian_campus' ? zhilianCities : platform === '51job' ? job51Cities : liepinCities
             return (
-              <section key={platform} className={`rounded-2xl border p-4 ${draft.enabled ? 'border-primary/30 bg-surface' : 'border-card-border bg-card opacity-70'}`}>
+              <section key={platform} className={`rounded-xl border p-4 ${draft.enabled ? 'border-primary/30 bg-surface' : 'border-card-border bg-card opacity-70'}`}>
                 <div className="flex items-center justify-between gap-3">
-                  <label className="flex items-center gap-2 text-lg font-black"><input type="checkbox" checked={draft.enabled} disabled={mode === 'full' && !DELIVER_PLATFORMS.includes(platform)} onChange={event => togglePlatform(platform, event.target.checked)} className="h-4 w-4 accent-primary" />{label}</label>
+                  <label className="flex items-center gap-2 text-lg font-semibold"><input type="checkbox" checked={draft.enabled} disabled={mode === 'full' && !DELIVER_PLATFORMS.includes(platform)} onChange={event => togglePlatform(platform, event.target.checked)} className="h-4 w-4 accent-primary" />{label}</label>
                   {draft.enabled && <div className="text-xs font-bold text-primary">队列 {enabledOrder.indexOf(platform) + 1}</div>}
                 </div>
                 {draft.enabled && <div className="mt-4 space-y-3">
@@ -362,7 +362,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
                   <label className="block text-xs font-bold text-muted">城市（逗号或换行分隔）<Input list={platform !== 'boss' ? `${platform}-city-options` : undefined} value={draft.cities} onChange={event => updateDraft(platform, 'cities', event.target.value)} placeholder={platform === '51job' ? '上海' : '北京'} /></label>
                   {platform !== 'boss' ? <>
                     <datalist id={`${platform}-city-options`}>{platformCities.map(city => <option key={city.code} value={city.name} />)}</datalist>
-                    <div className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs text-muted">
+                    <div className="rounded-lg border border-card-border bg-card px-3 py-2 text-xs text-muted">
                       <div className="font-bold text-foreground">平台城市编码</div>
                       <p className="mt-1">系统只使用已验证的{PLATFORM_SHORT_LABELS[platform]}城市编码，不会猜测。</p>
                       {!!splitValues(draft.cities).length && <div className="mt-2 flex flex-wrap gap-1">
@@ -371,7 +371,7 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
                         </span>)}
                       </div>}
                     </div>
-                  </> : <p className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs text-muted">BOSS 城市编码由系统内置匹配，无需填写。</p>}
+                  </> : <p className="rounded-lg border border-card-border bg-card px-3 py-2 text-xs text-muted">BOSS 城市编码由系统内置匹配，无需填写。</p>}
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-xs font-bold text-muted">最大页数<Input type="number" min={1} max={30} value={draft.maxPages} onChange={event => updateDraft(platform, 'maxPages', event.target.value)} /></label>
                     <label className="text-xs font-bold text-muted">排序<Select value={draft.sort} onChange={event => updateDraft(platform, 'sort', event.target.value)}><option value="default">默认</option>{platform === '51job' && <option value="active">活跃职位优先</option>}<option value="newest">最新</option></Select></label>
@@ -383,12 +383,12 @@ export function CollectJobsDialog({ open, mode = 'collect', activeTask, onClose,
           })}
         </div>
 
-        <div className="mt-4 rounded-2xl border border-card-border bg-surface p-4">
-          <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black">执行顺序</div><p className="mt-1 text-xs text-muted">平台串行采集；BOSS、前程无忧和猎聘可自动投递，智联暂只采集；监听只对 BOSS 生效。</p></div><div className="flex gap-2">{enabledOrder.map((platform, index) => <div key={platform} className="flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs font-black text-primary"><span>{index + 1}. {PLATFORM_SHORT_LABELS[platform]}</span><button type="button" onClick={() => move(platform, -1)} disabled={index === 0} aria-label="上移"><ArrowUp className="h-3 w-3" /></button><button type="button" onClick={() => move(platform, 1)} disabled={index === enabledOrder.length - 1} aria-label="下移"><ArrowDown className="h-3 w-3" /></button></div>)}</div></div>
+        <div className="mt-4 rounded-xl border border-card-border bg-surface p-4">
+          <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold">执行顺序</div><p className="mt-1 text-xs text-muted">平台串行采集；BOSS、前程无忧和猎聘可自动投递，智联暂只采集；监听只对 BOSS 生效。</p></div><div className="flex gap-2">{enabledOrder.map((platform, index) => <div key={platform} className="flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs font-semibold text-primary"><span>{index + 1}. {PLATFORM_SHORT_LABELS[platform]}</span><button type="button" onClick={() => move(platform, -1)} disabled={index === 0} aria-label="上移"><ArrowUp className="h-3 w-3" /></button><button type="button" onClick={() => move(platform, 1)} disabled={index === enabledOrder.length - 1} aria-label="下移"><ArrowDown className="h-3 w-3" /></button></div>)}</div></div>
         </div>
 
-        <label className="mt-4 flex items-center justify-between rounded-2xl border border-card-border bg-card p-4"><div><div className="text-sm font-black">{mode === 'full' ? '全流程自动评分' : '采集后自动评分'}</div><p className="mt-1 text-xs leading-5 text-muted">{mode === 'full' ? '全流程必须先评分；评分后进入人工确认，再按平台适配器执行招呼和监测。' : '默认关闭；开启后只评分本轮新增岗位，评分结束即停止，不发送消息、不投递、不监测。'}</p></div><Switch checked={mode === 'full' || autoScore} onChange={mode === 'full' ? () => undefined : setAutoScore} disabled={mode === 'full'} /></label>
-        {error && <div className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm text-danger">{error}</div>}
+        <label className="mt-4 flex items-center justify-between rounded-xl border border-card-border bg-card p-4"><div><div className="text-sm font-semibold">{mode === 'full' ? '全流程自动评分' : '采集后自动评分'}</div><p className="mt-1 text-xs leading-5 text-muted">{mode === 'full' ? '全流程必须先评分；评分后进入人工确认，再按平台适配器执行招呼和监测。' : '默认关闭；开启后只评分本轮新增岗位，评分结束即停止，不发送消息、不投递、不监测。'}</p></div><Switch checked={mode === 'full' || autoScore} onChange={mode === 'full' ? () => undefined : setAutoScore} disabled={mode === 'full'} /></label>
+        {error && <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</div>}
         <div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={onClose} disabled={starting}>取消</Button><Button onClick={() => void start()} disabled={Boolean(activeTask) || starting}>{starting ? <span className="inline-flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" />启动中…</span> : mode === 'full' ? '开始全流程' : '重新采集'}</Button></div>
       </div>
     </div>

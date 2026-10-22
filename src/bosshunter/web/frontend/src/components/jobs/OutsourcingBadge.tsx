@@ -15,7 +15,7 @@ export function OutsourcingBadge({ job }: Props) {
   const evidence = matches.length ? `命中：${matches.join('、')}` : '请核对岗位说明及雇佣关系'
   return (
     <span
-      className={`inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-black ${level === 'confirmed'
+      className={`inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${level === 'confirmed'
         ? 'border-red-200 bg-red-50 text-red-700'
         : 'border-amber-200 bg-amber-50 text-amber-700'}`}
       title={`${evidence}。规则提示，请人工核实。`}

@@ -40,7 +40,7 @@ export function KeywordPerformance({ refreshKey }: { refreshKey?: unknown }) {
   if (!rows.length) return null
 
   return (
-    <div className="mb-3 rounded-xl border border-card-border bg-card p-3">
+    <div className="mb-3 rounded-lg border border-card-border bg-card p-3">
       <div className="text-xs font-bold text-foreground">关键词表现与梯队</div>
       <p className="mt-1 text-[11px] leading-5 text-muted">
         近 14 天：通过率、HR 活跃占比、回复率、新增占比综合成分数（至少 10 条才评分）。连续表现好的词自动升档，连续靠后的核心词降档，探索词 15 条仍 0 通过则暂停 7 天；固定后不再自动调整。
