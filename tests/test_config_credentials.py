@@ -116,3 +116,28 @@ class ConfigCredentialsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WriteYamlAtomicRetryTests(unittest.TestCase):
+    def test_transient_permission_error_is_retried(self):
+        from unittest import mock
+
+        from bosshunter import config as config_module
+
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky(src, dst):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError(5, "denied")
+            return real_replace(src, dst)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "c.yaml"
+            with mock.patch.object(config_module.os, "replace", flaky), \
+                    mock.patch.object(config_module.time, "sleep"):
+                config_module._write_yaml_atomic(target, {"a": 1})
+            self.assertEqual(yaml.safe_load(target.read_text(encoding="utf-8")), {"a": 1})
+            self.assertEqual(calls["n"], 3)
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], ["c.yaml"])

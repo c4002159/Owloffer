@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -379,7 +380,15 @@ def _write_yaml_atomic(path: Path, data: dict[str, Any]) -> None:
             temporary.flush()
             os.fsync(temporary.fileno())
         os.chmod(temporary_path, 0o600)
-        os.replace(temporary_path, path)
+        for attempt in range(6):
+            try:
+                os.replace(temporary_path, path)
+                break
+            except PermissionError:
+                # Windows: another process (antivirus, indexer, reader) may briefly hold the target.
+                if attempt == 5:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
         temporary_path = None
     finally:
         if temporary_path is not None:
