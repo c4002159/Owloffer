@@ -1,8 +1,8 @@
 """Keep only the postings whose experience and education requirements fit the user's own filter settings.
 
-The BOSS filter lists on the config page (工作经验, 学历要求) are the user's limit for every platform: the other sites cannot
-all filter by them natively, so the collectors read the requirements from the posting (its labels and its JD text) and drop
-what asks for more than the settings allow.
+The config page lets the user pick the 工作经验 and 学历要求 each platform accepts (the same lists BOSS has). The other sites
+cannot all filter by them natively, so the collectors read the requirements from the posting (its labels and its JD text)
+and drop what does not fit the picked ones.
 """
 
 from __future__ import annotations
@@ -27,25 +27,19 @@ _SOFT = re.compile(r"优先|加分|更佳|最好|尤佳|者优")
 _FRESH = re.compile(r"经验不限|无需经验|不限经验|无经验|应届|在校|实习")
 
 
-def limits(config: dict, platform: str = "") -> tuple[list[str], list[str]]:
-    """The experience and degree labels the user allows: the platform's own filter lists when it has some, else BOSS's."""
+def limits(config: dict, platform: str) -> tuple[list[str], list[str]]:
+    """The experience and degree labels the user allows for ``platform`` (config page: platforms.<platform>.search.filters
+    .experience_limit / .degree_limit, picked like the BOSS lists). Empty lists mean no limit."""
     platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
-
-    def filters_of(name: str) -> dict:
-        search = (platforms.get(name) or {}).get("search") if isinstance(platforms.get(name), dict) else {}
-        found = (search or {}).get("filters") if isinstance(search, dict) else {}
-        return found if isinstance(found, dict) else {}
-
-    own, boss = filters_of(platform) if platform else {}, filters_of("boss")
+    search = (platforms.get(platform) or {}).get("search") if isinstance(platforms.get(platform), dict) else {}
+    filters = (search or {}).get("filters") if isinstance(search, dict) else {}
+    filters = filters if isinstance(filters, dict) else {}
 
     def pick(key: str) -> list[str]:
-        for source in (own, boss):
-            value = source.get(key)
-            if isinstance(value, list) and value:
-                return [str(item).strip() for item in value if str(item).strip()]
-        return []
+        value = filters.get(key)
+        return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
 
-    return pick("experience"), pick("degree")
+    return pick("experience_limit"), pick("degree_limit")
 
 
 def _max_experience(labels: list[str]) -> float | None:

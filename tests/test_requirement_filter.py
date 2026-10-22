@@ -1,12 +1,14 @@
 from bosshunter.requirement_filter import limits, required_degree, required_years, requirement_reason
 
-CONFIG = {"platforms": {"boss": {"search": {"filters": {"experience": ["经验不限", "应届生", "1年以内"], "degree": ["本科", "硕士"]}}}}}
+PICKED = {"experience_limit": ["经验不限", "应届生", "1年以内"], "degree_limit": ["本科", "硕士"]}
+CONFIG = {"platforms": {name: {"search": {"filters": PICKED}} for name in ("liepin", "51job", "zhilian", "zhilian_campus")}}
 
 
-def test_the_boss_filter_lists_are_the_limit_of_every_platform_unless_it_has_its_own():
+def test_each_platform_has_its_own_picked_limits_and_none_picked_means_no_limit():
     assert limits(CONFIG, "liepin") == (["经验不限", "应届生", "1年以内"], ["本科", "硕士"])
-    own = {"platforms": {**CONFIG["platforms"], "liepin": {"search": {"filters": {"experience": ["1-3年"]}}}}}
-    assert limits(own, "liepin") == (["1-3年"], ["本科", "硕士"])
+    own = {"platforms": {"liepin": {"search": {"filters": {"experience_limit": ["1-3年"]}}}, "boss": {"search": {"filters": {"experience": ["应届生"]}}}}}
+    assert limits(own, "liepin") == (["1-3年"], [])
+    assert limits(own, "51job") == ([], [])             # BOSS's own lists are not a limit for the others
     assert limits({}, "liepin") == ([], [])
 
 

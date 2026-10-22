@@ -558,6 +558,23 @@ export default function ConfigPage() {
                         <p className="mt-1 text-xs text-muted">只接受数字编码；无效内容会被安全忽略。</p>
                       </Field>
                     </div>}
+                    {platform !== 'boss' && <div className="space-y-3 rounded-xl border border-card-border bg-card p-3">
+                      <p className="text-xs font-black text-foreground">{label} 岗位要求限制（可选）</p>
+                      <p className="text-xs leading-5 text-muted">采集时从岗位标签和 JD 里读出经验和学历要求，不在所选范围内的岗位会被直接筛掉；什么都不选表示不限制。</p>
+                      {([['experience_limit', '工作经验', BOSS_FILTER_OPTIONS.experience], ['degree_limit', '学历要求', BOSS_FILTER_OPTIONS.degree]] as const).map(([key, title, options]) => {
+                        const selected: string[] = Array.isArray(bossFilters[key]) ? bossFilters[key] : []
+                        return <Field key={key} label={title}>
+                          <div className="flex flex-wrap gap-1.5">
+                            {options.map(option => <button
+                              key={option}
+                              type="button"
+                              onClick={() => updatePlatformSearch(platform, `filters.${key}`, selected.includes(option) ? selected.filter(item => item !== option) : [...selected, option])}
+                              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${selected.includes(option) ? 'border-primary bg-secondary text-primary' : 'border-card-border bg-card text-muted hover:border-primary/40'}`}
+                            >{option}</button>)}
+                          </div>
+                        </Field>
+                      })}
+                    </div>}
                   </div>}
                 </div>
               )
