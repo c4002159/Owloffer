@@ -18,6 +18,9 @@ import { useState, useEffect, useRef } from 'react'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 import { AgentAccessPanel } from '@/components/config/AgentAccessPanel'
 import { ResumeLibrary } from '@/components/config/ResumeLibrary'
+import { SettingsSearch } from '@/components/config/SettingsSearch'
+import { SaveDialog } from '@/components/config/SaveDialog'
+import { CommonSearchCard } from '@/components/config/CommonSearchCard'
 import { KeywordSettings } from '@/components/config/KeywordSettings'
 import { AiExtras, AutomationSettings, BrowserSettings, FreshnessSettings, SafetyExtras, ScoringExtras, TimezoneNotice } from '@/components/config/ExtraSettings'
 import { createContext, useContext } from 'react'
@@ -68,7 +71,8 @@ const BOSS_FILTER_OPTIONS = {
 } as const
 
 export default function ConfigPage({ category: controlledCategory, onCategoryChange }: { category?: string; onCategoryChange?: (key: string) => void } = {}) {
-  const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
+  const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig, revertPath, baseline } = useConfig()
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const windowError = config ? sendWindowsError(config.throttle?.send_windows ?? ['09:00-16:00']) : null
   const requestedSection = new URLSearchParams(window.location.search).get('section')
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => ({
@@ -323,8 +327,9 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
     <div className="h-full min-w-0 flex-1 overflow-y-auto space-y-4 pr-4">
         {/* Actions bar */}
         <div className="flex items-center justify-between sticky top-0 bg-background z-10 py-2">
-          <div className="flex items-center gap-2">
-            {dirty && <span className="text-xs text-warning">有未保存的更改</span>}
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <SettingsSearch onPick={setCategory} />
+            {dirty && <span className="shrink-0 text-xs text-warning">有未保存的更改</span>}
             {message && (
               <span className={`text-xs ${message.type === 'success' ? 'text-success' : 'text-danger'}`}>
                 {message.text}
@@ -333,7 +338,7 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={resetConfig}><RotateCcw className="w-3 h-3 mr-1" />重置</Button>
-            <Button data-tour="config-save" size="sm" onClick={saveConfig} disabled={saving || !dirty || !!windowError}><Save className="w-3 h-3 mr-1" />{saving ? '保存中...' : '保存'}</Button>
+            <Button data-tour="config-save" size="sm" onClick={() => setSaveDialogOpen(true)} disabled={saving || !dirty || !!windowError}><Save className="w-3 h-3 mr-1" />{saving ? '保存中...' : '保存'}</Button>
           </div>
         </div>
 
@@ -343,6 +348,17 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
           </select>
         </div>
         <p className="text-xs text-muted">{activeCategory.hint}</p>
+
+        {saveDialogOpen && (
+          <SaveDialog
+            baseline={baseline}
+            config={config}
+            saving={saving}
+            onRevert={revertPath}
+            onCancel={() => setSaveDialogOpen(false)}
+            onConfirm={() => { void saveConfig().finally(() => setSaveDialogOpen(false)) }}
+          />
+        )}
 
         {windowError && <p className="text-xs text-danger">发送时间窗口有误，请到「投递与自动化」修正后保存：{windowError}</p>}
 
@@ -467,6 +483,11 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
         {/* Keyword Section */}
         <SectionCard title="关键词设置" sectionKey="keywords" expanded={expandedSections} toggle={toggleSection}>
           <KeywordSettings config={config} platformSearch={platformSearch} updatePlatformSearch={updatePlatformSearch} updateConfig={updateConfig} />
+        </SectionCard>
+
+        {/* Settings every platform shares */}
+        <SectionCard title="全平台通用搜索设置" sectionKey="common" expanded={expandedSections} toggle={toggleSection}>
+          <CommonSearchCard config={config} platformSearch={platformSearch} updatePlatformSearch={updatePlatformSearch} updatePlatformCities={updatePlatformCities} updateConfig={updateConfig} />
         </SectionCard>
 
         {/* Search Section */}

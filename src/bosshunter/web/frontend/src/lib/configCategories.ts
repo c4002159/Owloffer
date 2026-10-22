@@ -1,7 +1,7 @@
 /** The groups of the settings page; the sidebar lists them under "配置". */
 export const CONFIG_CATEGORIES = [
   { key: 'profile', label: '求职档案', hint: '简历文件、个人信息、求职偏好、过滤规则', sections: ['profile'] },
-  { key: 'search', label: '搜索与关键词', hint: '各平台的关键词、城市、页数、筛选', sections: ['keywords', 'search'] },
+  { key: 'search', label: '搜索与关键词', hint: '关键词、全平台通用设置、各平台的城市、页数、筛选', sections: ['keywords', 'common', 'search'] },
   { key: 'scoring', label: '评分与过滤', hint: '评分阈值与分数门槛', sections: ['scoring'] },
   { key: 'delivery', label: '投递与自动化', hint: '自动投递、发送额度、发送窗口', sections: ['delivery'] },
   { key: 'monitor', label: '监测与跟进', hint: 'HR 回复检查、自动跟进', sections: ['monitor', 'follow_up'] },

@@ -33,6 +33,7 @@ export function useConfig() {
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const configRef = useRef<Record<string, any> | null>(null)
+  const baselineRef = useRef<Record<string, any> | null>(null)       // the config as last loaded or saved: what the save preview compares with
 
   const fetchConfig = async () => {
     try {
@@ -46,6 +47,7 @@ export function useConfig() {
       const configData = await configRes.json()
       const schemaData = await schemaRes.json()
       configRef.current = configData
+      baselineRef.current = JSON.parse(JSON.stringify(configData))
       setConfig(configData)
       setSchema(schemaData)
       setDirty(false)
@@ -104,10 +106,18 @@ export function useConfig() {
     }
   }
 
+  /** Put one changed setting back to what it was when the page loaded. */
+  const revertPath = useCallback((path: string) => {
+    const baseline = baselineRef.current
+    if (!baseline) return
+    const original = readConfigPath(baseline, path)
+    updateConfig(path, original === undefined ? undefined : JSON.parse(JSON.stringify(original)))
+  }, [updateConfig])
+
   const resetConfig = () => {
     setLoading(true)
     fetchConfig()
   }
 
-  return { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig }
+  return { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig, revertPath, baseline: baselineRef.current }
 }
