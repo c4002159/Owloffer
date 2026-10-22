@@ -20,7 +20,7 @@ it('blocks invalid windows, saves multiple periods and reloads their exact times
   })
   vi.stubGlobal('fetch', fetchMock)
   const view = render(<ConfigPage />)
-  fireEvent.click(await screen.findByRole('button', { name: '投递与自动化' }))
+  fireEvent.change(await screen.findByLabelText('设置分类'), { target: { value: 'delivery' } })
   fireEvent.click(screen.getByRole('button', { name: '添加时间段' }))
   expect(screen.getByRole('button', { name: '保存' }).getAttribute('data-tour')).toBe('config-save')
   expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true)
@@ -36,7 +36,7 @@ it('blocks invalid windows, saves multiple periods and reloads their exact times
   expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
   view.unmount()
   render(<ConfigPage />)
-  fireEvent.click(await screen.findByRole('button', { name: '投递与自动化' }))
+  fireEvent.change(await screen.findByLabelText('设置分类'), { target: { value: 'delivery' } })
   expect((screen.getByLabelText('时间段 1 结束时间') as HTMLInputElement).value).toBe('11:30')
   expect((screen.getByLabelText('时间段 2 开始时间') as HTMLInputElement).value).toBe('14:00')
   fireEvent.click(screen.getByRole('button', { name: '删除时间段 2' }))
@@ -96,10 +96,10 @@ it('defaults optimization off and disabling unknown salary filtering follows int
   await screen.findByRole('switch', { name: '接受实习/管培岗位' })
   const filter = screen.getByRole('switch', { name: '过滤面议/无法解析薪资' })
   expect(filter.getAttribute('aria-checked')).toBe('true')
-  fireEvent.click(screen.getByRole('button', { name: '系统' }))
+  fireEvent.change(screen.getByLabelText('设置分类'), { target: { value: 'system' } })
   expect(screen.getByRole('switch', { name: '招呼语质量提醒' }).getAttribute('aria-checked')).toBe('false')
   expect(screen.queryByText('自动采用优化版')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: '求职档案' }))              // the profile category is shown again
+  fireEvent.change(screen.getByLabelText('设置分类'), { target: { value: 'profile' } })              // the profile category is shown again
   fireEvent.click(await screen.findByRole('switch', { name: '接受实习/管培岗位' }))
   const filterAgain = screen.getByRole('switch', { name: '过滤面议/无法解析薪资' })
   expect(filterAgain.getAttribute('aria-checked')).toBe('false')
@@ -122,7 +122,7 @@ it('points the guide at the enabled search platform when BOSS is off', async () 
     return new Response(JSON.stringify(body), { status: 200 })
   }))
   render(<ConfigPage />)
-  fireEvent.click(await screen.findByRole('button', { name: '搜索与关键词' }))
+  fireEvent.change(await screen.findByLabelText('设置分类'), { target: { value: 'search' } })
 
   const keyword = await screen.findByPlaceholderText('如：人力、产品运营')
   const city = screen.getByPlaceholderText('如：深圳')
@@ -139,7 +139,7 @@ it('points the guide at the platform switch when no search platform is enabled',
     return new Response(JSON.stringify(body), { status: 200 })
   }))
   render(<ConfigPage />)
-  fireEvent.click(await screen.findByRole('button', { name: '搜索与关键词' }))
+  fireEvent.change(await screen.findByLabelText('设置分类'), { target: { value: 'search' } })
 
   const bossSwitch = await screen.findByRole('checkbox', { name: 'BOSS 直聘' })
   expect(document.querySelector('[data-tour="search-keywords"]')).not.toBeNull()      // the keyword card is always there

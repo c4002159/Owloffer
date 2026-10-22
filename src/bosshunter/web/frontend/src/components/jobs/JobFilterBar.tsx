@@ -40,7 +40,7 @@ export function JobFilterBar({
 
   return (
     <div className={cn(!compact && "mb-4 rounded-2xl border border-card-border bg-surface p-3")}>
-      <div className={cn("grid min-w-0", compact ? "grid-cols-2 gap-1.5 xl:grid-cols-4" : "grid-cols-1 gap-2 md:grid-cols-2 2xl:grid-cols-4")}>
+      <div className={cn("grid min-w-0", compact ? "grid-cols-2 items-center gap-1.5 xl:grid-cols-4" : "grid-cols-1 gap-2 md:grid-cols-2 2xl:grid-cols-4")}>
         <label className={cn("relative min-w-0", compact ? "col-span-2 xl:col-span-1" : "md:col-span-2 2xl:col-span-1")}>
           <Search className={cn("pointer-events-none absolute text-muted", compact ? "left-2 top-2 h-3 w-3" : "left-3 top-2.5 h-4 w-4")} />
           <Input
@@ -76,7 +76,7 @@ export function JobFilterBar({
           value={filters.salaryMin}
           onChange={event => update('salaryMin', event.target.value)}
           placeholder="最低薪资 K"
-          className={cn(controlClass, compact && 'xl:order-1')}
+          className={controlClass}
           aria-label="最低薪资 K"
         />
         <Input
@@ -86,7 +86,7 @@ export function JobFilterBar({
           value={filters.salaryMax}
           onChange={event => update('salaryMax', event.target.value)}
           placeholder="最高薪资 K"
-          className={cn(controlClass, compact && 'xl:order-1')}
+          className={controlClass}
           aria-label="最高薪资 K"
         />
         {showStatus && (
@@ -102,28 +102,30 @@ export function JobFilterBar({
           ]} />
         )}
         {cityOptions.length > 0 && (
-          <MultiSelect className={cn(controlClass, compact && 'xl:order-1')} compact={compact} value={filters.city} onChange={value => updateMulti('city', value)} placeholder="城市：全部" options={cityOptions.map(city => ({ value: city, label: city }))} />
+          <MultiSelect className={controlClass} compact={compact} value={filters.city} onChange={value => updateMulti('city', value)} placeholder="城市：全部" options={cityOptions.map(city => ({ value: city, label: city }))} />
         )}
-        <MultiSelect className={cn(controlClass, compact && 'xl:order-1')} compact={compact} value={filters.education} onChange={value => updateMulti('education', value)} placeholder="学历：全部" options={[
+        <MultiSelect className={controlClass} compact={compact} value={filters.education} onChange={value => updateMulti('education', value)} placeholder="学历：全部" options={[
           { value: '博士', label: '博士' }, { value: '硕士', label: '硕士' }, { value: '本科', label: '本科' },
           { value: '大专', label: '大专' }, { value: '不限', label: '学历不限' }, { value: 'unknown', label: '未识别' },
         ]} />
-        <MultiSelect className={cn(controlClass, compact && 'xl:order-1')} compact={compact} value={filters.recruitmentType} onChange={value => updateMulti('recruitmentType', value)} placeholder="招聘类型：全部" options={[
+        <MultiSelect className={controlClass} compact={compact} value={filters.recruitmentType} onChange={value => updateMulti('recruitmentType', value)} placeholder="招聘类型：全部" options={[
           { value: 'campus', label: '校招' }, { value: 'experienced', label: '社招' }, { value: 'unknown', label: '未识别' },
         ]} />
-        <div className={cn("flex min-w-0 items-center gap-2", compact ? "col-span-2 justify-end xl:col-span-1" : "min-h-9 flex-wrap justify-between rounded-md border border-card-border bg-card px-3 py-1")}>
-          {!compact && <span className="whitespace-nowrap text-xs font-bold text-muted">筛选结果 {resultCount} / 总数 {totalCount}</span>}
+        {!compact && (
+        <div className="flex min-h-9 min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-card-border bg-card px-3 py-1">
+          <span className="whitespace-nowrap text-xs font-bold text-muted">筛选结果 {resultCount} / 总数 {totalCount}</span>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className={cn("h-7 px-2", compact && "text-xs")}
+            className="h-7 px-2"
             disabled={!hasActiveJobFilters(filters)}
             onClick={onReset}
           >
             <RotateCcw className="mr-1 h-3 w-3" />重置筛选
           </Button>
         </div>
+        )}
       </div>
       {invalidSalary && <p className="mt-2 text-xs font-bold text-danger">最低薪资不能高于最高薪资，请调整后再筛选。</p>}
     </div>

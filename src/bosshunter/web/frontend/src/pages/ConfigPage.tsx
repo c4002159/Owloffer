@@ -21,6 +21,7 @@ import { ResumeLibrary } from '@/components/config/ResumeLibrary'
 import { KeywordSettings } from '@/components/config/KeywordSettings'
 import { AiExtras, AutomationSettings, BrowserSettings, FreshnessSettings, SafetyExtras, ScoringExtras, TimezoneNotice } from '@/components/config/ExtraSettings'
 import { createContext, useContext } from 'react'
+import { CONFIG_CATEGORIES, CONFIG_CATEGORY_EVENT, categoryFromSection, type ConfigCategoryKey } from '@/lib/configCategories'
 
 const AI_SERVICES = {
   anthropic: {
@@ -55,21 +56,6 @@ const AI_SERVICES = {
 
 type AiService = keyof typeof AI_SERVICES
 
-const CATEGORIES = [
-  { key: 'profile', label: '求职档案', hint: '简历库、个人信息、求职偏好、过滤规则', sections: ['profile'] },
-  { key: 'search', label: '搜索与关键词', hint: '各平台的关键词、城市、页数、筛选', sections: ['keywords', 'search'] },
-  { key: 'scoring', label: '评分与过滤', hint: '评分阈值与分数门槛', sections: ['scoring'] },
-  { key: 'delivery', label: '投递与自动化', hint: '自动投递、发送额度、发送窗口', sections: ['delivery'] },
-  { key: 'monitor', label: '监测与跟进', hint: 'HR 回复检查、自动跟进', sections: ['monitor', 'follow_up'] },
-  { key: 'safety', label: '安全与反监测', hint: '页面上限、风险暂停、采集节奏', sections: ['collection'] },
-  { key: 'agent', label: '智能体连接', hint: 'Claude / Codex 的令牌、权限、连接方式', sections: ['agent_access'] },
-  { key: 'system', label: '系统', hint: 'AI 服务、浏览器、时区、去重', sections: ['ai', 'browser', 'dedup'] },
-] as const
-type CategoryKey = (typeof CATEGORIES)[number]['key']
-const SECTION_TO_CATEGORY: Record<string, CategoryKey> = {
-  profile: 'profile', search: 'search', keywords: 'search', scoring: 'scoring', delivery: 'delivery', throttle: 'delivery', monitor: 'monitor', follow_up: 'monitor',
-  collection: 'safety', safety: 'safety', agent_access: 'agent', agent: 'agent', ai: 'system', browser: 'system', dedup: 'system', system: 'system',
-}
 const ActiveSections = createContext<readonly string[]>([])
 type PlatformId = 'boss' | 'zhilian' | 'zhilian_campus' | '51job' | 'liepin'
 
@@ -81,7 +67,7 @@ const BOSS_FILTER_OPTIONS = {
   salary: ['3K以下', '3-5K', '5-10K', '10-20K', '20-50K', '50K以上'],
 } as const
 
-export default function ConfigPage() {
+export default function ConfigPage({ category: controlledCategory, onCategoryChange }: { category?: string; onCategoryChange?: (key: string) => void } = {}) {
   const { config, schema, loading, saving, dirty, error, message, updateConfig, saveConfig, resetConfig } = useConfig()
   const windowError = config ? sendWindowsError(config.throttle?.send_windows ?? ['09:00-16:00']) : null
   const requestedSection = new URLSearchParams(window.location.search).get('section')
@@ -90,15 +76,21 @@ export default function ConfigPage() {
     search: true,
     ...(requestedSection ? { [requestedSection]: true } : {}),
   }))
-  const [category, setCategory] = useState<CategoryKey>(() => SECTION_TO_CATEGORY[requestedSection || ''] ?? 'profile')
+  const [localCategory, setLocalCategory] = useState<ConfigCategoryKey>(() => categoryFromSection(requestedSection))
+  const category: ConfigCategoryKey = controlledCategory ? categoryFromSection(controlledCategory) : localCategory
+  const setCategory = (next: ConfigCategoryKey) => {
+    setLocalCategory(next)
+    onCategoryChange?.(next)
+  }
   useEffect(() => {
     const onCategory = (event: Event) => {
       const next = (event as CustomEvent<string>).detail
-      if (CATEGORIES.some(item => item.key === next)) setCategory(next as CategoryKey)
+      if (CONFIG_CATEGORIES.some(item => item.key === next)) setCategory(next as ConfigCategoryKey)
     }
-    window.addEventListener('bosshunter-config-category', onCategory)
-    return () => window.removeEventListener('bosshunter-config-category', onCategory)
-  }, [])
+    window.addEventListener(CONFIG_CATEGORY_EVENT, onCategory)
+    return () => window.removeEventListener(CONFIG_CATEGORY_EVENT, onCategory)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onCategoryChange])
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [modelList, setModelList] = useState<{ loading: boolean; models: string[]; message?: string; error?: boolean }>({ loading: false, models: [] })
   const modelRequest = useRef<AbortController | null>(null)
@@ -324,23 +316,9 @@ export default function ConfigPage() {
   const guidePlatform = (['boss', 'zhilian', 'zhilian_campus', '51job', 'liepin'] as PlatformId[])
     .find(platform => config.platforms?.[platform]?.enabled ?? platform === 'boss')
 
-  const activeCategory = CATEGORIES.find(item => item.key === category) ?? CATEGORIES[0]
+  const activeCategory = CONFIG_CATEGORIES.find(item => item.key === category) ?? CONFIG_CATEGORIES[0]
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 md:flex-row md:gap-5">
-      <nav aria-label="设置分类" className="flex shrink-0 gap-1 overflow-x-auto md:w-48 md:flex-col md:overflow-visible">
-        {CATEGORIES.map(item => (
-          <button
-            key={item.key}
-            type="button"
-            data-tour={item.key === 'system' ? 'ai-section' : undefined}
-            aria-current={item.key === category ? 'page' : undefined}
-            onClick={() => setCategory(item.key)}
-            className={`whitespace-nowrap rounded-xl px-3 py-2 text-left text-sm transition-colors ${item.key === category ? 'bg-secondary font-black text-primary' : 'text-muted hover:bg-surface hover:text-foreground'}`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+    <div className="h-full min-h-0">
       <ActiveSections.Provider value={activeCategory.sections}>
     <div className="h-full min-w-0 flex-1 overflow-y-auto space-y-4 pr-4">
         {/* Actions bar */}
@@ -358,6 +336,13 @@ export default function ConfigPage() {
             <Button data-tour="config-save" size="sm" onClick={saveConfig} disabled={saving || !dirty || !!windowError}><Save className="w-3 h-3 mr-1" />{saving ? '保存中...' : '保存'}</Button>
           </div>
         </div>
+
+        <div className="md:hidden">
+          <select aria-label="设置分类" value={category} onChange={event => setCategory(event.target.value as ConfigCategoryKey)} className="w-full rounded-xl border border-card-border bg-card px-3 py-2 text-sm font-bold">
+            {CONFIG_CATEGORIES.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+          </select>
+        </div>
+        <p className="text-xs text-muted">{activeCategory.hint}</p>
 
         {windowError && <p className="text-xs text-danger">发送时间窗口有误，请到「投递与自动化」修正后保存：{windowError}</p>}
 

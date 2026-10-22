@@ -1,10 +1,16 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom'
 import { Sidebar } from './components/layout/Sidebar'
 import { Header } from './components/layout/Header'
 import DashboardPage from './pages/DashboardPage'
 import ConfigPage from './pages/ConfigPage'
 import { OnboardingTour } from './components/onboarding/OnboardingTour'
 import { StarPrompt } from './components/layout/StarPrompt'
+
+/** The settings page; which group it shows lives in the address (?section=), so the sidebar can switch it. */
+function ConfigRoute() {
+  const [params, setParams] = useSearchParams()
+  return <ConfigPage category={params.get('section') || undefined} onCategoryChange={key => setParams({ section: key }, { replace: true })} />
+}
 
 function JobsPage() {
   return <DashboardPage view="jobs" />
@@ -26,7 +32,7 @@ export default function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/jobs" element={<JobsPage />} />
               <Route path="/monitor" element={<MonitorPage />} />
-              <Route path="/config" element={<ConfigPage />} />
+              <Route path="/config" element={<ConfigRoute />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </main>

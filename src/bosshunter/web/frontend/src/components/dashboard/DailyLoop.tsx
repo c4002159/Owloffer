@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Play, Settings2, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { PLATFORM_LABELS } from '@/lib/platforms'
 import type { DailyLoopController, DailyLoopIncident } from '@/hooks/useDailyLoop'
 
 const STEP_LABELS: Record<string, string> = {
@@ -16,7 +17,24 @@ function clock(iso?: string) {
 /** "运行全流程": the daily loop as one big card, with its settings behind the gear. */
 export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopController; blocked: boolean; onBlocked: () => void }) {
   const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
   const { settings, change, running, busy } = loop
+  // the settings popover closes on a click anywhere else, and on Escape
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
   const onClick = () => {
     if (running) {
       if (window.confirm('停止每日循环？正在运行的采集或投递任务会在当前一步结束后停止。')) void loop.stop()
@@ -30,7 +48,7 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
     if (window.confirm(`启动每日循环？\n\n时间：${settings.start}–${settings.end}；每个平台最多投递 ${cap || '不限'} 个。\n按“智联校招 ${settings.campusTarget} → 智联 → BOSS → 前程无忧 → 猎聘（各 ${settings.platformTarget}）”依次采集，每个平台采完自动批准并投递（智联校招留给你手动投递），投完再采下一轮；到结束时间或所有平台都到投递上限就自动停止。`)) void loop.start()
   }
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <div
         className={cn(
           'flex min-h-32 flex-col justify-between rounded-xl border p-4 transition md:p-5',
@@ -84,7 +102,7 @@ export function DailyLoopProgress({ loop }: { loop: DailyLoopController }) {
         <div className="flex flex-wrap gap-2 text-xs">
           {Object.entries(totals).map(([platform, values]) => (
             <span key={platform} className="rounded-full border border-card-border bg-card px-3 py-1 font-bold text-foreground">
-              {platform} {Object.entries(values).map(([key, value]) => `${TOTAL_LABELS[key] || key} ${value}`).join(' · ')}
+              {PLATFORM_LABELS[platform] || platform} {Object.entries(values).map(([key, value]) => `${TOTAL_LABELS[key] || key} ${value}`).join(' · ')}
             </span>
           ))}
         </div>

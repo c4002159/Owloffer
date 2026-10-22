@@ -45,7 +45,7 @@ export function MultiSelect({ value, options, placeholder, onChange, className, 
   }, [])
 
   return (
-    <details ref={detailsRef} aria-label={`${placeholder}选项`} className={cn('relative min-w-0', className)}>
+    <details ref={detailsRef} aria-label={`${placeholder}选项`} className={cn('relative w-full min-w-0', className)}>
       <summary
         ref={triggerRef}
         className={cn(

@@ -42,6 +42,7 @@ import {
   Pencil,
   Play,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
   Send,
@@ -412,7 +413,7 @@ function GettingStartedCard({
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-card-border pt-3">
         <p className="max-w-xl text-xs leading-5 text-muted">单独采集且关闭自动评分时，可先跳过简历和 AI 设置；运行全流程前请完成全部准备。</p>
         <div className="flex flex-wrap items-center gap-3">
-          <a data-tour="chrome-guide" className="text-xs font-semibold text-primary underline-offset-2 hover:underline" href="https://github.com/shengjidaguai-china/BossHunter/blob/main/docs/QUICKSTART.md#3-开启-chrome-远程调试" target="_blank" rel="noreferrer">连接 Chrome 说明 ↗</a>
+          <a data-tour="chrome-guide" className="text-xs font-semibold text-primary underline-offset-2 hover:underline" href="https://github.com/c4002159/ai-job/blob/main/docs/QUICKSTART.md#3-开启-chrome-远程调试" target="_blank" rel="noreferrer">连接 Chrome 说明 ↗</a>
           <Button data-tour="check-preflight" variant="secondary" size="sm" onClick={onCheck} disabled={checking}>
             <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
             {checking ? '检查中' : '检查准备情况'}
@@ -1236,8 +1237,18 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               筛选条件
               {activeTodayFilterCount > 0 && <span className="font-normal text-primary">已启用 {activeTodayFilterCount} 项</span>}
             </span>
-            <span className={hasInvalidSalaryRange(todayFilters) ? 'text-danger' : 'text-muted'}>
-              {hasInvalidSalaryRange(todayFilters) ? '薪资范围有误，请展开调整' : `${filteredTodayJobs.length} / ${todayJobs.length} 个岗位`}
+            <span className="flex items-center gap-2">
+              <span className={hasInvalidSalaryRange(todayFilters) ? 'text-danger' : 'text-muted'}>
+                {hasInvalidSalaryRange(todayFilters) ? '薪资范围有误，请展开调整' : `${filteredTodayJobs.length} / ${todayJobs.length} 个岗位`}
+              </span>
+              <button
+                type="button"
+                disabled={activeTodayFilterCount === 0}
+                onClick={event => { event.preventDefault(); event.stopPropagation(); setTodayFilters({ ...EMPTY_JOB_FILTERS }) }}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-bold text-muted hover:bg-secondary hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <RotateCcw className="h-3 w-3" />重置筛选
+              </button>
             </span>
           </summary>
           <div className="px-2 pb-2">
