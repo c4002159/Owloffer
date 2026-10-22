@@ -65,6 +65,7 @@ class AgentAccess:
         data.setdefault("requests", [])
         data.setdefault("events", [])
         data.setdefault("next_event", 1)
+        data.setdefault("ui_read", 0)
         return data
 
     def _save(self) -> None:
@@ -214,6 +215,20 @@ class AgentAccess:
         with self._lock:
             items = [dict(e) for e in self.state["events"] if int(e["id"]) > int(since)][:max(1, min(limit, 200))]
             return {"events": items, "latest": int(self.state["next_event"]) - 1}
+
+    # ------------------------------------------------------------------ the message center (what the user has seen)
+    def messages(self, limit: int = 100) -> dict[str, Any]:
+        """Newest first, with how many the user has not looked at yet."""
+        with self._lock:
+            items = [dict(e) for e in reversed(self.state["events"])][:max(1, min(limit, 300))]
+            unread = sum(1 for e in self.state["events"] if int(e["id"]) > int(self.state.get("ui_read", 0)))
+            return {"messages": items, "unread": unread, "latest": int(self.state["next_event"]) - 1}
+
+    def mark_read(self, upto: int | None = None) -> None:
+        with self._lock:
+            latest = int(self.state["next_event"]) - 1
+            self.state["ui_read"] = latest if upto is None else max(int(self.state.get("ui_read", 0)), min(int(upto), latest))
+            self._save()
 
     # ------------------------------------------------------------------ for the settings page
     def public_state(self) -> dict[str, Any]:

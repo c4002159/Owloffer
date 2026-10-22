@@ -3793,6 +3793,35 @@ def api_jobs_permanent_delete():
 		db.close()
 
 
+# ─── Message center feed ─────────────────────────────────
+
+_news_watcher = None
+
+
+def _start_news_watcher():
+	"""Announce finished tasks, paused platforms and new HR replies in the message center (and to Claude / Codex)."""
+	global _news_watcher
+	from bosshunter.news_watcher import NewsWatcher
+
+	def limits():
+		db = _get_web_db()
+		try:
+			return limit_details(db)
+		finally:
+			db.close()
+
+	def replies():
+		db = _get_web_db()
+		try:
+			return count_unresolved_monitor_items(db)
+		finally:
+			db.close()
+
+	if _news_watcher is None:
+		_news_watcher = NewsWatcher(lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), lambda: task_runner.status()["tasks"], limits, replies)
+		_news_watcher.start()
+
+
 # ─── Daily loop ──────────────────────────────────────────
 
 _SERVER_PORT = 8686
@@ -4028,6 +4057,23 @@ def api_agent_access_token():
 def api_agent_access_token_revoke():
 	_get_agent_access().revoke_token()
 	return _json_response(_get_agent_access().public_state())
+
+
+@app.route("/api/messages")
+def api_messages():
+	try:
+		limit = int(request.params.get("limit", 100))
+	except ValueError:
+		return _json_response({"error": "limit 必须是整数"}, 400)
+	return _json_response(_get_agent_access().messages(limit))
+
+
+@app.route("/api/messages/read", method="POST")
+def api_messages_read():
+	body = request.json if isinstance(request.json, dict) else {}
+	access = _get_agent_access()
+	access.mark_read(int(body["upto"]) if str(body.get("upto", "")).isdigit() else None)
+	return _json_response(access.messages(1))
 
 
 @app.route("/api/agent-access/mode", method="POST")
@@ -4506,6 +4552,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	global _SERVER_PORT
 	_SERVER_PORT = port
 	threading.Timer(6.0, lambda: _get_daily_loop().resume()).start()       # a restart continues a loop that was running
+	_start_news_watcher()
 
 	if open_browser:
 		import webbrowser

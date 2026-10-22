@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom'
 import { Activity } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
+import { MessageCenter } from './MessageCenter'
 import { BRAND_NAME } from '@/lib/owl'
 
 const pageTitles: Record<string, string> = {
@@ -22,6 +23,7 @@ export function Header() {
           <Activity className="w-3 h-3 text-success" />
           <span>本地服务运行中</span>
         </div>
+        <MessageCenter />
         <ThemeToggle />
       </div>
     </header>
