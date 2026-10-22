@@ -1752,6 +1752,7 @@ def api_workbench():
 				"unlimited": unlimited,
 			},
 			"task": status["active"],
+			"side_tasks": [task for task in status.get("active_tasks", []) if not status["active"] or task["id"] != status["active"]["id"]],
 			"last_task": status["last_task"],
 		})
 	finally:
@@ -3652,24 +3653,24 @@ def _busy_jobs(status: dict, only=None) -> dict[str, str]:
 			queued = task_runner._tasks.get(item.get("id"))
 			for job_id in (queued.context.get("queued_job_ids") if queued else None) or []:
 				busy.setdefault(str(job_id), "waiting")
-	active = status.get("active") or {}
-	runtime = task_runner._tasks.get(active.get("id"))
-	statuses = SCORING_STATUSES.get(active.get("mode") or "")
-	if runtime and statuses and runtime.status in {"running", "stopping"}:
-		db = _get_web_db()
-		try:
-			marks = ",".join("?" for _ in statuses)
-			query, params = f"SELECT id FROM jobs WHERE deleted_at IS NULL AND status IN ({marks})", list(statuses)
-			if only is not None:
-				ids = [str(job_id) for job_id in only]
-				if not ids:
-					return busy
-				query += f" AND id IN ({','.join('?' for _ in ids)})"
-				params += ids
-			for row in db.execute(query, params).fetchall():
-				busy.setdefault(str(row["id"]), "scoring")
-		finally:
-			db.close()
+	for active in status.get("active_tasks") or [status.get("active") or {}]:      # a collecting and a scoring task may both run
+		runtime = task_runner._tasks.get(active.get("id"))
+		statuses = SCORING_STATUSES.get(active.get("mode") or "")
+		if runtime and statuses and runtime.status in {"running", "stopping"}:
+			db = _get_web_db()
+			try:
+				marks = ",".join("?" for _ in statuses)
+				query, params = f"SELECT id FROM jobs WHERE deleted_at IS NULL AND status IN ({marks})", list(statuses)
+				if only is not None:
+					ids = [str(job_id) for job_id in only]
+					if not ids:
+						return busy
+					query += f" AND id IN ({','.join('?' for _ in ids)})"
+					params += ids
+				for row in db.execute(query, params).fetchall():
+					busy.setdefault(str(row["id"]), "scoring")
+			finally:
+				db.close()
 	return busy
 
 

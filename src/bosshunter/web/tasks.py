@@ -27,6 +27,17 @@ ACTIVE_STATUSES = {"running", "stopping"}
 QUEUED = "queued"          # waiting for the running task to end; starts by itself afterwards
 MAX_QUEUED = 5
 DEADLINE_MODES = {"full", "monitor", "deliver"}
+# Scoring only talks to the AI and writes its own scores, collection only talks to the platforms and adds postings: the two may
+# run side by side. Everything else (delivery, greetings, monitoring, the full flow) still has the program to itself.
+SCORING_MODES = {"score", "rescore"}
+COLLECTION_MODES = {"collect", "fill"}
+
+
+def modes_conflict(first: str, second: str) -> bool:
+    """Whether two kinds of task must not run at the same time."""
+    if (first in SCORING_MODES and second in COLLECTION_MODES) or (first in COLLECTION_MODES and second in SCORING_MODES):
+        return False
+    return True
 
 
 class TaskAlreadyRunningError(RuntimeError):
@@ -112,15 +123,16 @@ class WorkbenchTaskRunner:
             raise ValueError(f"Unsupported workbench mode: {mode}")
 
         with self._lock:
-            active = self._active_task_locked()
-            if active or self._queue:
+            blocking = self._blocking_locked(mode)
+            waiting = [item for item in self._queue if modes_conflict(item[0].mode, mode)]
+            if blocking or waiting:
                 if not queue_if_busy:
                     raise TaskAlreadyRunningError(
-                        f"当前已有后台任务「{active.label if active else self._queue[0][0].label}」正在运行或停止中，请等待其完全结束"
+                        f"当前已有后台任务「{blocking.label if blocking else waiting[0][0].label}」正在运行或停止中，请等待其完全结束"
                     )
                 if len(self._queue) >= MAX_QUEUED:
                     raise TaskAlreadyRunningError(f"排队的任务已有 {MAX_QUEUED} 个，请等前面的任务完成后再添加")
-                ahead = active.label if active else self._queue[-1][0].label
+                ahead = blocking.label if blocking else waiting[-1][0].label
                 task = WorkbenchTask(id=str(uuid4()), mode=mode, label=MODE_LABELS[mode], status=QUEUED)
                 task.logs.append(f"等待「{ahead}」完成，之后自动开始")
                 for key in ("_workbench_job_ids",):
@@ -165,6 +177,7 @@ class WorkbenchTaskRunner:
             tasks = [task.snapshot() for task in self._tasks.values()]
             return {
                 "active": active.snapshot() if active else None,
+                "active_tasks": [task.snapshot() for task in self._active_tasks_locked()],
                 "last_task": tasks[-1] if tasks else None,
                 "tasks": tasks,
                 "queued": [task.snapshot() for task, _config, _before in self._queue],
@@ -232,10 +245,13 @@ class WorkbenchTaskRunner:
             self._start_next()
 
     def _start_next(self) -> None:
-        """Start the first queued task once nothing is running any more."""
+        """Start the queued tasks that no longer conflict with a running one, in the order they were queued."""
         with self._lock:
-            while self._queue and not self._active_task_locked():
-                task, config, before_start = self._queue.pop(0)
+            while True:
+                index = next((i for i, item in enumerate(self._queue) if not self._blocking_locked(item[0].mode)), None)
+                if index is None:
+                    return
+                task, config, before_start = self._queue.pop(index)
                 if task.stop_requested.is_set():
                     continue
                 deadline = _deadline_from_config(task.mode, config)
@@ -266,7 +282,6 @@ class WorkbenchTaskRunner:
                 thread = Thread(target=self._run, args=(task, config), daemon=True)
                 self._threads[task.id] = thread
                 thread.start()
-                return
 
     def _stop_at_deadline(self, task_id: str) -> None:
         try:
@@ -274,9 +289,18 @@ class WorkbenchTaskRunner:
         except KeyError:
             return
 
+    def _active_tasks_locked(self) -> list[WorkbenchTask]:
+        return [task for task in self._tasks.values() if task.status in ACTIVE_STATUSES]
+
     def _active_task_locked(self) -> WorkbenchTask | None:
-        for task in self._tasks.values():
-            if task.status in ACTIVE_STATUSES:
+        """The task the workbench shows as the running one: a collecting/delivering one first, a scoring one otherwise."""
+        active = self._active_tasks_locked()
+        main = [task for task in active if task.mode not in SCORING_MODES]
+        return (main or active or [None])[0]
+
+    def _blocking_locked(self, mode: str) -> WorkbenchTask | None:
+        for task in self._active_tasks_locked():
+            if modes_conflict(task.mode, mode):
                 return task
         return None
 

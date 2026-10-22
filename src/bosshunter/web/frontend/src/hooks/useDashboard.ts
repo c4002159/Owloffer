@@ -137,6 +137,7 @@ interface WorkbenchData {
   needs_resume: Job[]
   send_quota: { daily_limit: number; sent: number; remaining: number; exhausted: boolean }
   task: WorkbenchTask | null
+  side_tasks?: WorkbenchTask[]            // tasks that run next to the main one (scoring beside collecting)
   last_task: WorkbenchTask | null
 }
 

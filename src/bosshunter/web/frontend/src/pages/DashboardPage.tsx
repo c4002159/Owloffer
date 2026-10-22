@@ -543,6 +543,10 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const reviewedGreetingJobs = pendingGreetingJobs.filter(job => job.greeting_selection !== 'pending')
   const pendingGreetingReviewCount = pendingGreetingJobs.length - reviewedGreetingJobs.length
   const activeTask = workbench.task
+  const sideTasks = workbench.side_tasks ?? []
+  // Scoring may run next to a collection, so a running scoring task does not stop collecting from being started.
+  const scoringOnly = Boolean(activeTask && ['score', 'rescore'].includes(activeTask.mode) && !sideTasks.length)
+  const blockedByTask = (mode: string) => Boolean(activeTask && !(mode === 'collect' && scoringOnly))
   const visibleTask = activeTask || workbench.last_task
   const visibleTaskError = visibleTask?.error ? taskErrorFeedback(visibleTask.error) : null
   const fullStage = visibleTask ? currentTaskStage(visibleTask) : ''
@@ -952,7 +956,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   ]
   const renderModeCard = (item: { mode: WorkbenchMode; title: string; description: string }) => {
     const isActive = activeTask?.mode === item.mode && !loopBlocksOthers
-    const disabled = Boolean((activeTask || loopBlocksOthers) && !isActive)
+    const disabled = Boolean((blockedByTask(item.mode) || loopBlocksOthers) && !isActive)
     return (
       <button
         key={item.mode}
@@ -1021,7 +1025,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <DailyLoopCard loop={dailyLoop} blocked={Boolean(activeTask)} onBlocked={() => setNotice(`当前正在运行${activeTask?.label || '其他任务'}，请先停止后再启动每日循环。`)} />
+            <DailyLoopCard loop={dailyLoop} blocked={blockedByTask('collect')} onBlocked={() => setNotice(`当前正在运行${activeTask?.label || '其他任务'}，请先停止后再启动每日循环。`)} />
             {modes.map(renderModeCard)}
           </div>
         </section>
@@ -1176,7 +1180,18 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               </div>
             )}
           </div>
-            ) : !dailyLoop.running && <p className="py-2 text-xs text-muted">当前没有正在进行的任务。</p>}
+            ) : !dailyLoop.running && !sideTasks.length && <p className="py-2 text-xs text-muted">当前没有正在进行的任务。</p>}
+            {sideTasks.map(task => (
+              <div key={task.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-card-border bg-surface px-3 py-2 text-sm">
+                <span className="min-w-0">
+                  <span className="font-black">{task.label}</span>
+                  <span className="ml-2 text-xs text-muted">与上面的任务同时进行 · {currentTaskStage(task).split('\n')[0]}</span>
+                </span>
+                <Button size="sm" variant="secondary" disabled={task.status !== 'running'} onClick={() => { if (window.confirm(`停止${task.label}？已完成的结果会保留。`)) void stopTask(task.id) }}>
+                  {task.status === 'stopping' ? '正在停止...' : '停止'}
+                </Button>
+              </div>
+            ))}
             <details className="group rounded-xl border border-card-border bg-surface">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-bold [&::-webkit-details-marker]:hidden">
                 最近活动
