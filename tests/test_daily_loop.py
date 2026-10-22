@@ -195,3 +195,38 @@ def test_the_loop_waits_for_its_start_time_and_refuses_times_that_do_not_make_se
         _loop(FakeServer(), tmp_path / "x").start({"end_time": "08:00"})       # the end time already passed (it is 09:00)
     with pytest.raises(ValueError):
         _loop(FakeServer(), tmp_path / "y").start({"start_time": "11:00", "end_time": "10:00"})
+
+
+def test_each_platform_can_be_automatic_manual_or_left_out(tmp_path):
+    server = FakeServer()
+    loop = _loop(server, tmp_path)
+    loop.start({"modes": {"zhilian_campus": "off", "boss": "manual", "liepin": "auto", "zhilian": "off", "51job": "off"}, "end_time": "09:20"})
+    loop.join(10)
+    collected = [body["options"]["platform_order"][0] for method, path, body in server.calls if path == "/api/workbench/task" and method == "POST"]
+    assert set(collected) == {"boss", "liepin"}                                    # the ones left out are never touched
+    delivers = [body for method, path, body in server.calls if path == "/api/workbench/deliver"]
+    assert delivers and all(all(job.startswith("liepin") for job in body["job_ids"]) for body in delivers)   # manual: collected, never delivered
+    state = loop.snapshot()
+    assert state["modes"]["boss"] == "manual" and state["order"] == ["boss", "liepin"]
+
+
+def test_campus_is_always_manual_and_at_least_one_platform_must_take_part(tmp_path):
+    import pytest
+
+    loop = _loop(FakeServer(), tmp_path)
+    loop.start({"modes": {"zhilian_campus": "auto", "zhilian": "off", "boss": "off", "51job": "off", "liepin": "off"}, "end_time": "09:05"})
+    loop.join(10)
+    assert loop.snapshot()["modes"]["zhilian_campus"] == "manual"
+    with pytest.raises(ValueError):
+        _loop(FakeServer(), tmp_path / "x").start({"modes": {p: "off" for p in ("zhilian_campus", "zhilian", "boss", "51job", "liepin")}})
+    with pytest.raises(ValueError):
+        _loop(FakeServer(), tmp_path / "y").start({"modes": {"boss": "sometimes"}})
+
+
+def test_the_cap_ends_the_loop_when_every_automatic_platform_is_capped_even_if_others_are_manual(tmp_path):
+    server = FakeServer()
+    server.confirm = [{"id": f"liepin:{n}", "source_platform": "liepin"} for n in range(6)]
+    loop = _loop(server, tmp_path)
+    loop.start({"modes": {"zhilian_campus": "off", "zhilian": "off", "boss": "manual", "51job": "off", "liepin": "auto"}, "end_time": "12:00", "delivery_cap": 3})
+    loop.join(10)
+    assert "上限" in loop.snapshot()["message"]

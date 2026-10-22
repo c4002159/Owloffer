@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { Play, Settings2, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PLATFORM_LABELS } from '@/lib/platforms'
-import type { DailyLoopController, DailyLoopIncident } from '@/hooks/useDailyLoop'
+import { LOOP_PLATFORMS, type DailyLoopController, type DailyLoopIncident, type LoopMode, type LoopPlatform } from '@/hooks/useDailyLoop'
+
+const MODE_OPTIONS: Array<{ value: LoopMode; label: string }> = [
+  { value: 'auto', label: '全自动：采集 → 自动确认 → 投递' },
+  { value: 'manual', label: '采集后我手动确认' },
+  { value: 'off', label: '不参加' },
+]
 
 const STEP_LABELS: Record<string, string> = {
   starting: '启动', waiting: '等待开始', check: '检查', collect: '采集', approve: '批准', greet: '生成招呼语', deliver: '投递', idle: '等待', finished: '已结束', api: '接口', loop: '循环',
@@ -35,6 +41,11 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
       document.removeEventListener('keydown', escape)
     }
   }, [open])
+
+  const modeOf = (platform: LoopPlatform): LoopMode => (platform === 'zhilian_campus' && settings.modes[platform] !== 'off' ? 'manual' : settings.modes[platform])
+  const counts = { auto: 0, manual: 0, off: 0 }
+  LOOP_PLATFORMS.forEach(platform => { counts[modeOf(platform)] += 1 })
+
   const onClick = () => {
     if (running) {
       if (window.confirm('停止每日循环？正在运行的采集或投递任务会在当前一步结束后停止。')) void loop.stop()
@@ -44,9 +55,24 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
       onBlocked()
       return
     }
+    if (counts.auto + counts.manual === 0) {
+      setOpen(true)
+      return
+    }
     const cap = Number.parseInt(settings.cap, 10) || 0
-    if (window.confirm(`启动每日循环？\n\n时间：${settings.start}–${settings.end}；每个平台最多投递 ${cap || '不限'} 个。\n按“智联校招 ${settings.campusTarget} → 智联 → BOSS → 前程无忧 → 猎聘（各 ${settings.platformTarget}）”依次采集，每个平台采完自动批准并投递（智联校招留给你手动投递），投完再采下一轮；到结束时间或所有平台都到投递上限就自动停止。`)) void loop.start()
+    const summary = LOOP_PLATFORMS.filter(platform => modeOf(platform) !== 'off')
+      .map(platform => `${PLATFORM_LABELS[platform]}（${modeOf(platform) === 'auto' ? '全自动' : '手动确认'}）`).join('、')
+    const text = [
+      '启动每日循环？',
+      '',
+      `参加的平台：${summary}`,
+      `时间：${settings.start}–${settings.end}；每个全自动平台最多投递 ${cap || '不限'} 个。`,
+      '全自动的平台：采集 → 自动批准 → 投递，投完再采下一轮；手动确认的平台：只采集和评分，岗位留在「手动确认区」等你点同意。',
+      '到结束时间或所有全自动平台都到投递上限就自动停止。',
+    ].join('\n')
+    if (window.confirm(text)) void loop.start()
   }
+
   return (
     <div ref={rootRef} className="relative">
       <div
@@ -61,7 +87,9 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
         </button>
         <div className="flex items-end justify-between gap-2">
           <p className={cn('text-xs leading-5', running ? 'text-primary-foreground/85' : 'text-muted')}>
-            {running ? `${settings.start}–${clock(loop.state.end_at) || settings.end} · 每平台最多投递 ${loop.state.delivery_cap || '不限'}` : '每日自动：采集 → 批准 → 投递，循环到结束时间'}
+            {running
+              ? `${settings.start}–${clock(loop.state.end_at) || settings.end} · 每平台最多投递 ${loop.state.delivery_cap || '不限'}`
+              : `参加 ${counts.auto + counts.manual} 个平台：${counts.auto} 个全自动${counts.manual ? `，${counts.manual} 个手动确认` : ''}${counts.off ? `，${counts.off} 个不参加` : ''}`}
           </p>
           {!running && (
             <button type="button" aria-label="每日循环设置" aria-expanded={open} onClick={() => setOpen(value => !value)} className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-secondary hover:text-primary">
@@ -71,16 +99,33 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
         </div>
       </div>
       {open && !running && (
-        <div className="absolute left-0 right-0 top-full z-20 mt-2 space-y-3 rounded-xl border border-card-border bg-card p-4 text-xs shadow-lg">
+        <div className="absolute left-0 top-full z-30 mt-2 w-[min(26rem,86vw)] space-y-3 rounded-xl border border-card-border bg-card p-4 text-xs shadow-lg">
           <div className="font-black text-foreground">每日循环设置</div>
+          <div className="space-y-2 rounded-lg border border-card-border bg-surface p-2">
+            <div className="font-bold text-foreground">哪些平台参加、怎么参加</div>
+            {LOOP_PLATFORMS.map(platform => (
+              <div key={platform} className="flex items-center justify-between gap-2">
+                <span className="font-bold">{PLATFORM_LABELS[platform]}</span>
+                <select
+                  aria-label={`${PLATFORM_LABELS[platform]}参加方式`}
+                  value={modeOf(platform)}
+                  onChange={event => change({ modes: { ...settings.modes, [platform]: event.target.value as LoopMode } })}
+                  className="w-56 rounded-lg border border-card-border bg-card px-2 py-1"
+                >
+                  {MODE_OPTIONS.filter(option => platform !== 'zhilian_campus' || option.value !== 'auto').map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+            ))}
+            <p className="leading-5 text-muted">「手动确认」的平台只采集和评分，岗位留在「手动确认区」等你点同意；智联校招只能手动投递。</p>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 font-bold">开始时间<input type="time" value={settings.start} onChange={e => change({ start: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="space-y-1 font-bold">结束时间<input type="time" value={settings.end} onChange={e => change({ end: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="space-y-1 font-bold">校招目标（新增岗位）<input type="number" min={1} value={settings.campusTarget} onChange={e => change({ campusTarget: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="space-y-1 font-bold">其他平台目标（各）<input type="number" min={1} value={settings.platformTarget} onChange={e => change({ platformTarget: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
-            <label className="col-span-2 space-y-1 font-bold">每个平台每天投递上限（0 = 不限）<input type="number" min={0} max={1000} value={settings.cap} onChange={e => change({ cap: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
+            <label className="col-span-2 space-y-1 font-bold">每个全自动平台每天投递上限（0 = 不限）<input type="number" min={0} max={1000} value={settings.cap} onChange={e => change({ cap: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
           </div>
-          <p className="leading-5 text-muted">设置会记住。采集时间窗口、发送窗口在「配置 → 反监测」里调整。</p>
+          <p className="leading-5 text-muted">设置会记住。采集时间窗口、发送窗口在「配置 → 投递与自动化」里调整。</p>
         </div>
       )}
     </div>
@@ -102,7 +147,7 @@ export function DailyLoopProgress({ loop }: { loop: DailyLoopController }) {
         <div className="flex flex-wrap gap-2 text-xs">
           {Object.entries(totals).map(([platform, values]) => (
             <span key={platform} className="rounded-full border border-card-border bg-card px-3 py-1 font-bold text-foreground">
-              {PLATFORM_LABELS[platform] || platform} {Object.entries(values).map(([key, value]) => `${TOTAL_LABELS[key] || key} ${value}`).join(' · ')}
+              {PLATFORM_LABELS[platform] || platform}{state.modes?.[platform] === 'manual' ? '（手动确认）' : ''} {Object.entries(values).map(([key, value]) => `${TOTAL_LABELS[key] || key} ${value}`).join(' · ')}
             </span>
           ))}
         </div>

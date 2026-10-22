@@ -7,7 +7,7 @@ export const CONFIG_CATEGORIES = [
   { key: 'monitor', label: '监测与跟进', hint: 'HR 回复检查、自动跟进', sections: ['monitor', 'follow_up'] },
   { key: 'safety', label: '安全与反监测', hint: '页面上限、风险暂停、采集节奏', sections: ['collection'] },
   { key: 'agent', label: '智能体连接', hint: 'Claude / Codex 的令牌、权限、连接方式', sections: ['agent_access'] },
-  { key: 'system', label: '系统', hint: 'AI 服务、浏览器、时区、去重', sections: ['ai', 'browser', 'dedup'] },
+  { key: 'system', label: '系统', hint: 'AI 服务、浏览器、时区、数据备份、运行日志、去重', sections: ['ai', 'browser', 'data', 'dedup'] },
 ] as const
 
 export type ConfigCategoryKey = (typeof CONFIG_CATEGORIES)[number]['key']

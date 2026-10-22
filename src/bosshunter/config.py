@@ -162,6 +162,11 @@ DEFAULTS: dict[str, Any] = {
             },
         },
     },
+    "backup": {
+        # One backup a day (database, settings, resumes) into data/backups, keeping the newest ``keep``.
+        "enabled": True,
+        "keep": 14,
+    },
     "automation": {
         # Read each keyword's list as head + remembered deep window instead of its first pages every day (scan_frontier.py).
         "page_frontier": True,

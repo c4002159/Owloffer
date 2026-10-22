@@ -18,6 +18,7 @@ import { PlatformLimitNotice } from '@/components/dashboard/PlatformLimitNotice'
 import { DailyLoopCard, DailyLoopIncidents, DailyLoopProgress } from '@/components/dashboard/DailyLoop'
 import { AgentRequestsInbox, useAgentRequests } from '@/components/dashboard/AgentRequests'
 import { useDailyLoop } from '@/hooks/useDailyLoop'
+import { PausedScoringBanner, describeScoringRun, useScoringRuns } from '@/components/dashboard/PausedScoring'
 import {
   EMPTY_JOB_FILTERS,
   filterJobs,
@@ -470,6 +471,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const startedGreetTaskIdRef = useRef<string | null>(null)
   const dailyLoop = useDailyLoop(setNotice)
   const agentRequests = useAgentRequests()
+  const scoringRuns = useScoringRuns()
   const [activityTab, setActivityTab] = useState<'running' | 'queued'>('running')
   const [confirmTab, setConfirmTab] = useState<ConfirmTab | null>(null)
 
@@ -1062,13 +1064,15 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         </section>
       )}
 
+      <PausedScoringBanner runs={scoringRuns} onChanged={() => void refresh()} />
+
       <section className="rounded-2xl border border-card-border bg-card p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-bold tracking-tight">今日活动</h2>
           <div className="inline-flex rounded-full border border-card-border bg-surface p-1">
             {([
               { value: 'running' as const, label: '正在进行' },
-              { value: 'queued' as const, label: `等待队列${queuedTasks.length ? ` ${queuedTasks.length}` : ''}` },
+              { value: 'queued' as const, label: `等待队列${queuedTasks.length + scoringRuns.paused.length ? ` ${queuedTasks.length + scoringRuns.paused.length}` : ''}` },
             ]).map(option => (
               <button key={option.value} type="button" onClick={() => setActivityTab(option.value)}
                 className={`rounded-full px-3 py-1 text-xs font-black transition ${activityTab === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted hover:text-primary'}`}>
@@ -1185,8 +1189,17 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               </div>
             </details>
           </div>
-        ) : queuedTasks.length ? (
+        ) : queuedTasks.length || scoringRuns.paused.length ? (
           <ul className="space-y-2">
+            {scoringRuns.paused.map(run => (
+              <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning-border bg-warning-soft px-3 py-2 text-sm">
+                <span><span className="font-bold">评分任务（暂停中，等你处理）</span><span className="ml-2 text-xs text-muted">{describeScoringRun(run)}</span></span>
+                <span className="flex gap-2">
+                  <button type="button" disabled={scoringRuns.busy === run.id} onClick={() => void scoringRuns.resume(run, () => void refresh())} className="rounded-lg bg-primary px-3 py-1 text-xs font-bold text-primary-foreground disabled:opacity-50">继续</button>
+                  <button type="button" disabled={scoringRuns.busy === run.id} onClick={() => { if (window.confirm('结束这个评分任务？已评完的结果会保留。')) void scoringRuns.end(run, () => void refresh()) }} className="rounded-lg border border-card-border bg-card px-3 py-1 text-xs font-bold">结束</button>
+                </span>
+              </li>
+            ))}
             {queuedTasks.map(task => (
               <li key={task.id} className="rounded-xl border border-card-border bg-surface px-3 py-2 text-sm">
                 <span className="font-bold">{task.label}</span>
@@ -2127,7 +2140,9 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
   const deliverSelectedJobs = async () => {
     if (!selectedIds.length) return
     const count = selectedIds.length
-    if (!window.confirm(`确认投递已选择的 ${count} 个岗位吗？BOSS、前程无忧和猎聘岗位可进入发送队列，且仍受发送时间窗口和每日额度限制。`)) return
+    if (!window.confirm(`确认投递已选择的 ${count} 个岗位吗？
+
+选中就视为同意，不需要先标记“已通过”。已过滤、已跳过、已拒绝、已投递的岗位，以及只能手动投递的智联校招，会自动忽略；其余按安全队列发送，仍受发送时间窗口和每日额度限制。`)) return
     try {
       const result = await postJobAction('/api/workbench/deliver', { job_ids: selectedIds, skip_invalid: true })
       setSelectedIds([])
@@ -2297,7 +2312,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
     if (!res.ok) {
       if (res.status === 409 && data.code === 'scoring_run_paused' && !options.force) {
         const confirmed = window.confirm(
-          `已有等待恢复的评分任务：${data.error || ''}\n是否结束该任务并强制开始新评分任务？（已完成的评分结果会保留）`,
+          `有一个评分任务之前停在半路（用户暂停、程序重启或出错），还没做完。\n\n它在「工作台 → 今日活动」顶部有“继续评分”按钮，可以接着做。\n\n如果你不要它了：点“确定”会结束它，并立刻开始这次新的评分（已评完的结果会保留，没评的这次会重新评）。点“取消”则什么都不做。`,
         )
         if (confirmed) {
           return await startScoring({ ...options, force: true })
@@ -2456,7 +2471,7 @@ function JobsPoolView({ updateJobStatus }: { updateJobStatus: (jobId: string, st
         </DropMenu>
         <ExportMenu onExport={exportJobs} hasSelection={selectedIds.length > 0} hasFiltered={total > 0} />
       </div>
-      {notice && <div className="sticky top-2 z-30 mb-4 rounded-xl bg-secondary px-4 py-3 text-sm text-primary shadow-md">{notice}</div>}
+      {notice && <div className="sticky top-2 z-20 mb-4 rounded-xl bg-secondary px-4 py-3 text-sm text-primary shadow-md">{notice}</div>}
       {(deliveryTask || waitingJobs.length > 0 || failedJobs.length > 0) && (
         <details className="group mb-4 rounded-2xl border border-card-border bg-surface p-4" open={deliveryTask?.status === 'running'}>
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-black [&::-webkit-details-marker]:hidden">
@@ -2549,7 +2564,7 @@ function DropMenu({ label, icon, children, align = 'left' }: { label: string; ic
         {icon}{label}<ChevronDown className={`ml-1 h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
       </Button>
       {open && (
-        <div role="menu" onClick={() => setOpen(false)} className={`absolute top-full z-30 mt-1 min-w-48 rounded-xl border border-card-border bg-card p-1 shadow-lg ${align === 'right' ? 'right-0' : 'left-0'}`}>
+        <div role="menu" onClick={() => setOpen(false)} className={`absolute top-full z-40 mt-1 min-w-48 rounded-xl border border-card-border bg-card p-1 shadow-lg ${align === 'right' ? 'right-0' : 'left-0'}`}>
           {children}
         </div>
       )}

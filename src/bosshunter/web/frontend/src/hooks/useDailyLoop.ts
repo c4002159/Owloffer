@@ -28,8 +28,14 @@ export interface DailyLoopState {
   totals?: Record<string, Record<string, number>>
   incidents?: DailyLoopIncident[]
   order?: string[]
+  modes?: Record<string, string>
   targets?: Record<string, number>
 }
+
+export type LoopMode = 'auto' | 'manual' | 'off'
+
+export const LOOP_PLATFORMS = ['zhilian_campus', 'zhilian', 'boss', '51job', 'liepin'] as const
+export type LoopPlatform = (typeof LOOP_PLATFORMS)[number]
 
 export interface DailyLoopSettings {
   start: string
@@ -37,14 +43,19 @@ export interface DailyLoopSettings {
   cap: string
   campusTarget: string
   platformTarget: string
+  modes: Record<LoopPlatform, LoopMode>
 }
 
 const SETTINGS_KEY = 'owloffer.dailyLoop.settings'
-const DEFAULTS: DailyLoopSettings = { start: '07:00', end: '20:00', cap: '150', campusTarget: '50', platformTarget: '80' }
+const DEFAULTS: DailyLoopSettings = {
+  start: '07:00', end: '20:00', cap: '150', campusTarget: '50', platformTarget: '80',
+  modes: { zhilian_campus: 'manual', zhilian: 'auto', boss: 'auto', '51job': 'auto', liepin: 'auto' },
+}
 
 function loadSettings(): DailyLoopSettings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}') }
+    const saved = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) || '{}')
+    return { ...DEFAULTS, ...saved, modes: { ...DEFAULTS.modes, ...(saved.modes || {}) } }
   } catch {
     return { ...DEFAULTS }
   }
@@ -99,6 +110,7 @@ export function useDailyLoop(setNotice: (message: string) => void) {
         start_time: settings.start,
         end_time: settings.end,
         delivery_cap: count(settings.cap, 150),
+        modes: settings.modes,
         targets: { zhilian_campus: campus, zhilian: other, boss: other, '51job': other, liepin: other },
       }))
       setNotice('每日循环已启动。')

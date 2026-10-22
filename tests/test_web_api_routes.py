@@ -1737,12 +1737,13 @@ class WebApiRouteTests(unittest.TestCase):
         self.assertEqual(payload["already_sent_ids"], ["already-sent"])
         self.assertEqual(payload["not_ready_ids"], [])
 
-    def test_web_api_deliver_reports_pending_jobs_as_not_ready_instead_of_already_sent(self):
+    def test_web_api_deliver_refuses_jobs_the_user_took_out_of_the_running(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
             db = get_db(base_dir / "data" / "bosshunter.db")
             try:
-                insert_job(db, _job("pending-without-history"))
+                insert_job(db, _job("filtered-job"))
+                update_job_status(db, "filtered-job", "filtered")
             finally:
                 db.close()
             server.set_base_dir(base_dir)
@@ -1750,15 +1751,42 @@ class WebApiRouteTests(unittest.TestCase):
             status, _, body = self._request(
                 "/api/workbench/deliver",
                 method="POST",
-                json_body={"job_ids": ["pending-without-history"]},
+                json_body={"job_ids": ["filtered-job"]},
             )
 
         self.assertTrue(status.startswith("409"), body)
         payload = json.loads(body)
-        self.assertEqual(payload["error"], "所选岗位尚未完成评分筛选或人工确认，暂不能投递")
-        self.assertEqual(payload["invalid_ids"], ["pending-without-history"])
+        self.assertEqual(payload["error"], "所选岗位已被过滤、跳过或拒绝，暂不能投递")
+        self.assertEqual(payload["invalid_ids"], ["filtered-job"])
         self.assertEqual(payload["already_sent_ids"], [])
-        self.assertEqual(payload["not_ready_ids"], ["pending-without-history"])
+
+    def test_web_api_deliver_takes_a_selected_job_that_was_never_marked_approved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                insert_job(db, _job("never-approved"))                  # status pending: not scored, not approved
+                insert_job(db, _job("rejected-job"))
+                update_job_status(db, "rejected-job", "rejected")
+            finally:
+                db.close()
+            server.set_base_dir(base_dir)
+
+            with patch.object(server.task_runner, "start", return_value={"id": "deliver-task"}):
+                status, _, body = self._request(
+                    "/api/workbench/deliver",
+                    method="POST",
+                    json_body={"job_ids": ["never-approved", "rejected-job"], "skip_invalid": True},
+                )
+            db = get_db(base_dir / "data" / "bosshunter.db")
+            try:
+                statuses = {row["id"]: row["status"] for row in db.execute("SELECT id, status FROM jobs").fetchall()}
+            finally:
+                db.close()
+
+        self.assertTrue(status.startswith("200"), body)
+        self.assertEqual(statuses["never-approved"], "approved")      # selecting it was the approval
+        self.assertEqual(statuses["rejected-job"], "rejected")        # what was rejected stays out
 
     def test_web_api_direct_send_requires_a_retryable_greeting(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -31,6 +31,8 @@ from bosshunter.agent_api import (
 	apply_preferences,
 	validate_agent_evaluations,
 )
+from datetime import datetime
+
 from bosshunter import __version__
 from bosshunter.ai.credentials import AIRequestError, get_ai_api_key, list_ai_models
 from bosshunter.ai.scorer import sanitize_score_trace
@@ -800,6 +802,11 @@ def _take_active_delivery(task: WorkbenchTask) -> dict | None:
 			return pending.pop(0)
 		task.context["delivering"] = False
 		return None
+
+
+# Selecting a posting and delivering it is the approval: only what the user (or a rule) already took out of the running is excluded
+# (filtered, skipped, rejected, already delivered). Marking "approved" first is not required.
+DELIVER_BY_SELECTION = ("pending", "scored", "ready", "approved")
 
 
 def _execute_deliver(task: WorkbenchTask, config: dict) -> None:
@@ -2165,7 +2172,7 @@ def api_workbench_deliver():
 				}, 403)
 			skipped_info = None
 			if skip_invalid:
-				allowed_now = {"ready", "approved", "error"} if direct_send else {"ready", "approved"}
+				allowed_now = {*DELIVER_BY_SELECTION, "error"} if direct_send else set(DELIVER_BY_SELECTION)
 				keep_ids: list[str] = []
 				skipped_by_status: dict[str, int] = {}
 				for row in platform_rows:
@@ -2185,7 +2192,7 @@ def api_workbench_deliver():
 						keep_ids.append(str(row["id"]))
 				if not keep_ids:
 					return _json_response({
-						"error": "所选岗位里没有可投递的岗位：只有“已通过/待确认”的岗位能投递（已过滤、已跳过、已投递的会被忽略）",
+						"error": "所选岗位里没有可投递的岗位：已过滤、已跳过、已拒绝、已投递的会被忽略",
 						"skipped_by_status": skipped_by_status,
 					}, 409)
 				skipped_info = {
@@ -2217,7 +2224,7 @@ def api_workbench_deliver():
 					"code": "greeting_review_required",
 					"invalid_ids": pending_review_ids,
 				}, 409)
-			allowed_statuses = {"ready", "approved", "error"} if direct_send else {"ready", "approved"}
+			allowed_statuses = {*DELIVER_BY_SELECTION, "error"} if direct_send else set(DELIVER_BY_SELECTION)
 			completed_statuses = {"sent", "replied", "resume_sent", "needs_resume", "follow_up_sent"}
 			already_sent_ids = {
 				str(row["id"])
@@ -2248,7 +2255,7 @@ def api_workbench_deliver():
 				elif missing_greeting_ids and not already_sent_ids and not not_ready_ids:
 					error = "所选岗位尚未生成招呼语，不能直接发送"
 				elif not_ready_ids and not already_sent_ids and not missing_greeting_ids:
-					error = "所选岗位尚未完成评分筛选或人工确认，暂不能投递"
+					error = "所选岗位已被过滤、跳过或拒绝，暂不能投递"
 				else:
 					error = "所选岗位包含尚未准备好、缺少招呼语或已经投递的岗位，暂不能投递"
 				return _json_response({
@@ -3793,6 +3800,130 @@ def api_jobs_permanent_delete():
 		db.close()
 
 
+# ─── Backups and logs ────────────────────────────────────
+
+def _backup_settings() -> tuple[bool, int]:
+	config = load_config(CONFIG_PATH)
+	section = config.get("backup") if isinstance(config.get("backup"), dict) else {}
+	try:
+		keep = max(1, int(section.get("keep", 14)))
+	except (TypeError, ValueError):
+		keep = 14
+	return section.get("enabled", True) is not False, keep
+
+
+def _make_backup(tag: str = ""):
+	from bosshunter import system_data
+
+	return system_data.create_backup(BASE_DIR, DATA_DIR, CONFIG_PATH, RESUME_DIR, keep=_backup_settings()[1], tag=tag)
+
+
+def _start_backup_scheduler():
+	from bosshunter import system_data
+
+	scheduler = system_data.BackupScheduler(_make_backup, _backup_settings)
+
+	def last_backup_time():
+		items = system_data.list_backups(DATA_DIR)
+		return datetime.fromisoformat(items[0]["created"]).timestamp() if items else None
+
+	scheduler.start(last_backup_time)
+
+
+@app.route("/api/system/backups")
+def api_system_backups():
+	from bosshunter import system_data
+
+	enabled, keep = _backup_settings()
+	return _json_response({"backups": system_data.list_backups(DATA_DIR), "enabled": enabled, "keep": keep})
+
+
+@app.route("/api/system/backups", method="POST")
+def api_system_backup_create():
+	try:
+		return _json_response(_make_backup())
+	except Exception as exc:
+		return _json_response({"error": f"备份失败：{exc}"}, 500)
+
+
+@app.route("/api/system/backups", method="DELETE")
+def api_system_backup_delete():
+	from bosshunter import system_data
+
+	if not system_data.delete_backup(DATA_DIR, str(request.query.get("name") or "")):
+		return _json_response({"error": "找不到这个备份"}, 404)
+	return _json_response({"success": True})
+
+
+@app.route("/api/system/backups/download")
+def api_system_backup_download():
+	from bosshunter import system_data
+
+	path = system_data.backup_path(DATA_DIR, str(request.query.get("name") or ""))
+	if path is None:
+		return _json_response({"error": "找不到这个备份"}, 404)
+	return static_file(path.name, root=str(path.parent), download=path.name)
+
+
+@app.route("/api/system/backups/restore", method="POST")
+def api_system_backup_restore():
+	from bosshunter import system_data
+
+	body = request.json if isinstance(request.json, dict) else {}
+	if body.get("confirmed") is not True:
+		return _json_response({"error": "恢复备份需要 confirmed=true"}, 400)
+	if task_runner.status().get("active"):
+		return _json_response({"error": "有任务正在运行，请先停止或等它结束再恢复备份"}, 409)
+	try:
+		with job_mutation_lock:
+			return _json_response(system_data.restore_backup(BASE_DIR, DATA_DIR, CONFIG_PATH, RESUME_DIR, str(body.get("name") or "")))
+	except FileNotFoundError as exc:
+		return _json_response({"error": str(exc)}, 404)
+	except Exception as exc:
+		return _json_response({"error": f"恢复失败：{exc}"}, 500)
+
+
+@app.route("/api/system/logs")
+def api_system_logs():
+	from bosshunter import system_data
+
+	return _json_response({"logs": system_data.log_files(BASE_DIR, DATA_DIR)})
+
+
+@app.route("/api/system/logs/tail")
+def api_system_logs_tail():
+	from bosshunter import system_data
+
+	path = system_data.log_path(BASE_DIR, DATA_DIR, str(request.query.get("name") or ""))
+	if path is None:
+		return _json_response({"error": "找不到这个日志"}, 404)
+	try:
+		lines = int(request.query.get("lines", 300))
+	except ValueError:
+		return _json_response({"error": "lines 必须是整数"}, 400)
+	return _json_response(system_data.tail_lines(path, lines, str(request.query.get("level") or ""), str(request.query.get("q") or "")))
+
+
+@app.route("/api/system/logs/download")
+def api_system_logs_download():
+	from bosshunter import system_data
+
+	path = system_data.log_path(BASE_DIR, DATA_DIR, str(request.query.get("name") or ""))
+	if path is None:
+		return _json_response({"error": "找不到这个日志"}, 404)
+	return static_file(path.name, root=str(path.parent), download=path.name)
+
+
+@app.route("/api/system/diagnostics")
+def api_system_diagnostics():
+	from bosshunter import system_data
+
+	body = system_data.diagnostics_zip(BASE_DIR, DATA_DIR, load_config(CONFIG_PATH), __version__)
+	response.content_type = "application/zip"
+	response.set_header("Content-Disposition", 'attachment; filename="owloffer-diagnostics.zip"')
+	return body
+
+
 # ─── Message center feed ─────────────────────────────────
 
 _news_watcher = None
@@ -4553,6 +4684,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	_SERVER_PORT = port
 	threading.Timer(6.0, lambda: _get_daily_loop().resume()).start()       # a restart continues a loop that was running
 	_start_news_watcher()
+	_start_backup_scheduler()
 
 	if open_browser:
 		import webbrowser

@@ -21,6 +21,7 @@ import { ResumeLibrary } from '@/components/config/ResumeLibrary'
 import { SettingsSearch } from '@/components/config/SettingsSearch'
 import { SaveDialog } from '@/components/config/SaveDialog'
 import { CommonSearchCard } from '@/components/config/CommonSearchCard'
+import { DataAndLogs } from '@/components/config/DataAndLogs'
 import { KeywordSettings } from '@/components/config/KeywordSettings'
 import { AiExtras, AutomationSettings, BrowserSettings, FreshnessSettings, SafetyExtras, ScoringExtras, TimezoneNotice } from '@/components/config/ExtraSettings'
 import { createContext, useContext } from 'react'
@@ -795,6 +796,11 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
             <TimezoneNotice />
             <BrowserSettings config={config} updateConfig={updateConfig} />
           </div>
+        </SectionCard>
+
+        {/* Backups and logs */}
+        <SectionCard title="数据备份与运行日志" sectionKey="data" expanded={expandedSections} toggle={toggleSection}>
+          <DataAndLogs />
         </SectionCard>
 
         {/* Anti-monitoring Section */}

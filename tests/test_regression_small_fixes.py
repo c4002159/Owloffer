@@ -501,14 +501,13 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("没有符合当前条件的岗位", self.source)
 
     def test_workbench_stats_distinguish_today_total_and_current_pending(self):
-        self.assertIn("type StatsScope = 'today' | 'total'", self.source)
-        self.assertIn("今日数据", self.source)
-        self.assertIn("累计数据", self.source)
+        # the overview shows today next to the running total, and what waits for delivery
         self.assertIn("workbench.funnel_today", self.source)
-        self.assertIn("workbench.pending_confirmation.length", self.source)
+        self.assertIn("workbench.funnel", self.source)
         self.assertIn("今日新增岗位", self.source)
-        self.assertIn("当前待确认", self.source)
-        self.assertIn("今日已投递", self.source)
+        self.assertIn("待投递岗位", self.source)
+        self.assertIn("已投递岗位", self.source)
+        self.assertIn("历史累计", self.source)
 
     def test_workbench_task_status_shows_current_run_metrics(self):
         self.assertIn("本轮扫描", self.source)
@@ -756,7 +755,7 @@ class SidebarTests(unittest.TestCase):
     def test_sidebar_star_link_places_github_icon_left_and_centers_star_label(self):
         # Act / Assert
         self.assertIn("relative flex items-center", self.source)
-        self.assertIn('aria-label="BossHunter GitHub"', self.source)
+        self.assertIn("aria-label={`${BRAND_NAME} GitHub`}", self.source)
         self.assertIn("md:absolute md:left-3", self.source)
         self.assertIn("mx-auto hidden items-center justify-center gap-2 md:flex", self.source)
         self.assertIn("text-xl", self.source)

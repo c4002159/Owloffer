@@ -26,6 +26,7 @@ MANUAL_ONLY = {"zhilian_campus"}                 # collected, scored and greeted
 POLL_SECONDS = 60
 IDLE_SECONDS = 600                              # nothing to collect (window closed, all paused): look again later
 MAX_COLLECT_MINUTES = 90
+MODES = ("auto", "manual", "off")      # collect + approve + deliver / collect, then you confirm by hand / not in the loop
 DEFAULT_END = "20:00"
 DEFAULT_CAP = 150                               # deliveries per platform and day; 0 = no limit
 MAX_INCIDENTS = 300
@@ -141,7 +142,13 @@ class DailyLoop:
             if self.running():
                 return self.snapshot()
             now = self.now()
-            order = [p for p in (options.get("platform_order") or DEFAULT_ORDER) if p in DEFAULT_TARGETS]
+            modes = {p: str((options.get("modes") or {}).get(p) or "auto") for p in DEFAULT_TARGETS}
+            if any(mode not in MODES for mode in modes.values()):
+                raise ValueError("平台模式只能是 auto（全自动）、manual（采集后手动确认）或 off（不参加）")
+            modes.update({p: "manual" for p in MANUAL_ONLY if modes[p] != "off"})            # campus postings can only be delivered by hand
+            order = [p for p in (options.get("platform_order") or DEFAULT_ORDER) if p in DEFAULT_TARGETS and modes[p] != "off"]
+            if not order:
+                raise ValueError("至少要有一个平台参加每日循环")
             targets = {**DEFAULT_TARGETS, **{k: int(v) for k, v in (options.get("targets") or {}).items() if k in DEFAULT_TARGETS}}
             end = parse_end_time(options.get("end_time") or DEFAULT_END, now)
             if end <= now:
@@ -153,7 +160,7 @@ class DailyLoop:
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds"),
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
-                "order": order, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
+                "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
                 "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "auto_approve", "delivery_cap") if k in options},
                 "stopped_reason": "",
             }
@@ -195,14 +202,20 @@ class DailyLoop:
     def _delivered(self, platform: str) -> int:
         return int((self.state.get("totals") or {}).get(platform, {}).get("delivered", 0))
 
+    def _mode(self, platform: str) -> str:
+        """auto: the loop collects, approves and delivers; manual: it only collects (and scores) and the postings wait for you."""
+        if platform in MANUAL_ONLY:
+            return "manual"
+        return str((self.state.get("modes") or {}).get(platform) or "auto")
+
     def _capped(self, platform: str) -> bool:
         cap = int(self.state.get("delivery_cap") or 0)
-        return cap > 0 and platform not in MANUAL_ONLY and self._delivered(platform) >= cap
+        return cap > 0 and self._mode(platform) == "auto" and self._delivered(platform) >= cap
 
     def _all_capped(self) -> bool:
         """Every platform that delivers has reached the daily delivery limit: nothing more to do today."""
         cap = int(self.state.get("delivery_cap") or 0)
-        platforms = [p for p in self.state.get("order", []) if p not in MANUAL_ONLY]
+        platforms = [p for p in self.state.get("order", []) if self._mode(p) == "auto"]
         return cap > 0 and bool(platforms) and all(self._capped(p) for p in platforms)
 
     def _wait(self, seconds: float) -> None:
@@ -280,7 +293,7 @@ class DailyLoop:
             return added
         if platform in MANUAL_ONLY:
             self._greet_for_manual(platform)
-        elif self.state.get("options", {}).get("auto_approve", True):
+        elif self._mode(platform) == "auto" and self.state.get("options", {}).get("auto_approve", True):
             self._deliver(platform)
         return added
 
