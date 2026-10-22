@@ -3948,8 +3948,11 @@ def _start_news_watcher():
 		finally:
 			db.close()
 
+	def paused_scoring():
+		return [run for run in list_scoring_runs(DATA_DIR / "bosshunter.db", limit=20) if run.get("status") == "paused"]
+
 	if _news_watcher is None:
-		_news_watcher = NewsWatcher(lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), lambda: task_runner.status()["tasks"], limits, replies)
+		_news_watcher = NewsWatcher(lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), lambda: task_runner.status()["tasks"], limits, replies, paused_scoring)
 		_news_watcher.start()
 
 

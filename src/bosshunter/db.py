@@ -99,8 +99,9 @@ def get_db(db_path: Path | None = None) -> sqlite3.Connection:
     """Get a database connection, creating tables if needed."""
     path = db_path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30.0)         # collection and scoring write at the same time: wait for a lock
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA journal_mode=WAL")
     _init_tables(conn)
     return conn

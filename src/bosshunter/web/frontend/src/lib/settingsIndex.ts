@@ -55,6 +55,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { path: 'automation.auto_send', label: '自动投递（无需逐个确认）', category: 'delivery', aliases: ['自动发送', '确认'], risky: true },
   { path: 'automation.review_cap', label: '待审查/待发送岗位上限', category: 'delivery', aliases: ['上限', '审查'] },
   { path: 'automation.keyword_budget', label: '关键词预算', category: 'delivery', aliases: ['关键词', '名额'] },
+  { path: 'automation.stream_scoring', label: '边采边评（采集时同时评分）', category: 'delivery', aliases: ['并发', '评分', '同时', '速度'] },
   { path: 'automation.page_frontier', label: '页数记忆（头部 + 深层窗口）', category: 'delivery', aliases: ['翻页', '页数', '深层'] },
   { path: 'throttle.daily_limit', label: '每日发送上限', category: 'delivery', aliases: ['投递上限', '每天', '额度'], risky: true },
   { path: 'throttle.interval_min', label: '发送间隔下限（秒）', category: 'delivery', aliases: ['间隔', '频率'], risky: true },

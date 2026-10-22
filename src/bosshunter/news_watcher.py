@@ -17,8 +17,17 @@ POLL_SECONDS = 15
 
 
 class NewsWatcher:
-    def __init__(self, emit: Callable[..., Any], tasks: Callable[[], list[dict]], limits: Callable[[], dict[str, dict]], replies: Callable[[], int]):
+    def __init__(
+        self,
+        emit: Callable[..., Any],
+        tasks: Callable[[], list[dict]],
+        limits: Callable[[], dict[str, dict]],
+        replies: Callable[[], int],
+        paused_scoring: Callable[[], list[dict]] | None = None,
+    ):
         self.emit, self.tasks, self.limits, self.replies = emit, tasks, limits, replies
+        self.paused_scoring = paused_scoring or (lambda: [])
+        self._told_paused: set[str] = set()
         self._seen_tasks: dict[str, str] = {}
         self._seen_limits: set[str] = set()
         self._replies = 0
@@ -44,6 +53,18 @@ class NewsWatcher:
         self._seen_limits &= set(limits)                       # a platform that is free again can be announced again
         if announce and replies > self._replies:
             self.emit("reply", f"有 {replies - self._replies} 条新的 HR 回复待处理（共 {replies} 条）", level="info")
+        self._replies = replies
+        # A scoring run that stopped half way waits for the user: tell them once, even if it stopped before the program started.
+        paused = {str(run["id"]): run for run in self.paused_scoring()}
+        for run_id, run in paused.items():
+            if run_id not in self._told_paused:
+                self._told_paused.add(run_id)
+                progress = run.get("progress") or {}
+                done = f"已评 {progress['ai_completed']}/{progress['ai_total']}，" if progress.get("ai_completed") is not None and progress.get("ai_total") else ""
+                left = len(run.get("remaining_job_ids") or [])
+                self.emit("task", f"评分任务停在半路（{done}还剩 {left} 个没评）：到「今日活动 → 等待队列」继续或结束",
+                          level="warning", data={"scoring_run": run_id})
+        self._told_paused &= set(paused)
         self._replies = replies
         self._primed = True
 

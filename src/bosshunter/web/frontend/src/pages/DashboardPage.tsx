@@ -18,7 +18,7 @@ import { PlatformLimitNotice } from '@/components/dashboard/PlatformLimitNotice'
 import { DailyLoopCard, DailyLoopIncidents, DailyLoopProgress } from '@/components/dashboard/DailyLoop'
 import { AgentRequestsInbox, useAgentRequests } from '@/components/dashboard/AgentRequests'
 import { useDailyLoop } from '@/hooks/useDailyLoop'
-import { PausedScoringBanner, describeScoringRun, useScoringRuns } from '@/components/dashboard/PausedScoring'
+import { describeScoringRun, useScoringRuns } from '@/components/dashboard/PausedScoring'
 import {
   EMPTY_JOB_FILTERS,
   filterJobs,
@@ -472,7 +472,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const dailyLoop = useDailyLoop(setNotice)
   const agentRequests = useAgentRequests()
   const scoringRuns = useScoringRuns()
-  const [activityTab, setActivityTab] = useState<'running' | 'queued'>('running')
+  const [activityTab, setActivityTab] = useState<'running' | 'queued'>(() => (new URLSearchParams(window.location.search).get('activity') === 'queue' ? 'queued' : 'running'))
   const [confirmTab, setConfirmTab] = useState<ConfirmTab | null>(null)
 
   const todayJobs = useMemo(
@@ -1064,8 +1064,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
         </section>
       )}
 
-      <PausedScoringBanner runs={scoringRuns} onChanged={() => void refresh()} />
-
       <section className="rounded-2xl border border-card-border bg-card p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-bold tracking-tight">今日活动</h2>
@@ -1075,7 +1073,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
               { value: 'queued' as const, label: `等待队列${queuedTasks.length + scoringRuns.paused.length ? ` ${queuedTasks.length + scoringRuns.paused.length}` : ''}` },
             ]).map(option => (
               <button key={option.value} type="button" onClick={() => setActivityTab(option.value)}
-                className={`rounded-full px-3 py-1 text-xs font-black transition ${activityTab === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted hover:text-primary'}`}>
+                className={`rounded-full px-3 py-1 text-xs font-black transition ${activityTab === option.value ? 'bg-primary text-primary-foreground shadow-sm' : option.value === 'queued' && scoringRuns.paused.length ? 'text-warning hover:text-primary' : 'text-muted hover:text-primary'}`}>
                 {option.label}
               </button>
             ))}

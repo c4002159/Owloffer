@@ -59,6 +59,8 @@ export function AutomationSettings({ config, updateConfig }: { config: Config; u
       </div>
       <ToggleSetting label="关键词预算（按关键词分配采集名额）" checked={config.automation?.keyword_budget ?? true} onChange={v => updateConfig('automation.keyword_budget', v)}
         hint="每个关键词按层级分配采集名额，并记住当天哪些词已采完。" />
+      <ToggleSetting label="边采边评（采集时同时评分）" checked={config.automation?.stream_scoring ?? true} onChange={v => updateConfig('automation.stream_scoring', v)}
+        hint="开了自动评分时，新岗位一入库就小批量评分，不用等整轮采完；评不上的留到采集结束后统一评。" />
       <ToggleSetting label="页数记忆（头部 + 深层窗口）" checked={config.automation?.page_frontier ?? true} onChange={v => updateConfig('automation.page_frontier', v)}
         hint="每个关键词先读头部新岗位，再从上次停下的页往后读一个窗口，不重复筛同样的页。" />
       <p className="text-xs leading-5 text-muted">每日循环的开始/结束时间、各平台目标数量和投递上限，在「工作台 → 运行全流程」的齿轮里设置。</p>

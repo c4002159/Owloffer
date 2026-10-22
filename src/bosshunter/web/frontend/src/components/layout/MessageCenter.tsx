@@ -21,7 +21,7 @@ const TABS = [
   { key: 'reply', label: 'HR 回复', kinds: ['reply'] },
 ] as const
 
-const TARGETS: Record<string, string> = { incident: '/', platform: '/', task: '/', loop: '/', reply: '/monitor', agent: '/config?section=agent', request: '/config?section=agent', access: '/config?section=agent' }
+const TARGETS: Record<string, string> = { incident: '/', platform: '/', task: '/?activity=queue', loop: '/', reply: '/monitor', agent: '/config?section=agent', request: '/config?section=agent', access: '/config?section=agent' }
 const KIND_LABELS: Record<string, string> = { incident: '异常', platform: '平台', task: '任务', loop: '每日循环', agent: '智能体', request: '请求', access: '权限', reply: 'HR 回复' }
 const POLL_MS = 15000
 

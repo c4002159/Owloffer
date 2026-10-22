@@ -22,6 +22,7 @@ from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_c
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
 from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector
 from bosshunter.collection.registry import CollectorRegistry
+from bosshunter.collection.streaming_scorer import StreamingScorer
 from bosshunter.collection_run_store import (
     boss_combo_key, boss_resume_options, claim_boss_resume, create_collection_run,
     save_boss_checkpoint, update_collection_run,
@@ -300,6 +301,7 @@ class _SharedProcessor:
         self.stop_event = stop_event
         self.config = config
         self.emit = emit
+        self.on_new_job: Callable[[str], None] | None = None          # told about every newly saved posting (streaming scoring)
         self.outsourcing_rules = load_rules(config)
         recompute_outsourcing(conn, self.outsourcing_rules)
         self.rejected_companies = rejected_names(conn)
@@ -552,6 +554,11 @@ class _SharedProcessor:
             if (hr_active_level(candidate.hr_active) or 0) >= 2:        # active within about three days
                 self.active_new += 1
             record_sighting(self.conn, candidate.storage_id)
+            if self.on_new_job is not None:
+                try:
+                    self.on_new_job(candidate.storage_id)             # saved and committed: scoring may pick it up now
+                except Exception:
+                    pass
             self._note_yield(True)
         else:
             self.progress.duplicate += 1
@@ -632,6 +639,11 @@ class CollectionOrchestrator:
         all_new_ids: list[str] = list(previous["collected_job_ids"]) if previous else []
         platform_results: list[PlatformCollectionResult] = []
         conn = get_db(self.db_path)
+        scorer: StreamingScorer | None = None
+        automation_settings = self.config.get("automation") if isinstance(self.config.get("automation"), dict) else {}
+        if options["auto_score"] and automation_settings.get("stream_scoring") is True:
+            scorer = StreamingScorer(self._score_batch, stop_event=self.stop_event, log=self._stream_log)
+            scorer.start()
 
         def checkpoint(city: str, keyword: str, page: int) -> None:
             checkpoint_pages[boss_combo_key(city, keyword)] = page
@@ -669,6 +681,7 @@ class CollectionOrchestrator:
                     processor.error_records = list(previous["platform_states"].get(platform, {}).get("error_records") or [])[-200:]
                     for name in ("seen", "duplicate", "filtered", "parse_failed", "save_failed"):
                         setattr(processor.progress, name, int(previous["platform_states"].get(platform, {}).get(name) or 0))
+                processor.on_new_job = scorer.submit if scorer is not None else None
                 prior_save_failures = processor.progress.save_failed
                 # Bind the processor into the callback after construction so the
                 # current platform's progress is not confused with prior IDs.
@@ -800,6 +813,13 @@ class CollectionOrchestrator:
             if self._budget:
                 self.keyword_moves = self._adjust_tiers(conn, options)
         finally:
+            if scorer is not None:
+                try:
+                    stats = scorer.finish()
+                    if stats["batches"] or stats["errors"]:
+                        self._stream_log(f"边采边评结束：共 {stats['batches']} 批，{stats['errors']} 批出错，留给统一评分的 {stats['left_over']} 个在队列里")
+                except Exception:
+                    pass
             conn.close()
 
         unique_new_ids = list(dict.fromkeys(str(job_id) for job_id in all_new_ids if str(job_id)))
@@ -808,14 +828,15 @@ class CollectionOrchestrator:
         errors = any(r.status in {"blocked", "failed"} for r in last_result.values())
         shortages = any(r.status == "completed_with_shortage" for r in platform_results)
         outcome = "stopped" if stopped else "completed_with_errors" if errors else "completed_with_shortage" if shortages else "completed"
-        if options["auto_score"] and unique_new_ids and not stopped:
+        leftovers = self._still_pending(unique_new_ids) if (scorer is not None and options["auto_score"] and unique_new_ids) else unique_new_ids
+        if options["auto_score"] and leftovers and not stopped:
             try:
-                self._emit_scoring(states, unique_new_ids)
+                self._emit_scoring(states, leftovers)
                 from bosshunter.ai.scorer import score_jobs
 
                 score_config = dict(self.config)
                 score_config["_workbench_stop_event"] = self.stop_event
-                score_jobs(score_config, scope="selected", job_ids=unique_new_ids, limit=None, force_rescore=False)
+                score_jobs(score_config, scope="selected", job_ids=leftovers, limit=None, force_rescore=False)
             except Exception as exc:
                 outcome = "completed_with_errors"
                 self._persist(states, unique_new_ids, "", error=f"自动评分失败：{str(exc)[:500]}")
@@ -828,6 +849,38 @@ class CollectionOrchestrator:
             "results": [result.__dict__ for result in platform_results],
             "keyword_moves": list(getattr(self, "keyword_moves", [])),
         }
+
+    # ------------------------------------------------------------------ streaming scoring
+    def _stream_log(self, message: str) -> None:
+        log = self.config.get("_workbench_log")
+        if callable(log):
+            log(message)
+
+    def _still_pending(self, job_ids: list[str]) -> list[str]:
+        """Which of these postings are still unscored (their own short-lived connection: safe next to the writers)."""
+        ids = [str(job_id) for job_id in job_ids if str(job_id)]
+        if not ids:
+            return []
+        db = get_db(self.db_path)
+        try:
+            pending: set[str] = set()
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" for _ in chunk)
+                rows = db.execute(f"SELECT id FROM jobs WHERE status = 'pending' AND deleted_at IS NULL AND id IN ({marks})", chunk).fetchall()
+                pending.update(str(row["id"]) for row in rows)
+        finally:
+            db.close()
+        return [job_id for job_id in ids if job_id in pending]
+
+    def _score_batch(self, job_ids: list[str]) -> int:
+        """Score one batch with the ordinary scoring code; returns how many of them are still unscored."""
+        from bosshunter.ai.scorer import score_jobs
+
+        score_config = dict(self.config)
+        score_config["_workbench_stop_event"] = self.stop_event
+        score_jobs(score_config, scope="selected", job_ids=list(job_ids), limit=None, force_rescore=False)
+        return len(self._still_pending(job_ids))
 
     def _tell_experience_level(self) -> None:
         """Put the experience level the uploaded resume shows into the config the collectors read."""

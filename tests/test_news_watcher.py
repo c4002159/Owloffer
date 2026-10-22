@@ -84,3 +84,19 @@ def test_the_message_routes_list_newest_first_and_mark_read(tmp_path, monkeypatc
     assert status.startswith("200") and [m["message"] for m in payload["messages"]] == ["新", "旧"] and payload["unread"] == 2
     status, payload = _call("/api/messages/read", "POST", {})
     assert status.startswith("200") and payload["unread"] == 0
+
+
+def test_a_scoring_run_stopped_half_way_is_announced_once_even_if_it_predates_the_program(tmp_path):
+    state = {"tasks": [], "limits": {}, "replies": 0, "paused": [{"id": "r1", "progress": {"ai_completed": 47, "ai_total": 64}, "remaining_job_ids": ["a"] * 17}]}
+    access = AgentAccess(tmp_path / "a.json")
+    watcher = NewsWatcher(access.emit, lambda: state["tasks"], lambda: state["limits"], lambda: state["replies"], lambda: state["paused"])
+    watcher.poll()
+    watcher.poll()
+    messages = access.messages()["messages"]
+    assert len(messages) == 1 and messages[0]["level"] == "warning"
+    assert "已评 47/64" in messages[0]["message"] and "还剩 17 个" in messages[0]["message"] and "等待队列" in messages[0]["message"]
+    state["paused"] = []                                            # the user dealt with it
+    watcher.poll()
+    state["paused"] = [{"id": "r2", "progress": {}, "remaining_job_ids": ["b"]}]
+    watcher.poll()
+    assert len(access.messages()["messages"]) == 2                  # a new stopped run is news again
