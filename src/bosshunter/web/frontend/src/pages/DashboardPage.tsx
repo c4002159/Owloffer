@@ -18,6 +18,7 @@ import { InterviewPreparation } from '@/components/jobs/InterviewPreparation'
 import { parseHistoryDetail } from '@/lib/historyDetail'
 import { PLATFORM_LABELS } from '@/lib/platforms'
 import { PlatformLimitNotice } from '@/components/dashboard/PlatformLimitNotice'
+import { DailyLoopPanel } from '@/components/dashboard/DailyLoopPanel'
 import {
   EMPTY_JOB_FILTERS,
   filterJobs,
@@ -183,7 +184,7 @@ const modes: Array<{ mode: WorkbenchMode; title: string; description: string }> 
   {
     mode: 'full',
     title: '运行全流程',
-    description: '采集、评分、监测，投递前由你确认',
+    description: '采集、评分、监测，投递前由你逐个确认（固定任务见下方“每日循环”）',
   },
   {
     mode: 'collect',
@@ -1018,6 +1019,7 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
             )
           })}
         </div>
+        <DailyLoopPanel setNotice={setNotice} />
         <PlatformLimitNotice details={workbench.platform_limit_details ?? {}} />
         {!showGettingStarted && notice && <CompactNotice message={notice} />}
         {!showGettingStarted && preflightChecks.some(check => check.status !== 'pass') && (

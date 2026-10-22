@@ -3792,6 +3792,68 @@ def api_jobs_permanent_delete():
 		db.close()
 
 
+# ─── Daily loop ──────────────────────────────────────────
+
+_SERVER_PORT = 8686
+_daily_loop = None
+
+
+def _loopback_api(method: str, path: str, body: dict | None = None) -> dict:
+	"""Call this server's own API like a person using the workbench would (all its checks apply)."""
+	import urllib.error
+	import urllib.request
+	from bosshunter.daily_loop import ApiError
+
+	data = json.dumps(body or {}).encode("utf-8") if method != "GET" else None
+	req = urllib.request.Request(f"http://127.0.0.1:{_SERVER_PORT}{path}", data=data, method=method, headers={"Content-Type": "application/json"})
+	try:
+		with urllib.request.urlopen(req, timeout=120) as response:
+			return json.loads(response.read().decode("utf-8") or "{}")
+	except urllib.error.HTTPError as exc:
+		try:
+			payload = json.loads(exc.read().decode("utf-8") or "{}")
+		except ValueError:
+			payload = {"error": str(exc)}
+		raise ApiError(exc.code, payload if isinstance(payload, dict) else {"error": str(payload)}) from exc
+
+
+def _get_daily_loop():
+	global _daily_loop
+	from bosshunter.daily_loop import DailyLoop
+
+	path = DATA_DIR / "daily_loop.json"
+	if _daily_loop is None or _daily_loop.path != path:
+		_daily_loop = DailyLoop(path, _loopback_api)
+	return _daily_loop
+
+
+@app.route("/api/daily-loop")
+def api_daily_loop_state():
+	loop = _get_daily_loop()
+	return _json_response({**loop.snapshot(), "alive": loop.running()})
+
+
+@app.route("/api/daily-loop/start", method="POST")
+def api_daily_loop_start():
+	body = request.json if isinstance(request.json, dict) else {}
+	loop = _get_daily_loop()
+	if loop.running():
+		return _json_response({"error": "每日循环已经在运行", **loop.snapshot()}, 409)
+	return _json_response(loop.start(body))
+
+
+@app.route("/api/daily-loop/stop", method="POST")
+def api_daily_loop_stop():
+	return _json_response(_get_daily_loop().stop())
+
+
+@app.route("/api/daily-loop/incidents/<incident_id>/resolve", method="POST")
+def api_daily_loop_resolve(incident_id):
+	if not _get_daily_loop().resolve_incident(incident_id):
+		return _json_response({"error": "异常记录不存在"}, 404)
+	return _json_response(_get_daily_loop().snapshot())
+
+
 # ─── Resume APIs ─────────────────────────────────────────
 
 @app.route("/api/resume")
@@ -4174,6 +4236,10 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 			time.sleep(1800)
 
 	threading.Thread(target=_sync_resumes_at_start, daemon=True).start()
+
+	global _SERVER_PORT
+	_SERVER_PORT = port
+	threading.Timer(6.0, lambda: _get_daily_loop().resume()).start()       # a restart continues a loop that was running
 
 	if open_browser:
 		import webbrowser
