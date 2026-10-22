@@ -1176,7 +1176,7 @@ class ZhilianCollector:
                     continue
                 saved = (get_page_progress(self.safety_conn, "zhilian", city, ck, within_hours=ttl)
                          if self.safety_conn is not None else 0)
-                start_page = saved + 1 if saved > 0 else 1
+                start_page = max(saved + 1 if saved > 0 else 1, request.first_page)
                 if start_page > request.max_pages:
                     continue
                 outcome = self._positions_keyword(request, hooks, city, code, keyword, ck, start_page)
@@ -1483,7 +1483,7 @@ class ZhilianCollector:
                                   phase="completed_keyword", keyword=kw, city=city)
                         continue
                     saved_page = get_page_progress(self.safety_conn, "zhilian", city, self._ckey(request, kw), within_hours=self._resume_ttl_hours()) if self.safety_conn is not None else 0
-                    start_page = saved_page + 1 if saved_page > 0 else 1
+                    start_page = max(saved_page + 1 if saved_page > 0 else 1, request.first_page)
                     if start_page > max_pages:
                         if self.safety_conn is not None:
                             mark_combo_collected(self.safety_conn, "zhilian", city, self._ckey(request, kw))
@@ -1647,7 +1647,7 @@ class ZhilianCollector:
                     continue
                 # 页级断点：从上次采到页码的下一页继续
                 saved_page = get_page_progress(self.safety_conn, "zhilian", city, self._ckey(request, keyword), within_hours=self._resume_ttl_hours()) if self.safety_conn is not None else 0
-                start_page = saved_page + 1 if saved_page > 0 and self.browser.navigate_action is None else 1
+                start_page = max(saved_page + 1 if saved_page > 0 and self.browser.navigate_action is None else 1, request.first_page)
                 if start_page > request.max_pages:
                     if self.safety_conn is not None:
                         mark_combo_collected(self.safety_conn, "zhilian", city, self._ckey(request, keyword))

@@ -879,6 +879,8 @@ class CollectionOrchestrator:
             processor.event(message=f"今天的关键词都采完了，抽检 {len(pending)} 个：{'、'.join(pending)}")
         start_total = len(processor.new_job_ids)
         processor.per_keyword = True
+        automation = self.config.get("automation") if isinstance(self.config.get("automation"), dict) else {}
+        frontier_on = automation.get("page_frontier") is True
         variants: list[str] = []
         variant_key = ""
         if not intern:
@@ -907,7 +909,10 @@ class CollectionOrchestrator:
                     word_request = replace(word_request, filters={**request.filters, variant_key: variant})
                     processor.event(message=f"「{word}」这次用经验标签 {variant}")
                 try:
-                    result = collector.collect(word_request, hooks)
+                    if frontier_on and not spot_check and not intern:
+                        result = self._scan_keyword(collector, word_request, hooks, processor, conn, word)
+                    else:
+                        result = collector.collect(word_request, hooks)
                 except CollectionError as exc:
                     if exc.code != "callback_stopped":
                         raise
@@ -947,6 +952,76 @@ class CollectionOrchestrator:
             merged.reason_code = "search_exhausted"
         merged.message = f"按关键词预算采集 {len(results)} 个词：" + "；".join(r.message for r in results if r.message)[:400]
         return merged
+
+    def _scan_keyword(self, collector, request, hooks, processor, conn, word):
+        """Read one keyword's list in two parts instead of its first N pages every day: the head (as deep as it is still
+        fresh) and a window of deep pages that starts where an earlier day stopped (see ``scan_frontier``)."""
+        from dataclasses import replace
+
+        from bosshunter import scan_frontier as sf
+        from bosshunter.db import checkpoint_scope
+
+        platform = request.platform
+        cities = ",".join(request.cities)
+        window = max(int(request.max_pages), 1)
+        state = sf.get(conn, platform, word, cities)
+        ok = {"completed", "completed_with_shortage"}
+        was_per_keyword = processor.per_keyword
+        processor.per_keyword = False          # the scan decides how deep to read; the give-up rules must not cut the deep pages
+
+        def run(first, last, scope=""):
+            seen0, dup0 = processor.progress.seen, processor.progress.duplicate
+            window_request = replace(request, first_page=first, max_pages=last)
+            try:
+                if scope:
+                    with checkpoint_scope(scope):
+                        result = collector.collect(window_request, hooks)
+                else:
+                    result = collector.collect(window_request, hooks)
+            except CollectionError as exc:
+                if exc.code != "callback_stopped":
+                    raise
+                result = PlatformCollectionResult(platform, "completed", "callback_stopped", "采集回调已停止")
+            return result, processor.progress.seen - seen0, processor.progress.duplicate - dup0
+
+        def stop_here(result):
+            return result.status not in ok or result.reason_code == "callback_stopped"
+
+        try:
+            head = min(max(int(state["head_pages"]), sf.HEAD_MIN), window)
+            result, seen, dup = run(1, head)
+            if stop_here(result):
+                return result
+            head_rate = sf.refresh_rate(seen, dup)
+            if head_rate is not None:
+                processor.event(message=f"「{word}」头部 {head} 页新岗位占比 {head_rate:.0%}")
+                sf.save(conn, platform, word, cities, head_pages=sf.next_head_pages(head, head_rate), head_rate=head_rate)
+            frontier = int(state["frontier"])
+            probe_rate = None
+            if frontier > head:
+                probe, probe_seen, probe_dup = run(frontier, frontier, scope=f"p{frontier}")
+                if stop_here(probe):
+                    return probe
+                if probe_seen == 0:                      # the list ends before the remembered page: start deep reading afresh
+                    frontier = head
+                else:
+                    probe_rate = sf.refresh_rate(probe_seen, probe_dup)
+                    processor.event(message=f"「{word}」记住的第 {frontier} 页新岗位占比 {probe_rate:.0%}"
+                                    + ("，列表有变动，从这一页往后读" if probe_rate >= sf.FRESH_HIGH else "，多为已知，从下一页往后读"))
+            start = sf.deep_start(frontier, head, probe_rate)
+            end = start + window - 1
+            processor.event(message=f"「{word}」深层读第 {start}–{end} 页")
+            deep, deep_seen, deep_dup = run(start, end, scope=f"w{start}-{end}")
+            if stop_here(deep):
+                return deep
+            if deep_seen == 0:                           # nothing there: the end of the list, begin again from the top next time
+                sf.save(conn, platform, word, cities, frontier=0, deep_rate=None)
+            else:
+                sf.save(conn, platform, word, cities, frontier=end, deep_rate=sf.refresh_rate(deep_seen, deep_dup))
+            deep.message = f"头部 {head} 页 + 深层 {start}–{end} 页；" + (deep.message or "")
+            return deep
+        finally:
+            processor.per_keyword = was_per_keyword
 
     def _adjust_tiers(self, conn, options) -> list[dict]:
         """Move keywords between tiers from their recent results, once per run."""

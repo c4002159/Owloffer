@@ -2,7 +2,10 @@
 
 import json
 import re
+import contextlib
+import functools
 import sqlite3
+import threading
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -1814,6 +1817,31 @@ def _init_collect_progress(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+_checkpoint_scope = threading.local()
+
+
+@contextlib.contextmanager
+def checkpoint_scope(name: str):
+    """Keep the page checkpoints and "keyword collected today" marks of one page window apart from the ordinary ones: a
+    window run (a few pages deep in a list) must neither skip because the whole keyword was collected, nor mark it so."""
+    previous = getattr(_checkpoint_scope, "name", "")
+    _checkpoint_scope.name = name
+    try:
+        yield
+    finally:
+        _checkpoint_scope.name = previous
+
+
+def _scoped_source(fn):
+    @functools.wraps(fn)
+    def wrapper(conn, source, *args, **kwargs):
+        scope = getattr(_checkpoint_scope, "name", "")
+        return fn(conn, f"{source}@{scope}" if scope else source, *args, **kwargs)
+
+    return wrapper
+
+
+@_scoped_source
 def get_collected_combos(conn: sqlite3.Connection, source: str, within_hours: int | None = None) -> set[tuple[str, str]]:
     """返回某来源已完成的 (city, keyword) 组合集合（用于断点续采跳过）。
 
@@ -1846,6 +1874,7 @@ def clear_collected_combos(conn: sqlite3.Connection, source: str | None = None) 
     return int(cursor.rowcount or 0)
 
 
+@_scoped_source
 def prune_collected_combos(conn: sqlite3.Connection, source: str, keep_keywords: set[str]) -> int:
     """清理孤儿词级断点：删除「已不在当前关键词列表里」的断点记录。
 
@@ -1863,6 +1892,7 @@ def prune_collected_combos(conn: sqlite3.Connection, source: str, keep_keywords:
     return int(cursor.rowcount or 0)
 
 
+@_scoped_source
 def mark_combo_collected(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> None:
     """标记一个 (source, city, keyword) 组合已完成（幂等，刷新 finished_at）。
 
@@ -1881,6 +1911,7 @@ def mark_combo_collected(conn: sqlite3.Connection, source: str, city: str, keywo
     conn.commit()
 
 
+@_scoped_source
 def upsert_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str, page: int) -> None:
     """记录/更新某词已采到的页码（页级断点，支持中途续采）。"""
     conn.execute(
@@ -1896,6 +1927,7 @@ def upsert_page_progress(conn: sqlite3.Connection, source: str, city: str, keywo
     conn.commit()
 
 
+@_scoped_source
 def get_page_progress(
     conn: sqlite3.Connection,
     source: str,
@@ -1935,6 +1967,7 @@ def clear_page_progress(conn: sqlite3.Connection, source: str | None = None) -> 
     return int(cursor.rowcount or 0)
 
 
+@_scoped_source
 def delete_page_progress(conn: sqlite3.Connection, source: str, city: str, keyword: str) -> int:
     """删除单个词的页级断点（词已完成，无需续页）。返回删除行数。"""
     cursor = conn.execute(
@@ -1945,6 +1978,7 @@ def delete_page_progress(conn: sqlite3.Connection, source: str, city: str, keywo
     return int(cursor.rowcount or 0)
 
 
+@_scoped_source
 def prune_page_progress(conn: sqlite3.Connection, source: str, keep_keywords: set[str]) -> int:
     """清理孤儿页级断点（已删除词），与 prune_collected_combos 保持一致。"""
     if not keep_keywords:

@@ -473,7 +473,7 @@ class LiepinCollector:
                     if self.safety_conn is not None
                     else 0
                 )
-                start_page = saved_page + 1 if saved_page > 0 else 1
+                start_page = max(saved_page + 1 if saved_page > 0 else 1, request.first_page)
                 if start_page > request.max_pages:
                     if self.safety_conn is not None:
                         mark_combo_collected(self.safety_conn, "liepin", city, ckey(keyword))

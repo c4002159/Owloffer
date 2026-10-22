@@ -541,7 +541,7 @@ class BossCollector:
                     return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                 # Only the explicitly resumed run supplies completed pages.
                 # New runs always start at page 1, regardless of older tasks.
-                start_page = hooks.completed_page(city, keyword) + 1
+                start_page = max(hooks.completed_page(city, keyword) + 1, request.first_page)
                 if start_page > request.max_pages:
                     hooks.on_event(phase="resuming", keyword=keyword, city=city,
                                    message="继续原任务：该搜索组合已完成")

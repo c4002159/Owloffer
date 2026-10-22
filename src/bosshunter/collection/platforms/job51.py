@@ -940,7 +940,7 @@ class Job51Collector:
 
         # 页级断点续采：读上次采到页码，从 N+1 页继续（中途停止→续采不重翻）
         saved_page = get_page_progress(self.safety_conn, "51job", city, kw, within_hours=self._resume_ttl_hours()) if self.safety_conn is not None else 0
-        start_page = saved_page + 1 if saved_page > 0 else 1
+        start_page = max(saved_page + 1 if saved_page > 0 else 1, request.first_page)
         # 边界守卫：续采起点已超过最大页（理论上该词已采完），直接标记完成并跳过
         if start_page > max_pages:
             if self.safety_conn is not None:

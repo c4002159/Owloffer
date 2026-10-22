@@ -40,7 +40,7 @@ from bosshunter.review_queue import (
 REFRESH_MS = 10_000
 
 
-PLATFORM_SHORT = {"boss": "BOSS", "zhilian": "智联", "51job": "前程", "liepin": "猎聘"}
+PLATFORM_SHORT = {"boss": "BOSS", "zhilian": "智联", "zhilian_campus": "智联校招", "51job": "前程", "liepin": "猎聘"}
 
 
 def platform_label(job: dict) -> str:

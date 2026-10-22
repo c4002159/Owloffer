@@ -130,8 +130,8 @@ def mixed(monkeypatch):
         base = Path(tmp)
         conn = get_db(base / "data" / "bosshunter.db")
         _job(conn, "b1", "boss")
-        _job(conn, "z1", "zhilian")
-        _job(conn, "z2", "zhilian")
+        _job(conn, "z1", "zhilian_campus")
+        _job(conn, "z2", "zhilian_campus")
         conn.close()
         server.set_base_dir(base)
         started = []
@@ -189,8 +189,8 @@ def test_manual_sent_marks_external_jobs_and_counts_for_company_cooldown(db):
 def test_window_helpers_label_platforms_and_build_links():
     from bosshunter.ui.review_window import is_external, job_link, platform_label
 
-    assert platform_label({"source_platform": "zhilian"}) == "智联" and platform_label({}) == "BOSS"
-    assert is_external({"source_platform": "zhilian"}) and not is_external({"source_platform": "boss"})
+    assert platform_label({"source_platform": "zhilian_campus"}) == "智联校招" and platform_label({}) == "BOSS"
+    assert is_external({"source_platform": "zhilian_campus"}) and not is_external({"source_platform": "boss"})
     assert not is_external({"source_platform": "51job"}) and not is_external({"source_platform": "liepin"})   # delivered by BossHunter itself
     assert job_link({"source_platform": "boss", "url": "/job_detail/x.html"}) == "https://www.zhipin.com/job_detail/x.html"
     assert job_link({"source_platform": "51job", "url": "https://jobs.51job.com/x"}) == "https://jobs.51job.com/x"

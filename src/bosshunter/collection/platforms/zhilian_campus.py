@@ -210,7 +210,7 @@ class ZhilianCampusCollector(ZhilianCollector):
                     continue
                 saved = (get_page_progress(self.safety_conn, self.platform, city, keyword, within_hours=ttl)
                          if self.safety_conn is not None else 0)
-                start_page = saved + 1 if saved > 0 else 1
+                start_page = max(saved + 1 if saved > 0 else 1, request.first_page)
                 if start_page > min(request.max_pages, LIST_MAX_PAGES):
                     continue
                 result = self._collect_keyword(request, hooks, city, code, keyword, start_page)

@@ -35,6 +35,7 @@ class PlatformCollectionRequest:
     max_pages: int = 3
     sort: str = "default"
     filters: dict[str, Any] = field(default_factory=dict)
+    first_page: int = 1          # a page window: read pages first_page..max_pages (1 = from the top)
 
 
 @dataclass

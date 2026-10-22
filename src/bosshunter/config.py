@@ -163,6 +163,8 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "automation": {
+        # Read each keyword's list as head + remembered deep window instead of its first pages every day (scan_frontier.py).
+        "page_frontier": True,
         # Off by default: jobs wait in the review window until the user approves them.
         "auto_send": False,
         # Collection/scoring pauses once this many jobs wait for review or sending.

@@ -42,7 +42,7 @@ class PlatformDeliveryGuardTests(TestCase):
 
     def test_collection_only_platforms_reject_delivery_and_resume_routes(self):
         for platform, job_id, url in (
-            ("zhilian", "zhilian:zl-1", "https://www.zhaopin.com/jobdetail/zl-1.htm"),
+            ("zhilian_campus", "zhilian_campus:zl-1", "https://www.zhaopin.com/jobdetail/zl-1.htm"),
         ):
             with self.subTest(platform=platform), tempfile.TemporaryDirectory() as tmp:
                 base_dir = Path(tmp)
