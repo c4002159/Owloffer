@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import quote
 
 from bosshunter.collection.base import CollectionBlockedError, CollectionError, CollectorHooks, hours_since_midnight
+from bosshunter.platform_safety import apply_pacing, pacing_multiplier
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, _updated_days, update_age_reason
 from bosshunter.db import (
@@ -185,6 +186,7 @@ class ZhilianCampusCollector(ZhilianCollector):
 
     # ------------------------------------------------------------------ the collection
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        apply_pacing(self, pacing_multiplier(self.config, self.platform))
         if any(not str(request.city_codes.get(city) or "").strip() for city in request.cities):
             return PlatformCollectionResult(self.platform, "failed", "no_valid_city", "智联校园城市编码未配置")
         throttle_cfg = self.config.get("throttle", {}) if isinstance(self.config.get("throttle"), dict) else {}

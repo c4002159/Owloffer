@@ -90,6 +90,10 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { path: 'collection.platform_limits.liepin.daily_search_page_limit', label: '猎聘 单日搜索页上限', category: 'safety', aliases: ['风控', '页数'], risky: true },
   { path: 'collection.platform_limits.zhilian.daily_search_page_limit', label: '智联招聘 单日搜索页上限', category: 'safety', aliases: ['风控', '页数'], risky: true },
   { path: 'collection.platform_limits.zhilian_campus.daily_search_page_limit', label: '智联校招 单日搜索页上限', category: 'safety', aliases: ['风控', '页数', '校园'], risky: true },
+  { path: 'collection.platform_pacing.51job', label: '前程无忧 采集节奏倍率', category: 'safety', aliases: ['风控', '慢', '间隔', '节奏', '51job'] },
+  { path: 'collection.platform_pacing.liepin', label: '猎聘 采集节奏倍率', category: 'safety', aliases: ['风控', '慢', '间隔', '节奏'] },
+  { path: 'collection.platform_pacing.zhilian', label: '智联招聘 采集节奏倍率', category: 'safety', aliases: ['风控', '慢', '间隔', '节奏', '限流'] },
+  { path: 'collection.platform_pacing.zhilian_campus', label: '智联校招 采集节奏倍率', category: 'safety', aliases: ['风控', '慢', '间隔', '节奏', '校园'] },
   { path: 'safety.risk_lock_minutes', label: '风险锁定时长（分钟）', category: 'safety', aliases: ['风控', '锁定'] },
   // 智能体
   { path: '', label: '智能体令牌 / 权限 / 连接 Claude 和 Codex', category: 'agent', aliases: ['MCP', 'Claude', 'Codex', '令牌', 'token', '远程'] },

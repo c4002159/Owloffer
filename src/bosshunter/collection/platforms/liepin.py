@@ -33,6 +33,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from bosshunter.ai.prefilter import salary_filter_result, update_label_days
+from bosshunter.platform_safety import apply_pacing, pacing_multiplier
 from bosshunter.browser import close_tab, evaluate, navigate as browser_navigate, new_tab, scroll, wait_for_load
 from bosshunter.collection.base import CollectionError, CollectorHooks, hours_since_midnight
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
@@ -423,6 +424,7 @@ class LiepinCollector:
             return 24
 
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        apply_pacing(self, pacing_multiplier(self.config, self.platform))
         # Liepin filters by recruiter activity on the search page itself (招聘者活跃: 1/3/7/30 days), so ask it
         # for only the jobs that pass the configured HR-activity floor instead of discarding them afterwards.
         if "pub_time" not in request.filters:

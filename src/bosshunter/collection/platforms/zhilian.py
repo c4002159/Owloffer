@@ -18,6 +18,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse, urlunparse
 
 from bosshunter.collection.platforms import zhilian_replay as zr
+from bosshunter.platform_safety import apply_pacing, pacing_multiplier
 from bosshunter.requirement_filter import requirement_reason
 
 from bosshunter.ai.prefilter import freshness_filter_result, salary_filter_result
@@ -571,12 +572,14 @@ class _ApiRateLimiter:
     与 51job _ApiRateLimiter 同结构：簇内间隔 + 簇间休息 + 每分钟滑动窗口上限。
     """
 
-    def __init__(self, total_requests: int | None = None, no_burst: bool = False) -> None:
+    def __init__(self, total_requests: int | None = None, no_burst: bool = False, pace: float = 1.0) -> None:
+        self._pace = pace              # the platform's pacing setting: stretches the gaps and breaks, lowers the per-minute cap
         self._window: list[float] = []
         self._in_burst = 0
         self._burst_size = random.randint(API_BURST_SIZE_MIN, API_BURST_SIZE_MAX)
         self._no_burst = no_burst
         self._set_tier(total_requests)
+        self._apply_pace()
 
     def _set_tier(self, total_requests: int | None) -> None:
         n = int(total_requests or 0)
@@ -593,8 +596,15 @@ class _ApiRateLimiter:
             self._break_range = (90.0, 180.0)
             self._per_min_limit = 12
 
+    def _apply_pace(self) -> None:
+        if self._pace != 1.0:
+            self._gap_range = tuple(v * self._pace for v in self._gap_range)
+            self._break_range = tuple(v * self._pace for v in self._break_range)
+            self._per_min_limit = max(4, int(self._per_min_limit / self._pace))
+
     def set_tier(self, total_requests: int) -> None:
         self._set_tier(total_requests)
+        self._apply_pace()
         self._no_burst = False
 
     def wait_before_request(self, stop_event) -> bool:
@@ -1464,7 +1474,7 @@ class ZhilianCollector:
         except Exception:
             return None
 
-        rate_limiter = _ApiRateLimiter(total_requests=API_ADAPTIVE_MEDIUM, no_burst=False)
+        rate_limiter = _ApiRateLimiter(total_requests=API_ADAPTIVE_MEDIUM, no_burst=False, pace=pacing_multiplier(self.config, self.platform))
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         deal_breakers = profile.get("deal_breakers") or []
         jd_deal_breakers = profile.get("jd_deal_breakers") or []
@@ -1601,6 +1611,7 @@ class ZhilianCollector:
             pass
 
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        apply_pacing(self, pacing_multiplier(self.config, self.platform))
         self._native_params = native_filter_params(self.config, request.filters)
         if any(not str(request.city_codes.get(city) or "").strip() for city in request.cities):
             return PlatformCollectionResult(self.platform, "failed", "no_valid_city", "智联城市编码未配置")

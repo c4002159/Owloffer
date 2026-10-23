@@ -115,6 +115,8 @@ DEFAULTS: dict[str, Any] = {
             "zhilian": {"daily_search_page_limit": 300},
             "zhilian_campus": {"daily_search_page_limit": 200},
         },
+        # How much slower than the built-in rhythm the other platforms' collection runs (1.0 = as built).
+        "platform_pacing": {"51job": 1.0, "liepin": 1.0, "zhilian": 1.5, "zhilian_campus": 1.0},
         "delivery_cooldown_min_minutes": 5,
         "delivery_cooldown_max_minutes": 15,
     },

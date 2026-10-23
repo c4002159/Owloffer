@@ -35,6 +35,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from bosshunter.ai.prefilter import salary_filter_result
+from bosshunter.platform_safety import pacing_multiplier
 from bosshunter.browser import close_tab, evaluate, get_page_targets, new_tab
 from bosshunter.collection.base import CollectionBlockedError, CollectorHooks, hours_since_midnight
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
@@ -518,12 +519,14 @@ class _ApiRateLimiter:
     间隔 + 每分钟上限，加快启动。
     """
 
-    def __init__(self, total_requests: int | None = None, no_burst: bool = False) -> None:
+    def __init__(self, total_requests: int | None = None, no_burst: bool = False, pace: float = 1.0) -> None:
+        self._pace = pace              # the platform's pacing setting: stretches the gaps and breaks, lowers the per-minute cap
         self._window: list[float] = []
         self._in_burst = 0
         self._burst_size = random.randint(API_BURST_SIZE_MIN, API_BURST_SIZE_MAX)
         self._no_burst = no_burst
         self._set_tier(total_requests)
+        self._apply_pace()
 
     def _set_tier(self, total_requests: int | None) -> None:
         n = int(total_requests or 0)
@@ -546,8 +549,15 @@ class _ApiRateLimiter:
         self._break_range = tuple(v * 2 for v in self._break_range)
         self._per_min_limit = max(4, self._per_min_limit // 2)
 
+    def _apply_pace(self) -> None:
+        if self._pace != 1.0:
+            self._gap_range = tuple(v * self._pace for v in self._gap_range)
+            self._break_range = tuple(v * self._pace for v in self._break_range)
+            self._per_min_limit = max(4, int(self._per_min_limit / self._pace))
+
     def set_tier(self, total_requests: int) -> None:
         self._set_tier(total_requests)
+        self._apply_pace()
         self._no_burst = False
 
     def wait_before_request(self, stop_event) -> bool:
@@ -906,7 +916,7 @@ class Job51Collector:
             raise CollectionBlockedError("browser_disconnected", f"打开 51job 宿主页失败：{exc}")
 
         # ★ 全局限速器：探针/保底针/热区扫描三阶段共享同一个 60s 窗口，统一计数。
-        rate_limiter = _ApiRateLimiter(total_requests=API_ADAPTIVE_MEDIUM, no_burst=False)
+        rate_limiter = _ApiRateLimiter(total_requests=API_ADAPTIVE_MEDIUM, no_burst=False, pace=pacing_multiplier(self.config, self.platform))
         self._limiter, self._hooks = rate_limiter, hooks
 
         try:

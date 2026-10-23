@@ -862,6 +862,18 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
               </div>
               <p className="text-xs text-muted">每个平台一天最多打开这么多页搜索结果，用完后该平台当天不再采集，其他平台继续，已采到的岗位保留。默认值按每日循环的实际用量留有余量，只拦截失控的翻页；填 0 表示不限制。</p>
             </div>
+            <div className="space-y-2">
+              <div className="text-xs font-black text-foreground">其他平台 采集节奏倍率</div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {([['51job', '前程无忧', 1], ['liepin', '猎聘', 1], ['zhilian', '智联招聘', 1.5], ['zhilian_campus', '智联校招', 1]] as const).map(([key, name, fallback]) => (
+                  <Field key={key} label={`${name} 采集节奏倍率`}>
+                    <Input type="number" step={0.1} min={0.5} max={5} value={config.collection?.platform_pacing?.[key] ?? fallback}
+                      onChange={e => updateConfig(`collection.platform_pacing.${key}`, Math.min(Math.max(Number(e.target.value) || fallback, 0.5), 5))} />
+                  </Field>
+                ))}
+              </div>
+              <p className="text-xs text-muted">页面和详情之间的等待时间乘以这个数：1.0 是程序原有的节奏，1.5 约慢一半，同样的时间采到的岗位会少一些。某个平台总被验证或限流暂停时调高它；智联默认 1.5。</p>
+            </div>
             <SafetyExtras config={config} updateConfig={updateConfig} />
           </div>
         </SectionCard>

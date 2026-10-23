@@ -167,3 +167,32 @@ class PlatformPageBudget:
         add_platform_access(self.conn, self.stage, "search_page", platform=self.platform)
         self._seen.add(key)
         return True
+
+
+# How much slower than the built-in rhythm each platform's collection runs (1.0 = as built; BOSS has its own setting).
+# Zhilian answered with verification pages several times a day at 1.0, so it starts calmer.
+DEFAULT_PACING = {"51job": 1.0, "liepin": 1.0, "zhilian": 1.5, "zhilian_campus": 1.0}
+
+
+def pacing_multiplier(config: dict, platform: str) -> float:
+    """Factor for the waits between page and detail requests of one platform's collection (0.5 - 5)."""
+    default = DEFAULT_PACING.get(platform, 1.0)
+    collection = config.get("collection") if isinstance(config.get("collection"), dict) else {}
+    pacing = collection.get("platform_pacing") if isinstance(collection.get("platform_pacing"), dict) else {}
+    try:
+        value = float(pacing.get(platform, default))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, 0.5), 5.0)
+
+
+def apply_pacing(collector, factor: float) -> None:
+    """Stretch the waits of a collector once (collect() runs once per keyword batch; the factor must not compound)."""
+    if getattr(collector, "_pacing_applied", False) or factor == 1.0:
+        collector._pacing_applied = True
+        return
+    for name in ("delay_range", "detail_delay_range", "page_delay_range"):
+        current = getattr(collector, name, None)
+        if isinstance(current, tuple) and len(current) == 2:
+            setattr(collector, name, tuple(float(value) * factor for value in current))
+    collector._pacing_applied = True
