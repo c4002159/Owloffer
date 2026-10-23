@@ -59,6 +59,9 @@ API_PAGE_SIZE = 20        # 每页条数（API 上限 20，实测稳定）
 # 接口调用返回空/出错时的兜底阶梯：(等待秒数, 是否先降频)。前两次只是等一等再问；后两次先把采集节奏放慢一档再问；
 # 全部用完仍为空才按 L3 处理。真正的风控信号（HTML/状态码/风控词）不走这里，仍然直接停。
 EMPTY_RESULT_RECOVERY = ((8, False), (20, False), (60, True), (180, True))
+# The browser could not complete the request at all ("TypeError: Failed to fetch"): the host tab is stale, off its page or the
+# connection dropped. That is not the platform refusing us, so reload the host page and try again before giving up.
+FETCH_ERROR_RECOVERY = ((6, False), (20, True), (60, True))
 API_FETCH_TIMEOUT = 25.0  # 单次 fetch 超时（秒）
 
 # ---- 速率四层防护（共享一个 60s 窗口，堵「多阶段独立计数叠加」漏洞）----
@@ -808,9 +811,23 @@ class Job51Collector:
             return {"ok": False, "level": 3, "signal": "empty_result",
                     "note": "evaluate 返回空（超时/断连）", "jobs": [], "total": 0}
         wrapper = _payload(raw)
+        for wait, slow in FETCH_ERROR_RECOVERY:
+            if not (isinstance(wrapper, dict) and "error" in wrapper):
+                break
+            limiter = getattr(self, "_limiter", None)
+            if slow and limiter is not None:
+                limiter.slow_down()
+            self._note_recovery(f"51job 浏览器里的请求没有成功（{str(wrapper.get('error'))[:60]}），重新加载页面，等待 {wait} 秒后重试")
+            try:
+                self.browser.evaluate(host_target, "location.reload()", timeout=8)
+            except Exception:
+                pass
+            self.sleep(wait)
+            raw = self.browser.evaluate(host_target, js, timeout=API_FETCH_TIMEOUT)
+            wrapper = _payload(raw) if raw is not None else {"error": "no answer"}
         if not isinstance(wrapper, dict) or "error" in wrapper:
             return {"ok": False, "level": 3, "signal": "fetch_error",
-                    "note": f"API fetch 执行出错: {str(wrapper)[:120]}", "jobs": [], "total": 0}
+                    "note": f"浏览器里的接口请求反复失败（不是平台限流提示，多半是页面或网络问题）: {str(wrapper)[:120]}", "jobs": [], "total": 0}
         return _analyze_api_response(
             int(wrapper.get("http_status") or 0),
             str(wrapper.get("content_type") or ""),

@@ -63,3 +63,14 @@ def test_stop_request_prevents_the_click():
     result, _ = apply_51job(JOB, CONFIG, sleep=lambda _s: None, stop_requested=lambda: True,
                             browser=_browser([_state("立即投递")], clicks, closed))
     assert result["error"] == "stopped" and clicks == []
+
+
+def test_a_failed_confirmation_keeps_what_the_click_opened_as_a_hint():
+    from bosshunter.executor.job51_apply import POPUP_TEXT_JS
+
+    clicks, closed = [], []
+    browser = _browser([_state("立即投递")], clicks, closed)
+    browser.evaluate = lambda tid, js: "请使用微信扫码继续" if js is POPUP_TEXT_JS else _state("立即投递")
+    result, _ = apply_51job(JOB, CONFIG, sleep=lambda _s: None, browser=browser)
+    assert not result["success"] and result["error"] == "apply_not_confirmed"
+    assert "请使用微信扫码继续" in result["history_detail"]

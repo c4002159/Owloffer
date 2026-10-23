@@ -690,13 +690,28 @@ class FetchPageTests(TestCase):
         self.assertEqual(limiter._gap_range, tuple(v * 4 for v in gap))      # slowed twice
         self.assertLess(limiter._per_min_limit, per_min)
 
-    def test_error_wrapper_returns_l3_fetch_error(self):
-        raw = json.dumps({"error": "NetworkError"})
-        collector = Job51Collector(browser=Job51Browser(evaluate=Mock(return_value=raw)))
+    def test_error_wrapper_returns_l3_fetch_error_after_reloading_and_retrying(self):
+        raw = json.dumps({"error": "TypeError: Failed to fetch"})
+        evaluate, sleep = Mock(return_value=raw), Mock()
+        collector = Job51Collector(browser=Job51Browser(evaluate=evaluate), sleep=sleep)
         result = collector._fetch_page("host", "kw", "020000", 1)
         self.assertFalse(result["ok"])
         self.assertEqual(result["level"], 3)
         self.assertEqual(result["signal"], "fetch_error")
+        self.assertIn("不是平台限流", result["note"])
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [6, 20, 60])
+        self.assertEqual(sum(1 for c in evaluate.call_args_list if "location.reload" in str(c.args[1])), 3)
+
+    def test_a_failed_fetch_that_works_after_a_reload_is_not_a_stop(self):
+        body = _ok_body([{"jobName": "AI"}], total=100)
+        good = json.dumps({"http_status": 200, "content_type": "application/json", "body": body})
+        bad = json.dumps({"error": "TypeError: Failed to fetch"})
+        # first try fails, reload, retry succeeds
+        evaluate, sleep = Mock(side_effect=[bad, None, good]), Mock()
+        collector = Job51Collector(browser=Job51Browser(evaluate=evaluate), sleep=sleep)
+        result = collector._fetch_page("host", "kw", "020000", 1)
+        self.assertTrue(result["ok"])
+        sleep.assert_called_once_with(6)
 
     def test_valid_response_analyzed(self):
         body = _ok_body([{"jobName": "AI"}], total=100)

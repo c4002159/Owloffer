@@ -41,6 +41,28 @@ PAGE_STATE_JS = r"""
 """.replace("__CAPTCHA__", CAPTCHA_PATTERN).replace("__CLOSED__", CLOSED_PATTERN)
 
 
+# What a click on "立即投递" opened, if anything: read before the page is reopened. A WeChat-scan page also shows up after a
+# successful application, so it is only kept as a hint in the failure note, never taken as the answer.
+POPUP_TEXT_JS = r"""
+(() => {
+  const seen = [...document.querySelectorAll('[role=dialog],[class*=modal],[class*=dialog],[class*=popup],[class*=layer],[class*=mask]')]
+    .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 80 && r.height > 40 && getComputedStyle(el).visibility !== 'hidden'; })
+    .map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return seen.sort((a, b) => b.length - a.length)[0] || '';
+})()
+"""
+
+
+def _popup_text(target_id: str, evaluate_fn: Callable[..., Any]) -> str:
+    try:
+        raw = evaluate_fn(target_id, POPUP_TEXT_JS)
+        if isinstance(raw, dict) and "value" in raw:
+            raw = raw["value"]
+        return str(raw or "")[:120]
+    except Exception:
+        return ""
+
+
 def _state(target_id: str, evaluate_fn: Callable[..., Any]) -> dict:
     raw = evaluate_fn(target_id, PAGE_STATE_JS)
     try:
@@ -114,6 +136,7 @@ def apply_51job(
             return finish({"success": False, "error": "apply_button_not_clickable", "history_detail": "投递按钮被遮挡或不在可视区域", "skip_backoff": True})
         click(target_id, f"{state['x']},{state['y']}")
         sleep(random.uniform(3, 5))
+        popup = _popup_text(target_id, run_js)
 
         for _ in range(3):                         # confirm: reopen the job page and read the button
             goto(target_id, url)
@@ -124,9 +147,10 @@ def apply_51job(
                 return finish({"success": False, "error": "captcha", "history_detail": "51job 出现验证，已停止"})
             if after.get("label") == "已投递":
                 return finish({"success": True, "history_detail": "51job 页面已显示已投递"})
+        detail = "点击后页面没有显示“已投递”，未确认成功，请到 51job“我的申请”核对"
         return finish({
             "success": False, "error": "apply_not_confirmed", "skip_backoff": True,
-            "history_detail": "点击后页面没有显示“已投递”，未确认成功，请到 51job“我的申请”核对",
+            "history_detail": f"{detail}（点击后页面弹出：{popup[:60]}）" if popup else detail,
         })
     except Exception as exc:  # keep one bad page from killing the whole delivery queue
         return finish({"success": False, "error": "apply_exception", "history_detail": f"投递异常：{type(exc).__name__}", "skip_backoff": True})
