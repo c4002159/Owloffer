@@ -952,8 +952,9 @@ class CollectionOrchestrator:
         # Carry on where the last run today ended; once every keyword is done only a few earlier ones are looked at again.
         done = kp.done_today(conn, request.platform, kind)
         pending = kp.pending_words(ordered, done)
+        resume_after = kp.get_cursor(conn, request.platform, kind) if pending else None
         if pending:
-            pending = kp.rotate_after(pending, kp.get_cursor(conn, request.platform, kind))
+            pending = kp.rotate_after(pending, resume_after)
         spot_check = not pending and bool(ordered)
         if spot_check:
             pending = kp.spot_check_words(ordered)
@@ -1016,7 +1017,11 @@ class CollectionOrchestrator:
                     processor.per_keyword = False
                     return result                               # a safety stop ends the whole platform
                 if not spot_check:
-                    kp.set_cursor(conn, request.platform, kind, word)         # the next collection goes on after this keyword
+                    if target and len(processor.new_job_ids) - start_total >= target:
+                        kp.set_cursor(conn, request.platform, kind, resume_after)    # cut by the target: this keyword is picked up again
+                    else:
+                        resume_after = word
+                        kp.set_cursor(conn, request.platform, kind, word)            # the next collection goes on after this keyword
                 # A page or detail that could not be read (reported as "incomplete_search") does not make the keyword unfinished: the
                 # list was read to its end. Without this a BOSS keyword was never "done" and every collection began at the top again.
                 finished = (

@@ -57,8 +57,13 @@ def get_cursor(conn: sqlite3.Connection, platform: str, kind: str) -> str | None
     return str(row[0]) if row else None
 
 
-def set_cursor(conn: sqlite3.Connection, platform: str, kind: str, keyword: str) -> None:
+def set_cursor(conn: sqlite3.Connection, platform: str, kind: str, keyword: str | None) -> None:
+    """Remember where the collection ended; None forgets it (the next one starts at the top of the list)."""
     _ensure_cursor(conn)
+    if keyword is None:
+        conn.execute("DELETE FROM keyword_cursor WHERE platform = ? AND kind = ? AND day = ?", (platform, kind, date.today().isoformat()))
+        conn.commit()
+        return
     conn.execute(
         "INSERT OR REPLACE INTO keyword_cursor (platform, kind, day, keyword) VALUES (?, ?, ?, ?)",
         (platform, kind, date.today().isoformat(), keyword),
