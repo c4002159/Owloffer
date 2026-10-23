@@ -5,6 +5,8 @@ import pytest
 
 from bosshunter.web.tasks import TaskAlreadyRunningError, WorkbenchTaskRunner, modes_conflict
 
+ALL_DAY = {"throttle": {"send_windows": ["00:00-23:59"]}}      # a delivery task is not started outside the send window
+
 
 def _runner():
     gates = {}
@@ -60,7 +62,7 @@ def test_the_other_way_round_and_same_kind_still_conflict():
         runner.start("score", {})                                     # one scoring run at a time
     with pytest.raises(TaskAlreadyRunningError):
         runner.start("collect", {})                                   # and one collection
-    queued = runner.start("deliver", {}, queue_if_busy=True)          # delivery has the program to itself: it waits for both
+    queued = runner.start("deliver", ALL_DAY, queue_if_busy=True)          # delivery has the program to itself: it waits for both
     assert queued["status"] == "queued"
     for task_id in (collecting["id"], scoring["id"]):
         gates.setdefault(task_id, threading.Event()).set()
@@ -71,7 +73,7 @@ def test_the_other_way_round_and_same_kind_still_conflict():
 
 def test_a_queued_task_starts_as_soon_as_what_blocked_it_is_gone_not_before():
     runner, gates = _runner()
-    delivering = runner.start("deliver", {})
+    delivering = runner.start("deliver", ALL_DAY)
     waiting_score = runner.start("score", {}, queue_if_busy=True)
     waiting_collect = runner.start("collect", {}, queue_if_busy=True)
     assert waiting_score["status"] == "queued" and waiting_collect["status"] == "queued"

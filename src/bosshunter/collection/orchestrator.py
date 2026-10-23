@@ -32,6 +32,7 @@ from bosshunter.employment import internship_search_config
 import time
 
 from bosshunter.platform_limits import cooldown_minutes, mark_limit_reached
+from bosshunter.platform_safety import PlatformPageBudget, PlatformStop, platform_search_page_limit
 from bosshunter.company_dedup import approved_within, cooldown_days, matching_company, pool_companies
 from bosshunter.rejected_companies import is_rejected_company, rejected_names
 from bosshunter.db import (
@@ -690,12 +691,27 @@ class CollectionOrchestrator:
                     states[p]["error_records"] = list(processor_ref.error_records)
                     self._emit(states, p, progress, all_new_ids, processor_ref.new_job_ids)
                 processor.emit = emit
+                # The platforms without a guard of their own get a daily budget of list pages: the page events every collector
+                # sends are counted, and the platform's own stop signal is set once the day's pages are used up.
+                page_limit = platform_search_page_limit(self.config, platform)
+                budget = PlatformPageBudget(conn, platform, page_limit) if page_limit else None
+                platform_stop = PlatformStop(self.stop_event) if budget is not None else self.stop_event
+
+                def on_event(p=processor, budget=budget, platform_stop=platform_stop, **kwargs):
+                    page = kwargs.get("page")
+                    if budget is not None and page:
+                        key = (kwargs.get("city") or p.progress.city, kwargs.get("keyword") or p.progress.keyword, page)
+                        if not budget.note_page(key):
+                            platform_stop.set()
+                            return
+                    p.event(**kwargs)
+
                 hooks = CollectorHooks(
-                    stop_event=self.stop_event,
+                    stop_event=platform_stop,
                     on_list_candidate=processor.inspect,
                     on_candidate=processor.save,
                     on_parse_failed=lambda reason, p=processor: self._parse_failed(p, reason),
-                    on_event=lambda p=processor, **kwargs: p.event(**kwargs),
+                    on_event=on_event,
                     can_checkpoint=lambda p=processor, baseline=prior_save_failures: p.progress.save_failed == baseline,
                     completed_page=(lambda city, keyword: checkpoint_pages.get(boss_combo_key(city, keyword), 0)),
                     on_page_complete=checkpoint if order == ["boss"] else lambda *_: None,
@@ -717,7 +733,12 @@ class CollectionOrchestrator:
                     )
                     ok_statuses = {"completed", "completed_with_shortage"}
                     quotas = options.get("quotas") or {}
-                    if self._budget and request.keywords:
+                    if budget is not None and budget.exhausted():
+                        result = PlatformCollectionResult(
+                            platform, "completed_with_shortage", "daily_search_page_limit",
+                            f"今天的搜索页已用完（{budget.used()}/{page_limit}），明天再继续；可在配置的安全设置里调整",
+                        )
+                    elif self._budget and request.keywords:
                         result = self._collect_with_budget(
                             collector, request, processor, hooks, conn, int(quotas.get("fulltime", 0) or 0),
                             "fulltime", intern=False,
@@ -728,6 +749,7 @@ class CollectionOrchestrator:
                         intern_words and int(quotas.get("internship", 0) or 0) > 0
                         and result.status in ok_statuses
                         and not (self.stop_event is not None and self.stop_event.is_set())
+                        and not (budget is not None and (budget.tripped or budget.exhausted()))
                     ):
                         intern_result = self._collect_internships(
                             request, raw, intern_words, quotas, processor, hooks, conn
@@ -740,6 +762,11 @@ class CollectionOrchestrator:
                     result = PlatformCollectionResult(platform, "blocked", exc.code, exc.message, error=str(exc))
                 except Exception as exc:
                     result = PlatformCollectionResult(platform, "failed", "network_error", f"{platform} 采集失败", error=str(exc)[:500])
+                if budget is not None and budget.tripped and not (self.stop_event is not None and self.stop_event.is_set()):
+                    result = PlatformCollectionResult(
+                        platform, "completed_with_shortage", "daily_search_page_limit",
+                        f"今天的搜索页已用完（{budget.used()}/{page_limit}）；已采集的岗位保留，明天再继续",
+                    )
                 result.new_job_ids = list(processor.new_job_ids)
                 result.counts = self._counts(processor.progress)
                 if platform == "boss" and result.status in {"completed", "completed_with_shortage"}:
@@ -1119,7 +1146,7 @@ class CollectionOrchestrator:
             return keep and (target <= 0 or len(processor.new_job_ids) - before < target)
 
         intern_hooks = CollectorHooks(
-            stop_event=self.stop_event,
+            stop_event=hooks.stop_event,
             on_list_candidate=processor.inspect,
             on_candidate=limited_save,
             on_parse_failed=hooks.on_parse_failed,

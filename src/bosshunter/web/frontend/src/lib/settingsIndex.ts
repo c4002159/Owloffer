@@ -86,6 +86,10 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { path: 'collection.delivery_cooldown_min_minutes', label: 'BOSS 采集后投递冷却下限（分钟）', category: 'safety', aliases: ['冷却'] },
   { path: 'collection.delivery_cooldown_max_minutes', label: 'BOSS 采集后投递冷却上限（分钟）', category: 'safety', aliases: ['冷却'] },
   { path: 'safety.daily_platform_page_limit', label: 'BOSS 单日页面访问总上限', category: 'safety', aliases: ['风控', '页面'], risky: true },
+  { path: 'collection.platform_limits.51job.daily_search_page_limit', label: '前程无忧 单日搜索页上限', category: 'safety', aliases: ['风控', '页数', '51job'], risky: true },
+  { path: 'collection.platform_limits.liepin.daily_search_page_limit', label: '猎聘 单日搜索页上限', category: 'safety', aliases: ['风控', '页数'], risky: true },
+  { path: 'collection.platform_limits.zhilian.daily_search_page_limit', label: '智联招聘 单日搜索页上限', category: 'safety', aliases: ['风控', '页数'], risky: true },
+  { path: 'collection.platform_limits.zhilian_campus.daily_search_page_limit', label: '智联校招 单日搜索页上限', category: 'safety', aliases: ['风控', '页数', '校园'], risky: true },
   { path: 'safety.risk_lock_minutes', label: '风险锁定时长（分钟）', category: 'safety', aliases: ['风控', '锁定'] },
   // 智能体
   { path: '', label: '智能体令牌 / 权限 / 连接 Claude 和 Codex', category: 'agent', aliases: ['MCP', 'Claude', 'Codex', '令牌', 'token', '远程'] },

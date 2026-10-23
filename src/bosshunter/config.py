@@ -107,6 +107,13 @@ DEFAULTS: dict[str, Any] = {
         "risk_pause_min_minutes": 5,
         "risk_pause_max_minutes": 10,
         "collection_delay_multiplier": 1.5,
+        # Daily list-page budget of the other platforms (BOSS uses the settings above); 0 = no budget.
+        "platform_limits": {
+            "51job": {"daily_search_page_limit": 300},
+            "liepin": {"daily_search_page_limit": 300},
+            "zhilian": {"daily_search_page_limit": 300},
+            "zhilian_campus": {"daily_search_page_limit": 200},
+        },
         "delivery_cooldown_min_minutes": 5,
         "delivery_cooldown_max_minutes": 15,
     },

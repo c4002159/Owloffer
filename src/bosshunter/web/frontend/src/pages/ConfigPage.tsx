@@ -850,6 +850,18 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
               <Input type="number" value={config.safety?.daily_platform_page_limit ?? 1100} onChange={e => updateConfig('safety.daily_platform_page_limit', Number(e.target.value))} min={1} max={2000} />
               <p className="mt-1 text-xs text-muted">合计 BOSS 搜索页、详情页、自动投递和监测打开的页面；默认 1100 次，可容纳 60 次搜索与 900 次详情，另余 140 次供其他操作使用。其他平台不占用。</p>
             </Field>
+            <div className="space-y-2">
+              <div className="text-xs font-black text-foreground">其他平台 单日搜索页上限</div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {([['51job', '前程无忧', 300], ['liepin', '猎聘', 300], ['zhilian', '智联招聘', 300], ['zhilian_campus', '智联校招', 200]] as const).map(([key, name, fallback]) => (
+                  <Field key={key} label={`${name} 单日搜索页上限`}>
+                    <Input type="number" min={0} value={config.collection?.platform_limits?.[key]?.daily_search_page_limit ?? fallback}
+                      onChange={e => updateConfig(`collection.platform_limits.${key}.daily_search_page_limit`, Math.max(Number(e.target.value) || 0, 0))} />
+                  </Field>
+                ))}
+              </div>
+              <p className="text-xs text-muted">每个平台一天最多打开这么多页搜索结果，用完后该平台当天不再采集，其他平台继续，已采到的岗位保留。默认值按每日循环的实际用量留有余量，只拦截失控的翻页；填 0 表示不限制。</p>
+            </div>
             <SafetyExtras config={config} updateConfig={updateConfig} />
           </div>
         </SectionCard>
