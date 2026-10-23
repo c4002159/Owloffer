@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -369,8 +370,16 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return content if isinstance(content, dict) else {}
 
 
+_YAML_WRITE_LOCK = threading.Lock()      # two threads replacing the same file at once make Windows refuse the second one
+
+
 def _write_yaml_atomic(path: Path, data: dict[str, Any]) -> None:
     """Atomically write a local YAML file with owner-only permissions."""
+    with _YAML_WRITE_LOCK:
+        _write_yaml_atomic_locked(path, data)
+
+
+def _write_yaml_atomic_locked(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -387,15 +396,15 @@ def _write_yaml_atomic(path: Path, data: dict[str, Any]) -> None:
             temporary.flush()
             os.fsync(temporary.fileno())
         os.chmod(temporary_path, 0o600)
-        for attempt in range(6):
+        for attempt in range(10):
             try:
                 os.replace(temporary_path, path)
                 break
             except PermissionError:
                 # Windows: another process (antivirus, indexer, reader) may briefly hold the target.
-                if attempt == 5:
+                if attempt == 9:
                     raise
-                time.sleep(0.2 * (attempt + 1))
+                time.sleep(0.3 * (attempt + 1))
         temporary_path = None
     finally:
         if temporary_path is not None:
