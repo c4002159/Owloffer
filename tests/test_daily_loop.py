@@ -193,8 +193,10 @@ def test_the_loop_waits_for_its_start_time_and_refuses_times_that_do_not_make_se
 
     with pytest.raises(ValueError):
         _loop(FakeServer(), tmp_path / "x").start({"end_time": "08:00"})       # the end time already passed (it is 09:00)
-    with pytest.raises(ValueError):
-        _loop(FakeServer(), tmp_path / "y").start({"start_time": "11:00", "end_time": "10:00"})
+    across_midnight = _loop(FakeServer(), tmp_path / "y")
+    across_midnight._launch = lambda: None
+    across_midnight.start({"start_time": "11:00", "end_time": "10:00"})          # an end before the start means: the next morning
+    assert across_midnight.snapshot()["end_at"] == "2026-10-23T10:00:00"
 
 
 def test_each_platform_can_be_automatic_manual_or_left_out(tmp_path):
@@ -321,3 +323,61 @@ def test_the_names_the_loop_uses_for_limits_are_the_names_on_the_settings_page()
     labels += [limit_label("daily_search_page_limit", platform) for platform in ("boss", "51job", "liepin", "zhilian", "zhilian_campus")]
     for label in labels:
         assert f"label: '{label}'" in index, label
+
+
+def test_without_a_time_window_the_loop_has_no_end_time_and_stops_only_when_nothing_is_left():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        server = LimitServer(deliver_stop="daily_platform_page_limit")
+        server.confirm = [{"id": "boss:1", "source_platform": "boss"}]
+        loop = _loop(server, Path(tmp))
+        loop.start({"platform_order": ["boss"], "time_window": False})
+        loop.join(10)
+        snapshot = loop.snapshot()
+        assert snapshot["end_at"] == "" and snapshot["running"] is False                # it ended because the platform was out, not by the clock
+        assert "额度" in snapshot["message"]
+
+
+def test_a_loop_without_a_window_is_resumed_after_a_restart(tmp_path):
+    import json
+
+    server = FakeServer()
+    (tmp_path / "loop.json").write_text(json.dumps({"running": True, "end_at": "", "order": ["boss"], "modes": {"boss": "auto"}, "targets": {"boss": 5}, "delivery_cap": 150}))
+    loop = _loop(server, tmp_path)
+    loop.poll_seconds = 1
+    started = []
+    loop._launch = lambda: started.append(True)
+    assert loop.resume() is True and started
+
+
+def test_a_window_across_midnight_ends_the_next_morning():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        server = FakeServer()
+        loop = _loop(server, Path(tmp))
+        loop._launch = lambda: None
+        loop.start({"platform_order": ["liepin"], "start_time": "22:00", "end_time": "06:00"})
+        assert loop.snapshot()["end_at"] == "2026-10-23T06:00:00"             # the fake clock stands at 09:00 on the 22nd
+
+
+def test_the_day_count_starts_again_after_midnight():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        server = FakeServer()
+        loop = _loop(server, Path(tmp))
+        loop._launch = lambda: None
+        loop.start({"platform_order": ["boss"], "time_window": False, "delivery_cap": 10})
+        loop.state["totals"] = {"boss": {"delivered": 10}}
+        loop._mark_out("boss", "daily_platform_page_limit")
+        assert loop._capped("boss") and loop._out("boss")
+        server.t += timedelta(days=1)
+        loop._roll_day()
+        assert not loop._capped("boss") and not loop._out("boss") and loop._delivered("boss") == 0
+        loop.state["totals"] = {"boss": {"delivered": 14}}
+        assert loop._delivered("boss") == 4

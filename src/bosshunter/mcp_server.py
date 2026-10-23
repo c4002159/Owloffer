@@ -31,7 +31,7 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "bosshunter_events", "description": "读取新消息（事件流）：异常、平台暂停、每日循环结束、你自己做过的操作。传上次返回的 latest 作为 since，只拿新的。",
      "inputSchema": _obj({"since": {"type": "integer", "description": "只返回 id 大于它的事件，默认 0"}, "limit": {"type": "integer"}})},
     {"name": "bosshunter_daily_loop_start", "description": "启动每日循环（采集→批准→投递→再采集）。时间是 HH:MM 本机时间。",
-     "inputSchema": _obj({"start_time": {"type": "string"}, "end_time": {"type": "string"}, "delivery_cap": {"type": "integer", "description": "每个平台当天投递上限，0 不限"}})},
+     "inputSchema": _obj({"time_window": {"type": "boolean", "description": "false = 不限时间，全天运行；省略或 true = 用 start_time 到 end_time"}, "start_time": {"type": "string"}, "end_time": {"type": "string"}, "delivery_cap": {"type": "integer", "description": "每个平台当天投递上限，0 不限"}})},
     {"name": "bosshunter_daily_loop_stop", "description": "停止每日循环。", "inputSchema": _obj({})},
     {"name": "bosshunter_resolve_incident", "description": "把一条异常标记为已处理（修复之后再调用）。",
      "inputSchema": _obj({"incident_id": {"type": "string"}}, ["incident_id"])},
@@ -49,7 +49,7 @@ def _route(name: str, args: dict) -> tuple[str, str, dict | None]:
         query = urllib.parse.urlencode({"since": int(args.get("since") or 0), "limit": int(args.get("limit") or 50)})
         return "GET", f"/api/agent/control/events?{query}", None
     if name == "bosshunter_daily_loop_start":
-        return "POST", "/api/agent/control/daily-loop/start", {k: args[k] for k in ("start_time", "end_time", "delivery_cap") if k in args}
+        return "POST", "/api/agent/control/daily-loop/start", {k: args[k] for k in ("time_window", "start_time", "end_time", "delivery_cap") if k in args}
     if name == "bosshunter_daily_loop_stop":
         return "POST", "/api/agent/control/daily-loop/stop", {}
     if name == "bosshunter_resolve_incident":

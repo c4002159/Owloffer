@@ -39,6 +39,8 @@ export const LOOP_PLATFORMS = ['zhilian_campus', 'zhilian', 'boss', '51job', 'li
 export type LoopPlatform = (typeof LOOP_PLATFORMS)[number]
 
 export interface DailyLoopSettings {
+  /** Off: the loop runs around the clock until it is stopped or every platform has used up its day. */
+  windowOn: boolean
   start: string
   end: string
   cap: string
@@ -49,7 +51,7 @@ export interface DailyLoopSettings {
 
 const SETTINGS_KEY = 'owloffer.dailyLoop.settings'
 const DEFAULTS: DailyLoopSettings = {
-  start: '07:00', end: '20:00', cap: '150', campusTarget: '50', platformTarget: '80',
+  windowOn: false, start: '07:00', end: '20:00', cap: '150', campusTarget: '50', platformTarget: '80',
   modes: { zhilian_campus: 'manual', zhilian: 'auto', boss: 'auto', '51job': 'auto', liepin: 'auto' },
 }
 
@@ -108,8 +110,8 @@ export function useDailyLoop(setNotice: (message: string) => void) {
     setBusy(true)
     try {
       setState(await post('/api/daily-loop/start', {
-        start_time: settings.start,
-        end_time: settings.end,
+        time_window: settings.windowOn,
+        ...(settings.windowOn ? { start_time: settings.start, end_time: settings.end } : {}),
         delivery_cap: count(settings.cap, 150),
         modes: settings.modes,
         targets: { zhilian_campus: campus, zhilian: other, boss: other, '51job': other, liepin: other },

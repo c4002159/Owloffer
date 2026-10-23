@@ -16,7 +16,7 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime, time as day_time
+from datetime import datetime, time as day_time, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -179,19 +179,25 @@ class DailyLoop:
             if not order:
                 raise ValueError("至少要有一个平台参加每日循环")
             targets = {**DEFAULT_TARGETS, **{k: int(v) for k, v in (options.get("targets") or {}).items() if k in DEFAULT_TARGETS}}
-            end = parse_end_time(options.get("end_time") or DEFAULT_END, now)
-            if end <= now:
-                raise ValueError(f"结束时间 {end:%H:%M} 已经过了，请把结束时间调到现在之后")
-            begin = parse_end_time(options["start_time"], now) if options.get("start_time") else None
-            if begin is not None and begin >= end:
-                raise ValueError("开始时间必须早于结束时间")
+            # The time window is optional: without it the loop runs around the clock until it is stopped, or until every platform
+            # has used up its day (see _all_out). Callers that do not say (the API, Claude/Codex) get the window as before.
+            if options.get("time_window", True) is False:
+                end, begin = None, None
+            else:
+                end = parse_end_time(options.get("end_time") or DEFAULT_END, now)
+                begin = parse_end_time(options["start_time"], now) if options.get("start_time") else None
+                if begin is not None and end <= begin:
+                    end += timedelta(days=1)                      # a window across midnight, e.g. 22:00 - 06:00
+                if end <= now:
+                    raise ValueError(f"结束时间 {end:%H:%M} 已经过了，请把结束时间调到现在之后")
             cap = max(int(options.get("delivery_cap", DEFAULT_CAP) or 0), 0)
             self._collect_closed = set()
             self.state = {
-                "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds"),
+                "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds") if end else "", "day": now.date().isoformat(),
+                "delivered_base": {},
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
-                "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "auto_approve", "delivery_cap") if k in options},
+                "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "time_window", "auto_approve", "delivery_cap") if k in options},
                 "stopped_reason": "", "out_today": {},
             }
             self._save()
@@ -204,7 +210,7 @@ class DailyLoop:
         if not state.get("running") or self.running():
             return False
         end = datetime.fromisoformat(state["end_at"]) if state.get("end_at") else None
-        if end is None or self.now() >= end:
+        if end is not None and self.now() >= end:
             self._set(running=False, step="finished", message="已到结束时间", stopped_reason="end_time")
             return False
         self._launch()
@@ -226,11 +232,28 @@ class DailyLoop:
 
     # ------------------------------------------------------------------ the loop
     def _over(self) -> bool:
-        end = datetime.fromisoformat(self.state["end_at"])
-        return self._stop.is_set() or self.now() >= end or self._all_capped() or self._all_out()
+        end = datetime.fromisoformat(self.state["end_at"]) if self.state.get("end_at") else None
+        return self._stop.is_set() or (end is not None and self.now() >= end) or self._all_capped() or self._all_out()
 
     def _delivered(self, platform: str) -> int:
-        return int((self.state.get("totals") or {}).get(platform, {}).get("delivered", 0))
+        """Deliveries of the current day (a loop without a time window runs through midnight: the day's count starts again)."""
+        total = int((self.state.get("totals") or {}).get(platform, {}).get("delivered", 0))
+        return total - int((self.state.get("delivered_base") or {}).get(platform, 0))
+
+    def _roll_day(self) -> None:
+        """A new calendar day: what was used up yesterday is available again."""
+        today = self.now().date().isoformat()
+        if not self.state.get("day"):
+            self.state["day"] = today
+            return
+        if self.state["day"] == today:
+            return
+        with self._lock:
+            self.state["day"] = today
+            self.state["delivered_base"] = {p: int(v.get("delivered", 0)) for p, v in (self.state.get("totals") or {}).items()}
+            self.state["out_today"] = {}
+            self._collect_closed = set()
+            self._save()
 
     def _mode(self, platform: str) -> str:
         """auto: the loop collects, approves and delivers; manual: it only collects (and scores) and the postings wait for you."""
@@ -289,6 +312,9 @@ class DailyLoop:
             self._wait_for_start()
             idle_rounds = 0
             while not self._over():
+                self._roll_day()
+                if self._over():
+                    break
                 with self._lock:
                     self.state["round"] = int(self.state.get("round", 0)) + 1
                     self._save()

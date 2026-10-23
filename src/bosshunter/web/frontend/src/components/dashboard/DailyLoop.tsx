@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Play, Settings2, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PLATFORM_LABELS } from '@/lib/platforms'
+import { Switch } from '@/components/ui/switch'
 import { describeLimit } from '@/lib/limitReasons'
 import { LOOP_PLATFORMS, type DailyLoopController, type DailyLoopIncident, type LoopMode, type LoopPlatform } from '@/hooks/useDailyLoop'
 
@@ -67,9 +68,9 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
       '启动每日循环？',
       '',
       `参加的平台：${summary}`,
-      `时间：${settings.start}–${settings.end}；每个全自动平台最多投递 ${cap || '不限'} 个。`,
+      `时间：${settings.windowOn ? `${settings.start}–${settings.end}（24 小时制）` : '不限时间，全天运行'}；每个全自动平台最多投递 ${cap || '不限'} 个。`,
       '全自动的平台：采集 → 自动批准 → 投递，投完再采下一轮；手动确认的平台：只采集和评分，岗位留在「手动确认区」等你点同意。',
-      '到结束时间或所有全自动平台都到投递上限就自动停止。',
+      settings.windowOn ? '到结束时间或所有全自动平台都到投递上限就自动停止。' : '你点停止、所有全自动平台都到投递上限、或者它们今天的额度都用完时自动停止。',
     ].join('\n')
     if (window.confirm(text)) void loop.start()
   }
@@ -89,7 +90,7 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
         <div className="flex items-end justify-between gap-2">
           <p className={cn('text-xs leading-5', running ? 'text-primary-foreground/85' : 'text-muted')}>
             {running
-              ? `${settings.start}–${clock(loop.state.end_at) || settings.end} · 每平台最多投递 ${loop.state.delivery_cap || '不限'}`
+              ? `${loop.state.end_at ? `${settings.start}–${clock(loop.state.end_at)}` : '全天运行'} · 每平台最多投递 ${loop.state.delivery_cap || '不限'}`
               : `参加 ${counts.auto + counts.manual} 个平台：${counts.auto} 个全自动${counts.manual ? `，${counts.manual} 个手动确认` : ''}${counts.off ? `，${counts.off} 个不参加` : ''}`}
           </p>
           {!running && (
@@ -120,8 +121,21 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
             <p className="leading-5 text-muted">「手动确认」的平台只采集和评分，岗位留在「手动确认区」等你点同意；智联校招只能手动投递。</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <label className="space-y-1 font-bold">开始时间<input type="time" value={settings.start} onChange={e => change({ start: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
-            <label className="space-y-1 font-bold">结束时间<input type="time" value={settings.end} onChange={e => change({ end: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
+            <div className="col-span-2 space-y-2 rounded-lg border border-card-border bg-surface p-2">
+              <label className="flex items-center justify-between gap-2 font-bold text-foreground">
+                限定运行时间段
+                <Switch aria-label="限定运行时间段" checked={settings.windowOn} onChange={value => change({ windowOn: value })} />
+              </label>
+              {settings.windowOn ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <Clock24 label="开始时间" value={settings.start} onChange={value => change({ start: value })} />
+                  <Clock24 label="结束时间" value={settings.end} onChange={value => change({ end: value })} />
+                  <p className="col-span-2 leading-5 text-muted">24 小时制；结束时间早于开始时间表示跨过午夜（如 22:00–06:00）。</p>
+                </div>
+              ) : (
+                <p className="leading-5 text-muted">关着：不限时间，全天 24 小时运行，直到你停止，或所有全自动平台都到上限、额度用完。</p>
+              )}
+            </div>
             <label className="space-y-1 font-bold">校招目标（新增岗位）<input type="number" min={1} value={settings.campusTarget} onChange={e => change({ campusTarget: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="space-y-1 font-bold">其他平台目标（各）<input type="number" min={1} value={settings.platformTarget} onChange={e => change({ platformTarget: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="col-span-2 space-y-1 font-bold">每个全自动平台每天投递上限（0 = 不限）<input type="number" min={0} max={1000} value={settings.cap} onChange={e => change({ cap: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
@@ -190,6 +204,27 @@ export function DailyLoopIncidents({ loop }: { loop: DailyLoopController }) {
           {open === item.id && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-card p-2 text-[11px] text-muted">{item.detail}</pre>}
         </div>
       ))}
+    </div>
+  )
+}
+
+/** A time of day in the 24-hour clock (two lists: the browser's own time field would follow the system's 12-hour setting). */
+function Clock24({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const [hour, minute] = value.split(':').map(part => part.padStart(2, '0'))
+  const two = (n: number) => String(n).padStart(2, '0')
+  const select = 'rounded-lg border border-card-border bg-surface px-2 py-1'
+  return (
+    <div className="space-y-1 font-bold">
+      <span>{label}</span>
+      <div className="flex items-center gap-1">
+        <select aria-label={`${label}（时）`} value={hour} onChange={event => onChange(`${event.target.value}:${minute}`)} className={select}>
+          {Array.from({ length: 24 }, (_, n) => <option key={n} value={two(n)}>{two(n)}</option>)}
+        </select>
+        :
+        <select aria-label={`${label}（分）`} value={minute} onChange={event => onChange(`${hour}:${event.target.value}`)} className={select}>
+          {Array.from({ length: 60 }, (_, n) => <option key={n} value={two(n)}>{two(n)}</option>)}
+        </select>
+      </div>
     </div>
   )
 }
