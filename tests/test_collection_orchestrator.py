@@ -1208,3 +1208,68 @@ class CampusChannelTests(TestCase):
             conn.close()
         self.assertEqual(result["platforms"]["zhilian_campus"]["new"], 1)
         self.assertEqual([(row["source_platform"], row["recruitment_type"]) for row in rows], [("zhilian_campus", "campus")])
+
+
+class KeywordContinuationTests(TestCase):
+    """A collection goes on where the last one of the day ended instead of starting at the first keyword again."""
+
+    WORDS = ["甲", "乙", "丙", "丁", "戊"]
+
+    def _collector(self, calls, *, reason="search_exhausted", status="completed", stop_after=None, stop_event=None):
+        class Words:
+            platform = "liepin"
+
+            def collect(self, request, hooks):
+                word = request.keywords[0]
+                calls.append(word)
+                candidate = JobCandidate(**{**_candidate("liepin", f"{word}-x", f"{word}岗位").__dict__, "company": f"{word}公司", "city": "上海"})
+                if hooks.on_list_candidate(candidate):
+                    hooks.on_candidate(candidate)
+                if stop_after and len(calls) == stop_after:
+                    stop_event.set()
+                    return PlatformCollectionResult("liepin", "stopped", "user_stopped", "用户已停止")
+                return PlatformCollectionResult("liepin", status, reason, "ok")
+
+        return Words
+
+    def _run(self, db_path, collector, config=None):
+        options = _options(order=["liepin"])
+        options["platforms"]["liepin"].update(cities=["上海"], keywords=list(self.WORDS))
+        options["quotas"] = {"fulltime": 100, "internship": 0}
+        registry = CollectorRegistry({"liepin": collector})
+        merged = {"automation": {"keyword_budget": True}, **(config or {})}
+        return CollectionOrchestrator(merged, db_path=db_path, registry=registry).run(options)
+
+    def test_a_keyword_with_unreadable_pages_still_counts_as_finished(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "c.db"
+            first, second = [], []
+            self._run(db_path, self._collector(first, status="completed_with_shortage", reason="incomplete_search"))
+            self.assertEqual(first, self.WORDS)
+            self._run(db_path, self._collector(second, status="completed_with_shortage", reason="incomplete_search"))
+            self.assertLessEqual(len(second), 3)                                   # all done today: only a spot check of a few
+
+    def test_a_collection_cut_short_is_continued_after_the_keyword_it_reached(self):
+        from threading import Event
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "c.db"
+            first, second = [], []
+            stop = Event()
+            self._run(db_path, self._collector(first, stop_after=3, stop_event=stop), {"_workbench_stop_event": stop})
+            self.assertEqual(first, ["甲", "乙", "丙"])
+            self._run(db_path, self._collector(second, status="completed_with_shortage", reason="callback_stopped"))
+            self.assertEqual(second[0], "丙")                                      # the one that was cut off is searched again, not 甲
+
+    def test_capped_keywords_do_not_send_the_next_collection_back_to_the_start(self):
+        from threading import Event
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "c.db"
+            first, second = [], []
+            stop = Event()
+            capped = self._collector(first, status="completed", reason="callback_stopped", stop_after=4, stop_event=stop)
+            self._run(db_path, capped, {"_workbench_stop_event": stop})
+            self.assertEqual(first, ["甲", "乙", "丙", "丁"])
+            self._run(db_path, self._collector(second, status="completed", reason="callback_stopped"))
+            self.assertEqual(second[0], "丁")

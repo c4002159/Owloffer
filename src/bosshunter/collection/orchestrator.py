@@ -952,6 +952,8 @@ class CollectionOrchestrator:
         # Carry on where the last run today ended; once every keyword is done only a few earlier ones are looked at again.
         done = kp.done_today(conn, request.platform, kind)
         pending = kp.pending_words(ordered, done)
+        if pending:
+            pending = kp.rotate_after(pending, kp.get_cursor(conn, request.platform, kind))
         spot_check = not pending and bool(ordered)
         if spot_check:
             pending = kp.spot_check_words(ordered)
@@ -1013,8 +1015,13 @@ class CollectionOrchestrator:
                 if result.status not in ok and result.reason_code != "callback_stopped":
                     processor.per_keyword = False
                     return result                               # a safety stop ends the whole platform
+                if not spot_check:
+                    kp.set_cursor(conn, request.platform, kind, word)         # the next collection goes on after this keyword
+                # A page or detail that could not be read (reported as "incomplete_search") does not make the keyword unfinished: the
+                # list was read to its end. Without this a BOSS keyword was never "done" and every collection began at the top again.
                 finished = (
-                    result.status == "completed" and result.reason_code not in {"callback_stopped", "day_off", "outside_window"}
+                    (result.status == "completed" or (result.status == "completed_with_shortage" and result.reason_code == "incomplete_search"))
+                    and result.reason_code not in {"callback_stopped", "day_off", "outside_window"}
                 ) or processor.abandoned_keyword
                 if finished and not capped and not spot_check:  # searched to its end (or given up as stale / repeated)
                     kp.mark_done(conn, request.platform, kind, word)
