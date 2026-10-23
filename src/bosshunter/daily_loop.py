@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, time as day_time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 DEFAULT_ORDER = ("zhilian_campus", "zhilian", "boss", "51job", "liepin")
 DEFAULT_TARGETS = {"zhilian_campus": 50, "zhilian": 80, "boss": 80, "51job": 80, "liepin": 80}
@@ -32,6 +33,33 @@ DEFAULT_CAP = 150                               # deliveries per platform and da
 MAX_INCIDENTS = 300
 GREETING_STATUSES = {"ready", "approved", "error"}      # the statuses the greeting API accepts (not the unscored ones)
 PLATFORM_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘"}
+SETTING_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS", "51job": "前程无忧", "liepin": "猎聘"}
+# Limits that last until tomorrow (or until the user raises them): once a platform hits one, the loop has nothing more to do there.
+DAY_LONG_LIMITS = ("daily_platform_page_limit", "daily_search_page_limit", "daily_detail_page_limit", "daily_limit")
+# The page budget of a platform is shared by collecting and delivering, so reaching it ends both.
+SHARED_LIMITS = ("daily_platform_page_limit", "daily_limit")
+
+
+def limit_label(code: str, platform: str) -> str:
+    """The limit under the same name the settings page gives it (the frontend's settingsIndex.ts is the source of these words)."""
+    if code == "daily_platform_page_limit":
+        return "BOSS 单日页面访问总上限"
+    if code == "daily_detail_page_limit":
+        return "BOSS 单日详情页尝试上限"
+    if code == "daily_search_page_limit":
+        return f"{SETTING_NAMES.get(platform, platform)} 单日搜索页上限"
+    return "每日发送上限"
+
+
+def limit_href(code: str, platform: str) -> str:
+    section = "delivery" if code == "daily_limit" else "safety"
+    return f"/config?section={section}&focus={quote(limit_label(code, platform))}"
+
+
+def day_long_limit(text: object) -> str | None:
+    """The day-long limit a task's stop reason or a platform's reason code names, if any."""
+    text = str(text or "")
+    return next((code for code in DAY_LONG_LIMITS if code in text), None)
 
 
 class ApiError(RuntimeError):
@@ -65,6 +93,7 @@ class DailyLoop:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
+        self._collect_closed: set[str] = set()      # platforms whose collecting is over for today (delivering may go on)
         self.state = self._load()
 
     # ------------------------------------------------------------------ state
@@ -157,12 +186,13 @@ class DailyLoop:
             if begin is not None and begin >= end:
                 raise ValueError("开始时间必须早于结束时间")
             cap = max(int(options.get("delivery_cap", DEFAULT_CAP) or 0), 0)
+            self._collect_closed = set()
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds"),
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
                 "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "auto_approve", "delivery_cap") if k in options},
-                "stopped_reason": "",
+                "stopped_reason": "", "out_today": {},
             }
             self._save()
         self._launch()
@@ -197,7 +227,7 @@ class DailyLoop:
     # ------------------------------------------------------------------ the loop
     def _over(self) -> bool:
         end = datetime.fromisoformat(self.state["end_at"])
-        return self._stop.is_set() or self.now() >= end or self._all_capped()
+        return self._stop.is_set() or self.now() >= end or self._all_capped() or self._all_out()
 
     def _delivered(self, platform: str) -> int:
         return int((self.state.get("totals") or {}).get(platform, {}).get("delivered", 0))
@@ -217,6 +247,26 @@ class DailyLoop:
         cap = int(self.state.get("delivery_cap") or 0)
         platforms = [p for p in self.state.get("order", []) if self._mode(p) == "auto"]
         return cap > 0 and bool(platforms) and all(self._capped(p) for p in platforms)
+
+    def _out(self, platform: str) -> bool:
+        return platform in (self.state.get("out_today") or {})
+
+    def _all_out(self) -> bool:
+        """Every platform that delivers is capped or has run into a day-long limit: waiting longer would change nothing."""
+        platforms = [p for p in self.state.get("order", []) if self._mode(p) == "auto"]
+        return bool(platforms) and all(self._capped(p) or self._out(p) for p in platforms) and not self._all_capped()
+
+    def _mark_out(self, platform: str, code: str) -> None:
+        """The platform has nothing more to do today: say so once, with a link to the setting that decided it."""
+        if self._out(platform):
+            return
+        label = limit_label(code, platform)
+        with self._lock:
+            self.state.setdefault("out_today", {})[platform] = {"code": code, "label": label}
+            self._save()
+        name = PLATFORM_NAMES.get(platform, platform)
+        self._news("loop", f"{name}今天已达到「{label}」，每日循环不再处理这个平台；明天恢复，或到设置里调整", level="warning",
+                   platform=platform, data={"href": limit_href(code, platform), "limit": label})
 
     def _wait(self, seconds: float) -> None:
         waited = 0.0
@@ -259,7 +309,7 @@ class DailyLoop:
             self._finish()
 
     def _finish(self) -> None:
-        stopped = self.state.get("stopped_reason") or ("cap" if self._all_capped() else "end_time")
+        stopped = self.state.get("stopped_reason") or ("cap" if self._all_capped() else "limit" if self._all_out() else "end_time")
         if self._over() or stopped:
             try:
                 status = self.api("GET", "/api/workbench", None)
@@ -268,9 +318,13 @@ class DailyLoop:
                     self.api("POST", f"/api/workbench/task/{active['id']}/stop", {})
             except Exception:
                 pass
-        message = "各平台都已达到投递上限，每日循环结束" if self._all_capped() else "每日循环结束"
+        message = "各平台都已达到投递上限，每日循环结束" if self._all_capped() else self._limits_message() if self._all_out() else "每日循环结束"
         self._set(running=False, step="finished", message=message, platform="", summary=self.summary())
         self._news("loop", f"{message}：{json.dumps(self.summary(), ensure_ascii=False)}", level="info")
+
+    def _limits_message(self) -> str:
+        parts = [f"{PLATFORM_NAMES.get(p, p)}「{info['label']}」" for p, info in (self.state.get("out_today") or {}).items()]
+        return "各平台今天都用完了额度（" + "、".join(parts) + "），每日循环结束；明天恢复，或调整上限后重新开始"
 
     def summary(self) -> dict[str, Any]:
         with self._lock:
@@ -282,6 +336,9 @@ class DailyLoop:
         self._set(platform=platform, step="check", message=f"{PLATFORM_NAMES.get(platform, platform)}：检查状态")
         if self._capped(platform):
             self._set(message=f"{PLATFORM_NAMES.get(platform, platform)}：已达到投递上限 {self.state.get('delivery_cap')}，跳过")
+            return 0
+        if self._out(platform):
+            self._set(message=f"{PLATFORM_NAMES.get(platform, platform)}：今天已达到「{self.state['out_today'][platform]['label']}」，跳过")
             return 0
         status = self._get("/api/workbench")
         if platform in (status.get("platform_limit_details") or {}):
@@ -347,6 +404,13 @@ class DailyLoop:
         new = int(metrics.get("collect_new") or 0)
         self._bump(platform, "collected", new)
         self._report_collect_problems(platform, last)
+        limit = day_long_limit(((last.get("progress") or {}).get("platforms") or {}).get(platform, {}).get("reason_code"))
+        if limit in SHARED_LIMITS:
+            self._mark_out(platform, limit)
+        elif limit:                                                # collecting is over for today, delivering what is left is not
+            self._collect_closed.add(platform)
+            self._news("loop", f"{PLATFORM_NAMES.get(platform, platform)}今天已达到「{limit_label(limit, platform)}」，不再采集，只投递已有的岗位", level="warning",
+                       platform=platform, data={"href": limit_href(limit, platform), "limit": limit_label(limit, platform)})
         return new
 
     def _report_collect_problems(self, platform: str, last: dict) -> None:
@@ -396,6 +460,8 @@ class DailyLoop:
         if cap > 0:
             ids = ids[:max(cap - self._delivered(platform), 0)]            # never deliver past the day's limit
         if not ids or self._over():
+            if not ids and platform in self._collect_closed:       # nothing left to deliver and nothing more to collect
+                self._mark_out(platform, "daily_search_page_limit")
             return
         try:
             result = self.api("POST", "/api/workbench/deliver", {"job_ids": ids, "skip_invalid": True})
@@ -406,6 +472,9 @@ class DailyLoop:
         self._bump(platform, "approved", len(ids))
         last = self._wait_idle(f"{name}：投递中", limit_minutes=240)
         self._report_delivery(platform, last, result)
+        limit = day_long_limit(last.get("stop_reason"))
+        if limit in SHARED_LIMITS:
+            self._mark_out(platform, limit)
 
     def _report_delivery(self, platform: str, last: dict, started: dict) -> None:
         name = PLATFORM_NAMES.get(platform, platform)

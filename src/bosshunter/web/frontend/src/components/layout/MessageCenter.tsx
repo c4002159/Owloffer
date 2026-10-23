@@ -120,7 +120,7 @@ export function MessageCenter() {
               <ul className="space-y-1">
                 {shown.map(item => (
                   <li key={item.id}>
-                    <button type="button" onClick={() => { setOpen(false); navigate(TARGETS[item.kind] || '/') }}
+                    <button type="button" onClick={() => { setOpen(false); navigate(typeof item.data?.href === 'string' ? item.data.href : TARGETS[item.kind] || '/') }}
                       className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-secondary">
                       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${item.level === 'warning' ? 'bg-danger' : 'bg-primary/50'}`} />
                       <span className="min-w-0 flex-1">

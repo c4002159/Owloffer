@@ -230,3 +230,94 @@ def test_the_cap_ends_the_loop_when_every_automatic_platform_is_capped_even_if_o
     loop.start({"modes": {"zhilian_campus": "off", "zhilian": "off", "boss": "manual", "51job": "off", "liepin": "auto"}, "end_time": "12:00", "delivery_cap": 3})
     loop.join(10)
     assert "上限" in loop.snapshot()["message"]
+
+
+class LimitServer(FakeServer):
+    """Like the real program once a platform's day-long limit is reached: delivering stops with that reason, or collecting does."""
+
+    def __init__(self, deliver_stop=None, collect_reason=None, only=None, **kwargs):
+        super().__init__(**kwargs)
+        self.deliver_stop, self.collect_reason, self.only = deliver_stop, collect_reason, only
+        self.kind, self.delivering = "", ""
+
+    def sleep(self, seconds):
+        super().sleep(seconds)
+        if self.last and self.kind == "deliver" and self.deliver_stop and self.only in (None, self.delivering):
+            self.last = {**self.last, "stop_reason": self.deliver_stop}
+
+    def api(self, method, path, body=None):
+        if method == "POST" and path == "/api/workbench/deliver":
+            self.kind = "deliver"
+            self.delivering = body["job_ids"][0].split(":")[0]
+        if method == "POST" and path == "/api/workbench/task" and self.collect_reason:
+            self.calls.append((method, path, body))
+            self.kind = "collect"
+            platform = body["options"]["platform_order"][0]
+            return self._start({"collect_new": 0}, {platform: {"status": "completed_with_shortage", "reason_code": self.collect_reason, "message": ""}})
+        if method == "POST" and path == "/api/workbench/task":
+            self.kind = "collect"
+        return super().api(method, path, body)
+
+
+def _events(loop):
+    events = []
+    loop.on_event = lambda kind, message, **kwargs: events.append((kind, message, kwargs))
+    return events
+
+
+def test_the_loop_ends_when_the_only_platform_has_hit_its_day_long_limit():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        server = LimitServer(deliver_stop="daily_platform_page_limit")
+        server.confirm = [{"id": "boss:1", "source_platform": "boss"}]
+        loop = _loop(server, Path(tmp))
+        events = _events(loop)
+        _run(loop, ["boss"], end="12:00")
+        snapshot = loop.snapshot()
+        assert snapshot["running"] is False and snapshot["step"] == "finished"
+        assert "BOSS 直聘「BOSS 单日页面访问总上限」" in snapshot["message"] and "每日循环结束" in snapshot["message"]
+        assert snapshot["out_today"]["boss"]["label"] == "BOSS 单日页面访问总上限"
+        assert server.t < datetime(2026, 10, 22, 10, 0)                       # it did not wait for the end time
+        warning = [e for e in events if e[2].get("data", {}).get("limit")]
+        assert warning and warning[0][2]["data"]["href"] == "/config?section=safety&focus=BOSS%20%E5%8D%95%E6%97%A5%E9%A1%B5%E9%9D%A2%E8%AE%BF%E9%97%AE%E6%80%BB%E4%B8%8A%E9%99%90"
+
+
+def test_one_platform_out_for_the_day_is_skipped_while_the_others_go_on():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        server = LimitServer(deliver_stop="daily_platform_page_limit", only="boss")
+        server.confirm = [{"id": "boss:1", "source_platform": "boss"}]
+        server.waiting = [{"id": "liepin:1", "source_platform": "liepin", "greeting": ""}]
+        loop = _loop(server, Path(tmp))
+        _run(loop, ["boss", "liepin"], end="09:40")
+        boss_collects = [c for c in server.calls if c[1] == "/api/workbench/task" and c[2]["options"]["platform_order"] == ["boss"]]
+        assert len(boss_collects) == 1                                          # not tried again after its limit
+        assert loop.snapshot()["out_today"].keys() == {"boss"}
+
+
+def test_a_platform_whose_collecting_is_over_but_has_nothing_left_to_deliver_is_done():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        server = LimitServer(collect_reason="daily_search_page_limit")
+        loop = _loop(server, Path(tmp))
+        _run(loop, ["boss"], end="12:00")
+        out = loop.snapshot()["out_today"]["boss"]
+        assert out["label"] == "BOSS 单日搜索页上限" and loop.snapshot()["step"] == "finished"
+
+
+def test_the_names_the_loop_uses_for_limits_are_the_names_on_the_settings_page():
+    from pathlib import Path
+
+    from bosshunter.daily_loop import limit_label
+
+    index = (Path(__file__).parent.parent / "src/bosshunter/web/frontend/src/lib/settingsIndex.ts").read_text(encoding="utf-8")
+    labels = [limit_label("daily_platform_page_limit", "boss"), limit_label("daily_detail_page_limit", "boss"), limit_label("daily_limit", "boss")]
+    labels += [limit_label("daily_search_page_limit", platform) for platform in ("boss", "51job", "liepin", "zhilian", "zhilian_campus")]
+    for label in labels:
+        assert f"label: '{label}'" in index, label

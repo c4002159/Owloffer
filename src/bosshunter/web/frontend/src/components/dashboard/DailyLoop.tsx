@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Play, Settings2, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PLATFORM_LABELS } from '@/lib/platforms'
+import { describeLimit } from '@/lib/limitReasons'
 import { LOOP_PLATFORMS, type DailyLoopController, type DailyLoopIncident, type LoopMode, type LoopPlatform } from '@/hooks/useDailyLoop'
 
 const MODE_OPTIONS: Array<{ value: LoopMode; label: string }> = [
@@ -143,6 +144,12 @@ export function DailyLoopProgress({ loop }: { loop: DailyLoopController }) {
         <span className="mr-2 font-black">每日循环</span>
         第 {state.round || 0} 轮 · {STEP_LABELS[state.step || ''] || state.step} · {state.message}
       </div>
+      {Object.entries(state.out_today || {}).map(([platform, info]) => (
+        <div key={platform} className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning-strong">
+          {PLATFORM_LABELS[platform] || platform} 今天已达到「{info.label}」，每日循环不再处理这个平台。
+          <a className="ml-2 font-bold text-primary underline" href={describeLimit(info.code, platform)?.href ?? '/config?section=safety'}>去调整</a>
+        </div>
+      ))}
       {Object.keys(totals).length > 0 && (
         <div className="flex flex-wrap gap-2 text-xs">
           {Object.entries(totals).map(([platform, values]) => (

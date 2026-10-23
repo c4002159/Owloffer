@@ -26,6 +26,7 @@ export interface DailyLoopState {
   step?: string
   message?: string
   totals?: Record<string, Record<string, number>>
+  out_today?: Record<string, { code: string; label: string }>      // platforms that reached a day-long limit
   incidents?: DailyLoopIncident[]
   order?: string[]
   modes?: Record<string, string>
