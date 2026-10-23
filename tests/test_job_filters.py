@@ -114,3 +114,14 @@ class SalaryParseEdgeCaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_english_deal_breakers_must_stand_alone_but_chinese_ones_match_anywhere():
+    assert matching_deal_breaker("Coding Agent 算法专家", ["OD"]) is None
+    assert matching_deal_breaker("产品工程师(Product)", ["OD"]) is None
+    assert matching_deal_breaker("LLM Model 评测工程师", ["OD"]) is None
+    assert matching_deal_breaker("软件开发工程师（OD）", ["OD"]) == "OD"
+    assert matching_deal_breaker("华为直招/OD/软件开发工程师", ["OD"]) == "OD"
+    assert matching_deal_breaker("华为OD软件开发", ["OD"]) == "OD"
+    assert matching_deal_breaker("数字后端设计工程师", ["数字后端"]) == "数字后端"
+    assert matching_deal_breaker("需要996加班", ["996"]) == "996"

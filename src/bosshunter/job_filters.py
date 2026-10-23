@@ -24,11 +24,21 @@ def city_match_clause(cities: list[str]) -> tuple[str, list[str]]:
 
 
 def matching_deal_breaker(text: str, deal_breakers: list[str]) -> str | None:
-    """Return the first deal-breaker keyword found in text."""
+    """Return the first deal-breaker keyword found in text.
+
+    A keyword made of English letters and digits has to stand on its own ("OD" is not in "Coding", "Product" or "Model");
+    Chinese keywords match anywhere, also right next to English words ("华为OD").
+    """
     text_lower = text.lower()
     for keyword in deal_breakers:
         cleaned_keyword = keyword.strip()
-        if cleaned_keyword and cleaned_keyword.lower() in text_lower:
+        if not cleaned_keyword:
+            continue
+        needle = cleaned_keyword.lower()
+        if needle.isascii() and any(ch.isalnum() for ch in needle):
+            if re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", text_lower):
+                return keyword
+        elif needle in text_lower:
             return keyword
     return None
 
