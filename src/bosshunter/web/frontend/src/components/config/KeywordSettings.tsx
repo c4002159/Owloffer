@@ -3,6 +3,7 @@ import { TagsInput } from '@/components/ui/tags-input'
 import { Button } from '@/components/ui/button'
 import { KeywordRecommendations } from '@/components/config/KeywordRecommendations'
 import { KeywordPerformance } from '@/components/config/KeywordPerformance'
+import { KeywordAdviceCard } from '@/components/keywords/KeywordAdvice'
 import { SettingField } from './fields'
 import { PLATFORM_LABELS } from '@/lib/platforms'
 
@@ -39,6 +40,7 @@ export function KeywordSettings({ config, platformSearch, updatePlatformSearch, 
 
   return (
     <div data-tour="search-keywords" className="space-y-4">
+      <KeywordAdviceCard />
       <div className="space-y-2 rounded-xl border border-card-border bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-black text-foreground">这次修改应用到哪些平台</span>

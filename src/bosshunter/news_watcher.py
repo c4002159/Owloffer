@@ -14,6 +14,7 @@ from typing import Any, Callable
 TERMINAL = {"completed": ("完成", "info"), "failed": ("失败", "warning"), "stopped": ("已停止", "info")}
 PLATFORM_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘"}
 POLL_SECONDS = 15
+KEYWORD_TIERS = {"core": "核心", "expand": "扩展", "explore": "探索", "paused": "暂停"}
 
 
 class NewsWatcher:
@@ -24,9 +25,15 @@ class NewsWatcher:
         limits: Callable[[], dict[str, dict]],
         replies: Callable[[], int],
         paused_scoring: Callable[[], list[dict]] | None = None,
+        keyword_moves: Callable[[], list[dict]] | None = None,
+        keyword_alerts: Callable[[], list[str]] | None = None,
     ):
         self.emit, self.tasks, self.limits, self.replies = emit, tasks, limits, replies
         self.paused_scoring = paused_scoring or (lambda: [])
+        self.keyword_moves = keyword_moves or (lambda: [])
+        self.keyword_alerts = keyword_alerts or (lambda: [])
+        self._last_move = None                                 # id of the newest tier move already known (None: not looked yet)
+        self._told_alerts: set[str] = set()
         self._told_paused: set[str] = set()
         self._seen_tasks: dict[str, str] = {}
         self._seen_limits: set[str] = set()
@@ -65,6 +72,23 @@ class NewsWatcher:
                 self.emit("task", f"评分任务停在半路（{done}还剩 {left} 个没评）：到「今日活动 → 等待队列」继续或结束",
                           level="warning", data={"scoring_run": run_id})
         self._told_paused &= set(paused)
+        # Level 2 of the keyword advice: every move between tiers. The first look only remembers where the log stands.
+        moves = sorted(self.keyword_moves(), key=lambda move: int(move["id"]))
+        if self._last_move is None:
+            self._last_move = int(moves[-1]["id"]) if moves else 0
+        for move in moves:
+            if int(move["id"]) > self._last_move:
+                self._last_move = int(move["id"])
+                if announce:
+                    before, after = KEYWORD_TIERS.get(move["from_tier"], move["from_tier"]), KEYWORD_TIERS.get(move["to_tier"], move["to_tier"])
+                    self.emit("keyword", f"关键词「{move['keyword']}」从{before}调到{after}：{str(move.get('reason') or '')[:100]}",
+                              level="warning" if move["to_tier"] == "paused" else "info")
+        # Level 3: the pop-up reasons, once each (they come back the next day if still true).
+        alerts = set(self.keyword_alerts())
+        for alert in sorted(alerts - self._told_alerts):
+            if announce:
+                self.emit("keyword", f"关键词需要调整：{alert}，到工作台或「配置 → 搜索与关键词」查看建议", level="warning")
+        self._told_alerts = alerts if announce else alerts | self._told_alerts
         self._replies = replies
         self._primed = True
 

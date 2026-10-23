@@ -3051,6 +3051,93 @@ def api_keywords_pin():
 		db.close()
 
 
+def _keyword_advice_state_path() -> Path:
+	return DATA_DIR / "keyword_advice.json"
+
+
+def _keyword_advice_now(db) -> tuple[dict, dict]:
+	from bosshunter import keyword_advisor
+	from bosshunter.ai.keywords import load_plan
+
+	config = load_config(CONFIG_PATH)
+	return config, keyword_advisor.advise(db, config, load_plan(BASE_DIR))
+
+
+@app.route("/api/keywords/advice")
+def api_keywords_advice():
+	"""What the keywords' results say: reasons, suggestions, whether the workbench should pop up and what was applied last."""
+	from bosshunter import keyword_advisor
+
+	db = _get_web_db()
+	try:
+		config, advice = _keyword_advice_now(db)
+	finally:
+		db.close()
+	path = _keyword_advice_state_path()
+	return _json_response({
+		**advice,
+		"popup": keyword_advisor.popup_wanted(path, config, advice),
+		"popup_enabled": (config.get("automation") or {}).get("keyword_advice_popup") is not False,
+		"last_applied": keyword_advisor.last_applied(path),
+	})
+
+
+@app.route("/api/keywords/advice/apply", method="POST")
+def api_keywords_advice_apply():
+	"""Apply the chosen suggestions (by id; the keyword text always comes from a fresh advice, never from the request)."""
+	from bosshunter import keyword_advisor
+
+	ids = {str(item) for item in (request.json or {}).get("ids") or []}
+	if not ids:
+		return _json_response({"error": "没有选中任何建议"}, 400)
+	db = _get_web_db()
+	try:
+		config, advice = _keyword_advice_now(db)
+		picks = [item for item in advice["suggestions"] if item["id"] in ids]
+		if not picks:
+			return _json_response({"error": "这些建议已经不再适用，请刷新后再看"}, 409)
+		done = keyword_advisor.apply(db, config, _keyword_advice_state_path(), picks)
+	finally:
+		db.close()
+	save_config(done["config"], CONFIG_PATH)
+	_get_agent_access().emit("keyword", f"已按建议调整关键词：{len(done['changes'])} 项（可在配置页撤销）")
+	return _json_response({"success": True, "changes": done["changes"]})
+
+
+@app.route("/api/keywords/advice/undo", method="POST")
+def api_keywords_advice_undo():
+	from bosshunter import keyword_advisor
+
+	db = _get_web_db()
+	try:
+		config = load_config(CONFIG_PATH)
+		done = keyword_advisor.undo(db, config, _keyword_advice_state_path())
+	finally:
+		db.close()
+	if not done["changes"]:
+		return _json_response({"error": "没有可以撤销的调整"}, 409)
+	save_config(done["config"], CONFIG_PATH)
+	return _json_response({"success": True, "changes": done["changes"]})
+
+
+@app.route("/api/keywords/advice/snooze", method="POST")
+def api_keywords_advice_snooze():
+	from bosshunter import keyword_advisor
+
+	hours = int((request.json or {}).get("hours") or keyword_advisor.SNOOZE_HOURS)
+	return _json_response({"success": True, "until": keyword_advisor.snooze(_keyword_advice_state_path(), min(max(hours, 1), 24 * 30))})
+
+
+@app.route("/api/keywords/advice/popup", method="POST")
+def api_keywords_advice_popup():
+	"""Turn the pop-up off (the advice stays in the settings page and the message center) or on again."""
+	config = load_config(CONFIG_PATH)
+	automation = dict(config.get("automation") or {})
+	automation["keyword_advice_popup"] = bool((request.json or {}).get("enabled", True))
+	save_config({**config, "automation": automation}, CONFIG_PATH)
+	return _json_response({"success": True, "enabled": automation["keyword_advice_popup"]})
+
+
 @app.route("/api/keywords/generate", method="POST")
 def api_keywords_generate():
 	"""Ask the keyword model (resume + GitHub evidence + skill file) for a tiered plan."""
@@ -3952,8 +4039,30 @@ def _start_news_watcher():
 	def paused_scoring():
 		return [run for run in list_scoring_runs(DATA_DIR / "bosshunter.db", limit=20) if run.get("status") == "paused"]
 
+	def keyword_moves():
+		db = _get_web_db()
+		try:
+			return [dict(row) for row in db.execute(
+				"SELECT id, keyword, from_tier, to_tier, reason FROM keyword_tier_log ORDER BY id DESC LIMIT 50").fetchall()]
+		except Exception:
+			return []
+		finally:
+			db.close()
+
+	def keyword_alerts():
+		from bosshunter import keyword_advisor
+
+		db = _get_web_db()
+		try:
+			config, advice = _keyword_advice_now(db)
+			return [item["message"] for item in advice["reasons"]] if keyword_advisor.popup_wanted(_keyword_advice_state_path(), config, advice) else []
+		except Exception:
+			return []
+		finally:
+			db.close()
+
 	if _news_watcher is None:
-		_news_watcher = NewsWatcher(lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), lambda: task_runner.status()["tasks"], limits, replies, paused_scoring)
+		_news_watcher = NewsWatcher(lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), lambda: task_runner.status()["tasks"], limits, replies, paused_scoring, keyword_moves, keyword_alerts)
 		_news_watcher.start()
 
 

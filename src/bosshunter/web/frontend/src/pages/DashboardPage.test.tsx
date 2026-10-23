@@ -415,7 +415,7 @@ describe('DashboardPage workbench task panel', () => {
       } } },
     }) })
     render(<DashboardPage view="workbench" />)
-    const reason = await screen.findByText('今日详情页次数已用完')
+    const reason = await screen.findByText('已达到「BOSS 单日详情页尝试上限」')
     expect(reason.closest('details')?.open).toBe(false)
     expect(screen.getByText('采集已结束，数量不足')).toBeTruthy()
     expect(screen.queryByText('completed_with_shortage')).toBeNull()

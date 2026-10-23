@@ -100,3 +100,44 @@ def test_a_scoring_run_stopped_half_way_is_announced_once_even_if_it_predates_th
     state["paused"] = [{"id": "r2", "progress": {}, "remaining_job_ids": ["b"]}]
     watcher.poll()
     assert len(access.messages()["messages"]) == 2                  # a new stopped run is news again
+
+
+def test_keyword_tier_moves_and_advice_are_announced_once_and_not_replayed_at_start(tmp_path):
+    state = {"moves": [{"id": 1, "keyword": "旧词", "from_tier": "expand", "to_tier": "paused", "reason": "0 通过"}], "alerts": []}
+    access = AgentAccess(tmp_path / "a.json")
+    watcher = NewsWatcher(access.emit, lambda: [], lambda: {}, lambda: 0, None, lambda: state["moves"], lambda: state["alerts"])
+    watcher.poll()
+    assert access.messages()["messages"] == []                          # what happened before the program started is not news
+    state["moves"].append({"id": 2, "keyword": "AI", "from_tier": "expand", "to_tier": "core", "reason": "连续 2 次排在前三分之一"})
+    state["moves"].append({"id": 3, "keyword": "死词", "from_tier": "explore", "to_tier": "paused", "reason": "15 条里 0 通过"})
+    state["alerts"] = ["核心关键词最近两天通过率只有 5%"]
+    watcher.poll()
+    watcher.poll()
+    messages = list(reversed(access.messages()["messages"]))
+    assert [m["kind"] for m in messages] == ["keyword", "keyword", "keyword"]
+    assert "「AI」从扩展调到核心" in messages[0]["message"] and messages[0]["level"] == "info"
+    assert messages[1]["level"] == "warning" and "暂停" in messages[1]["message"]
+    assert "关键词需要调整：核心关键词最近两天通过率只有 5%" in messages[2]["message"]
+
+
+def test_the_keyword_advice_routes_pause_add_and_undo(tmp_path, monkeypatch):
+    import yaml
+
+    server.set_base_dir(tmp_path)
+    monkeypatch.setattr(server, "_agent_access", None)
+    config_path = server.CONFIG_PATH
+    config_path.write_text(yaml.safe_dump({"search": {"keywords": ["大模型"]}, "automation": {}}, allow_unicode=True), encoding="utf-8")
+    status, payload = _call("/api/keywords/advice")
+    assert status.startswith("200") and payload["level3"] is False and payload["popup"] is False
+    status, payload = _call("/api/keywords/advice/apply", "POST", {"ids": []})
+    assert status.startswith("400")
+    status, payload = _call("/api/keywords/advice/apply", "POST", {"ids": ["add:不存在"]})
+    assert status.startswith("409")                                      # a suggestion that no longer holds is refused
+    status, payload = _call("/api/keywords/advice/undo", "POST", {})
+    assert status.startswith("409")
+    status, payload = _call("/api/keywords/advice/snooze", "POST", {"hours": 2})
+    assert status.startswith("200") and payload["until"]
+    status, payload = _call("/api/keywords/advice/popup", "POST", {"enabled": False})
+    assert status.startswith("200") and payload["enabled"] is False
+    assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["automation"]["keyword_advice_popup"] is False
+    assert _call("/api/keywords/advice")[1]["popup_enabled"] is False

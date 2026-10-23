@@ -6,7 +6,7 @@ import { searchSettings, type SettingEntry } from '@/lib/settingsIndex'
 const HIGHLIGHT_MS = 2200
 
 /** Scroll to the control called ``label`` and make it flash, once its category has been drawn. */
-function revealLabel(label: string, attempts = 12) {
+export function revealLabel(label: string, attempts = 12) {
   const wanted = label.replace(/（.*?）|\(.*?\)/g, '').trim()
   const found = [...document.querySelectorAll<HTMLElement>('main label, main h3, main p.text-xs, main span.text-xs, main div.text-sm')]
     .find(element => element.children.length < 3 && (element.textContent || '').includes(wanted))

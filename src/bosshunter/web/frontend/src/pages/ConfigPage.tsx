@@ -18,7 +18,7 @@ import { useState, useEffect, useRef } from 'react'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 import { AgentAccessPanel } from '@/components/config/AgentAccessPanel'
 import { ResumeLibrary } from '@/components/config/ResumeLibrary'
-import { SettingsSearch } from '@/components/config/SettingsSearch'
+import { SettingsSearch, revealLabel } from '@/components/config/SettingsSearch'
 import { SaveDialog } from '@/components/config/SaveDialog'
 import { CommonSearchCard } from '@/components/config/CommonSearchCard'
 import { DataAndLogs } from '@/components/config/DataAndLogs'
@@ -96,6 +96,12 @@ export default function ConfigPage({ category: controlledCategory, onCategoryCha
     return () => window.removeEventListener(CONFIG_CATEGORY_EVENT, onCategory)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onCategoryChange])
+  // A link such as ?section=safety&focus=<setting name> opens the group and makes that setting flash.
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get('focus')
+    if (focus && config) revealLabel(focus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(config)])
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
   const [modelList, setModelList] = useState<{ loading: boolean; models: string[]; message?: string; error?: boolean }>({ loading: false, models: [] })
   const modelRequest = useRef<AbortController | null>(null)

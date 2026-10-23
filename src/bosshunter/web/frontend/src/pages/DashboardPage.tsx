@@ -18,6 +18,8 @@ import { PlatformLimitNotice } from '@/components/dashboard/PlatformLimitNotice'
 import { DailyLoopCard, DailyLoopIncidents, DailyLoopProgress } from '@/components/dashboard/DailyLoop'
 import { AgentRequestsInbox, useAgentRequests } from '@/components/dashboard/AgentRequests'
 import { useDailyLoop } from '@/hooks/useDailyLoop'
+import { describeLimit, settingHref } from '@/lib/limitReasons'
+import { LimitLink } from '@/components/config/LimitLink'
 import { describeScoringRun, useScoringRuns } from '@/components/dashboard/PausedScoring'
 import {
   EMPTY_JOB_FILTERS,
@@ -116,6 +118,8 @@ function taskStatusTitle(status: string) {
 }
 
 function taskStopReasonLabel(reason?: string) {
+  const limit = reason ? describeLimit(reason) : null
+  if (limit && reason !== 'daily_limit') return `${limit.text}，未处理的岗位仍保留在队列中；明天恢复，或到设置里调整。`
   if (reason === 'daily_limit') return '今日发送额度已用完，岗位已保留在“待发送招呼语”；明日额度恢复后再重试。'
   if (reason === 'outside_window') return '当前不在发送时间窗口内，岗位已保留在“待发送招呼语”。'
   if (reason === 'day_off') return '今日触发防检测休息策略，岗位已保留在“待发送招呼语”。'
@@ -1053,8 +1057,8 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 今日已发送 {workbench.send_quota.sent}/{workbench.send_quota.daily_limit} 条，未发送岗位已保留在“待发送招呼语”；明日额度恢复后再重试。
               </p>
             </div>
-            <Button variant="secondary" size="sm" onClick={() => { window.location.href = '/config?section=throttle' }}>
-              去设置发送额度
+            <Button variant="secondary" size="sm" onClick={() => { window.location.href = settingHref('throttle.daily_limit') ?? '/config?section=delivery' }}>
+              去调整「每日发送上限」
             </Button>
           </div>
         </section>
@@ -1163,9 +1167,9 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                     <div className="font-black">{visibleTask.stop_reason === 'daily_limit' ? '本次未发送' : '任务说明'}</div>
                     <div className="mt-1">{taskStopReasonLabel(visibleTask.stop_reason)}</div>
                   </div>
-                  {visibleTask.stop_reason === 'daily_limit' && (
-                    <Button size="sm" variant="secondary" onClick={() => { window.location.href = '/config?section=throttle' }}>
-                      去设置发送额度
+                  {describeLimit(visibleTask.stop_reason ?? "") && (
+                    <Button size="sm" variant="secondary" onClick={() => { window.location.href = describeLimit(visibleTask.stop_reason ?? "")!.href }}>
+                      去调整「{describeLimit(visibleTask.stop_reason ?? "")!.label}」
                     </Button>
                   )}
                 </div>
@@ -1430,12 +1434,6 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   )
 }
 
-function collectionReasonLabel(reason = '') {
-  if (reason.includes('daily_detail_page_limit')) return '今日详情页次数已用完'
-  if (reason.includes('daily_platform_page_limit')) return '今日页面访问次数已用完'
-  if (reason.includes('daily_search_page_limit')) return '今日搜索页次数已用完'
-  return ''
-}
 
 function CollectionProgressPanel({ progress }: { progress: CollectionProgress }) {
   const outcome = ({ running: '采集中', scoring: '正在评分', completed: '已完成', completed_with_shortage: '采集已结束，数量不足', completed_with_errors: '采集结束，有异常', failed: '采集失败', stopped: '已停止', cancelled: '已取消' } as Record<string, string>)[progress.outcome || ''] || '状态待确认'
@@ -1447,7 +1445,7 @@ function CollectionProgressPanel({ progress }: { progress: CollectionProgress })
         <span className="text-muted">{outcome}</span>
         {platforms.map(([platform, state]) => (
           <span key={platform} className="text-muted">{PLATFORM_LABELS[platform] || platform} · 新增 {state.new || 0} 条
-            {collectionReasonLabel(`${state.reason_code || ''} ${state.message || ''}`) && <span className="ml-2 text-warning">{collectionReasonLabel(`${state.reason_code || ''} ${state.message || ''}`)}</span>}
+            {describeLimit(`${state.reason_code || ''} ${state.message || ''}`, platform) && <span className="ml-2 text-warning"><LimitLink reason={`${state.reason_code || ''} ${state.message || ''}`} platform={platform} /></span>}
           </span>
         ))}
       </summary>
