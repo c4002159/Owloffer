@@ -281,6 +281,13 @@ def validate_collection_options(options: dict[str, Any]) -> dict[str, Any]:
 MAX_PAGES_LIMIT = 30
 
 
+def _int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class _SharedProcessor:
     def __init__(
         self,
@@ -1060,6 +1067,10 @@ class CollectionOrchestrator:
         ok = {"completed", "completed_with_shortage"}
         was_per_keyword = processor.per_keyword
         processor.per_keyword = False          # the scan decides how deep to read; the give-up rules must not cut the deep pages
+        automation = self.config.get("automation") if isinstance(self.config.get("automation"), dict) else {}
+        stop_when_dry = automation.get("saturation_stop") is not False
+        chunk_pages = max(_int(automation.get("saturation_chunk_pages"), sf.SATURATION_CHUNK_PAGES), 1)
+        min_seen = max(_int(automation.get("saturation_min_seen"), sf.SATURATION_MIN_SEEN), 1)
 
         def run(first, last, scope=""):
             seen0, dup0 = processor.progress.seen, processor.progress.duplicate
@@ -1108,7 +1119,7 @@ class CollectionOrchestrator:
             # emptied used to cost 13-15 minutes a pass for 300 postings and no new job.
             deep, deep_seen, deep_dup, position, read_to = None, 0, 0, start, start - 1
             while position <= end:
-                last = min(position + sf.SATURATION_CHUNK_PAGES - 1, end)
+                last = min(position + chunk_pages - 1, end)
                 new_before = len(processor.new_job_ids)
                 deep, chunk_seen, chunk_dup = run(position, last, scope=f"w{position}-{last}")
                 if stop_here(deep):
@@ -1118,7 +1129,7 @@ class CollectionOrchestrator:
                     read_to = end
                     break
                 read_to = last
-                if chunk_seen >= sf.SATURATION_MIN_SEEN and len(processor.new_job_ids) == new_before:
+                if stop_when_dry and chunk_seen >= min_seen and len(processor.new_job_ids) == new_before:
                     processor.event(message=f"「{word}」第 {position}–{last} 页没有新岗位，不再往后读")
                     break
                 position = last + 1

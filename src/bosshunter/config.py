@@ -195,6 +195,14 @@ DEFAULTS: dict[str, Any] = {
         "zombie_days": 7,
         # Collection runs give every keyword a budget by tier and move keywords between tiers by their results.
         "keyword_budget": True,
+        # A keyword whose deep pages bring nothing new is not read on: the window is read this many pages at a time and reading
+        # stops after a chunk of at least ``saturation_min_seen`` postings without a new job (orchestrator._scan_keyword).
+        "saturation_stop": True,
+        "saturation_chunk_pages": 5,
+        "saturation_min_seen": 30,
+        # The daily loop stops one collection / one delivery that runs longer than this (daily_loop.py).
+        "daily_loop_collect_minutes": 90,
+        "daily_loop_deliver_minutes": 240,
     },
     "scoring": {
         "threshold": 71,

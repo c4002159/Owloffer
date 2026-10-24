@@ -63,6 +63,18 @@ export function AutomationSettings({ config, updateConfig }: { config: Config; u
         hint="开了自动评分时，新岗位一入库就小批量评分，不用等整轮采完；评不上的留到采集结束后统一评。" />
       <ToggleSetting label="页数记忆（头部 + 深层窗口）" checked={config.automation?.page_frontier ?? true} onChange={v => updateConfig('automation.page_frontier', v)}
         hint="每个关键词先读头部新岗位，再从上次停下的页往后读一个窗口，不重复筛同样的页。" />
+      <ToggleSetting label="饱和检测（没有新岗位的词不再往下读）" checked={config.automation?.saturation_stop ?? true} onChange={v => updateConfig('automation.saturation_stop', v)}
+        hint="深层页按几页一段读，一段里看到足够多的岗位却一个新的都没有，就不再读这个词剩下的页，改去下一个词。" />
+      <div className="grid gap-4 md:grid-cols-2">
+        <NumberSetting label="饱和检测：每段读几页" value={config.automation?.saturation_chunk_pages ?? 5} onChange={v => updateConfig('automation.saturation_chunk_pages', v)} min={1} max={20}
+          hint="越小越快发现读不到新岗位，但每次要多发几次读取" />
+        <NumberSetting label="饱和检测：一段至少看到多少个岗位才判断" value={config.automation?.saturation_min_seen ?? 30} onChange={v => updateConfig('automation.saturation_min_seen', v)} min={1} max={500}
+          hint="看到的岗位太少时（页面没加载好）不下结论" />
+        <NumberSetting label="每日循环：单次采集最长（分钟）" value={config.automation?.daily_loop_collect_minutes ?? 90} onChange={v => updateConfig('automation.daily_loop_collect_minutes', v)} min={10} max={720}
+          hint="超过就强制停止这一次采集，循环继续投递并开始下一轮" />
+        <NumberSetting label="每日循环：单次投递最长（分钟）" value={config.automation?.daily_loop_deliver_minutes ?? 240} onChange={v => updateConfig('automation.daily_loop_deliver_minutes', v)} min={10} max={720}
+          hint="超过就强制停止这一次投递" />
+      </div>
       <p className="text-xs leading-5 text-muted">每日循环的开始/结束时间、各平台目标数量和投递上限，在「工作台 → 运行全流程」的齿轮里设置。</p>
     </div>
   )

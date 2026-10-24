@@ -26,7 +26,8 @@ DEFAULT_TARGETS = {"zhilian_campus": 50, "zhilian": 80, "boss": 80, "51job": 80,
 MANUAL_ONLY = {"zhilian_campus"}                 # collected, scored and greeted, but delivered by the user
 POLL_SECONDS = 60
 IDLE_SECONDS = 600                              # nothing to collect (window closed, all paused): look again later
-MAX_COLLECT_MINUTES = 90
+MAX_COLLECT_MINUTES = 90                        # one collection that runs longer is stopped (the setting automation.daily_loop_collect_minutes)
+MAX_DELIVER_MINUTES = 240                       # the same for one delivery (automation.daily_loop_deliver_minutes)
 MODES = ("auto", "manual", "off")      # collect + approve + deliver / collect, then you confirm by hand / not in the loop
 DEFAULT_END = "20:00"
 DEFAULT_CAP = 150                               # deliveries per platform and day; 0 = no limit
@@ -85,11 +86,13 @@ class DailyLoop:
         poll_seconds: float = POLL_SECONDS,
         idle_seconds: float = IDLE_SECONDS,
         on_event: Callable[..., Any] | None = None,
+        settings: Callable[[], dict] | None = None,
     ):
         self.path = Path(state_path)
         self.api, self.now, self.sleep = api, now, sleep
         self.poll_seconds, self.idle_seconds = poll_seconds, idle_seconds
         self.on_event = on_event
+        self.settings = settings or (lambda: {})        # the automation section of the config: collect / deliver time limits
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -191,10 +194,16 @@ class DailyLoop:
                 if end <= now:
                     raise ValueError(f"结束时间 {end:%H:%M} 已经过了，请把结束时间调到现在之后")
             cap = max(int(options.get("delivery_cap", DEFAULT_CAP) or 0), 0)
+            try:
+                configured = self.settings() or {}
+            except Exception:
+                configured = {}
+            collect_minutes = self._minutes(options.get("collect_minutes", configured.get("daily_loop_collect_minutes")), MAX_COLLECT_MINUTES)
+            deliver_minutes = self._minutes(options.get("deliver_minutes", configured.get("daily_loop_deliver_minutes")), MAX_DELIVER_MINUTES)
             self._collect_closed = set()
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds") if end else "", "day": now.date().isoformat(),
-                "delivered_base": {},
+                "delivered_base": {}, "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
                 "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "time_window", "auto_approve", "delivery_cap") if k in options},
@@ -203,6 +212,13 @@ class DailyLoop:
             self._save()
         self._launch()
         return self.snapshot()
+
+    @staticmethod
+    def _minutes(value: Any, default: int) -> int:
+        try:
+            return min(max(int(value), 10), 720)
+        except (TypeError, ValueError):
+            return default
 
     def resume(self) -> bool:
         """Continue after a server restart when the loop was running and its end time has not come."""
@@ -335,7 +351,10 @@ class DailyLoop:
             self._finish()
 
     def _finish(self) -> None:
-        stopped = self.state.get("stopped_reason") or ("cap" if self._all_capped() else "limit" if self._all_out() else "end_time")
+        end = datetime.fromisoformat(self.state["end_at"]) if self.state.get("end_at") else None
+        by_clock = end is not None and self.now() >= end
+        stopped = self.state.get("stopped_reason") or ("cap" if self._all_capped() else "limit" if self._all_out() else "end_time" if by_clock else "")
+        self.state["stopped_reason"] = stopped
         if self._over() or stopped:
             try:
                 status = self.api("GET", "/api/workbench", None)
@@ -344,7 +363,13 @@ class DailyLoop:
                     self.api("POST", f"/api/workbench/task/{active['id']}/stop", {})
             except Exception:
                 pass
-        message = "各平台都已达到投递上限，每日循环结束" if self._all_capped() else self._limits_message() if self._all_out() else "每日循环结束"
+        message = (
+            "各平台都已达到投递上限，每日循环结束" if stopped == "cap"
+            else self._limits_message() if stopped == "limit"
+            else f"已到结束时间 {end:%H:%M}，每日循环结束" if stopped == "end_time" and end is not None
+            else "你已手动停止每日循环" if stopped == "user"
+            else "每日循环结束"
+        )
         self._set(running=False, step="finished", message=message, platform="", summary=self.summary())
         self._news("loop", f"{message}：{json.dumps(self.summary(), ensure_ascii=False)}", level="info")
 
@@ -387,8 +412,10 @@ class DailyLoop:
             self.incident("", "api", "api_error", f"{path}：{exc}")
             return {}
 
-    def _wait_idle(self, label: str, limit_minutes: float = MAX_COLLECT_MINUTES) -> dict:
+    def _wait_idle(self, label: str, limit_minutes: float | None = None) -> dict:
         """Wait until no task is running or queued; stop a task that runs longer than the limit. Returns the last task."""
+        if limit_minutes is None:
+            limit_minutes = self._minutes(self.state.get("collect_minutes"), MAX_COLLECT_MINUTES)
         waited = 0.0
         while not self._over():
             status = self._get("/api/workbench")
@@ -496,7 +523,7 @@ class DailyLoop:
                 self.incident(platform, "deliver", str(exc.payload.get("code") or "deliver_refused"), f"{name}投递没有启动：{exc}")
             return
         self._bump(platform, "approved", len(ids))
-        last = self._wait_idle(f"{name}：投递中", limit_minutes=240)
+        last = self._wait_idle(f"{name}：投递中", limit_minutes=self._minutes(self.state.get("deliver_minutes"), MAX_DELIVER_MINUTES))
         self._report_delivery(platform, last, result)
         limit = day_long_limit(last.get("stop_reason"))
         if limit in SHARED_LIMITS:

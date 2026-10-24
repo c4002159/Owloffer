@@ -128,7 +128,7 @@ class ScanRunTests(TestCase):
 class SaturationTests(TestCase):
     """A keyword whose list has nothing new stops after one chunk of the deep window instead of reading all of it."""
 
-    def _run(self, new_pages):
+    def _run(self, new_pages, automation=None):
         asked = []
 
         class Site:
@@ -162,7 +162,7 @@ class SaturationTests(TestCase):
                 db.close()
             options = _options(order=["liepin"])
             options["platforms"]["liepin"].update(cities=["上海"], keywords=["Agent"], max_pages=20)
-            config = {"automation": {"keyword_budget": True, "page_frontier": True}}
+            config = {"automation": {"keyword_budget": True, "page_frontier": True, **(automation or {})}}
             CollectionOrchestrator(config, db_path=db_path, registry=CollectorRegistry({"liepin": Site})).run(options)
             db = get_db(db_path)
             try:
@@ -184,3 +184,13 @@ class SaturationTests(TestCase):
         asked, state = self._run(new_pages={4, 5, 6})                           # the first chunk has news, the second has none
         self.assertEqual(asked, [(1, 3), (4, 8), (9, 13)])
         self.assertEqual(state["frontier"], 13)
+
+    def test_the_check_can_be_switched_off(self):
+        asked, _ = self._run(new_pages=set(), automation={"saturation_stop": False})
+        self.assertEqual(asked, [(1, 3), *chunks(4, 23)])
+
+    def test_the_chunk_size_and_the_amount_needed_to_judge_come_from_the_settings(self):
+        asked, _ = self._run(new_pages=set(), automation={"saturation_chunk_pages": 2})
+        self.assertEqual(asked, [(1, 3), *chunks(4, 23, size=2)])              # 24 postings in a chunk of 2: below the 30 needed, so it reads on
+        asked, _ = self._run(new_pages=set(), automation={"saturation_chunk_pages": 2, "saturation_min_seen": 20})
+        self.assertEqual(asked, [(1, 3), (4, 5)])

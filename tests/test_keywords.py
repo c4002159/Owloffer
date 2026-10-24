@@ -7,7 +7,7 @@ from bosshunter.ai import keywords as kw
 RAW = json.dumps({
     "directions": [{"name": "Agent", "evidence": "open_deep_research", "keywords": ["Agent工程师"]}],
     "core": ["Agent工程师", "RAG 工程师", "agent工程师"],
-    "expand": ["实施工程师", "Agent工程师"],
+    "expand": ["AI实施工程师", "Agent工程师"],
     "explore": ["AI产品经理"] + [f"探索词{i}" for i in range(10)],
     "excludes": ["电销", " "],
 }, ensure_ascii=False)
@@ -16,7 +16,7 @@ RAW = json.dumps({
 def test_parse_plan_dedupes_across_tiers_and_caps_explore():
     plan = kw.parse_plan(f"好的，方案如下：\n```json\n{RAW}\n```")
     assert plan["core"] == ["Agent工程师", "RAG 工程师"]
-    assert plan["expand"] == ["实施工程师"]
+    assert plan["expand"] == ["AI实施工程师"]
     assert len(plan["explore"]) == kw.TIER_LIMITS["explore"]
     assert plan["excludes"] == ["电销"]
     assert plan["directions"][0]["name"] == "Agent"

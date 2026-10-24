@@ -6,6 +6,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+from bosshunter.ai import keyword_lint
 from bosshunter.ai.credentials import call_anthropic_text, get_ai_api_key
 
 TIERS = ("core", "expand", "explore", "intern")
@@ -36,6 +37,7 @@ def _keyword_config(config: dict) -> dict:
 
 
 def build_prompt(skill: str, resume: str, config: dict) -> str:
+    skill = skill + "\n\n" + keyword_lint.prompt_section()
     profile = config.get("profile") or {}
     cities = "、".join(str(c) for c in profile.get("target_cities") or []) or "未填写"
     roles = "、".join(str(r) for r in profile.get("target_roles") or []) or "未填写（请从简历推断）"
@@ -62,11 +64,14 @@ def parse_plan(text: str) -> dict | None:
 
     plan: dict = {}
     seen: set[str] = set()
+    lint: list[dict] = []
     for tier in TIERS:
         if tier == "intern":
             seen = set()  # internship words are a separate search, not deduplicated against the others
         words: list[str] = []
-        for item in raw.get(tier) or []:
+        proposed, changes = keyword_lint.clean_words([str(item).strip() for item in raw.get(tier) or []])
+        lint.extend({**change, "tier": tier} for change in changes)
+        for item in proposed:
             word = str(item).strip()
             key = re.sub(r"\s+", "", word).lower()
             if word and key not in seen and 2 <= len(word) <= 24:
@@ -75,6 +80,7 @@ def parse_plan(text: str) -> dict | None:
         plan[tier] = words[: TIER_LIMITS[tier]]
     if not any(plan[tier] for tier in TIERS if tier != "intern"):
         return None
+    plan["lint"] = lint                               # vague words the model proposed and what was done with them
     plan["excludes"] = [str(x).strip() for x in raw.get("excludes") or [] if str(x).strip()]
     plan["directions"] = [
         {

@@ -381,3 +381,43 @@ def test_the_day_count_starts_again_after_midnight():
         assert not loop._capped("boss") and not loop._out("boss") and loop._delivered("boss") == 0
         loop.state["totals"] = {"boss": {"delivered": 14}}
         assert loop._delivered("boss") == 4
+
+
+def test_after_delivering_the_loop_collects_again_instead_of_stopping(tmp_path):
+    server = FakeServer()
+    loop = _loop(server, tmp_path)
+    _run(loop, ["liepin"], end="10:30")
+    steps = [("collect" if path == "/api/workbench/task" else "deliver") for method, path, body in server.calls
+             if method == "POST" and path in ("/api/workbench/task", "/api/workbench/deliver")]
+    assert steps[:3] == ["collect", "deliver", "collect"]                   # the second round starts with a collection
+    assert loop.snapshot()["round"] >= 2
+
+
+def test_the_loop_says_why_it_ended(tmp_path):
+    server = FakeServer()
+    loop = _loop(server, tmp_path / "a")
+    _run(loop, ["liepin"], end="09:20")
+    assert loop.snapshot()["message"] == "已到结束时间 09:20，每日循环结束"
+    user = _loop(FakeServer(), tmp_path / "b")
+    user._launch = lambda: None
+    user.start({"platform_order": ["liepin"], "time_window": False})
+    user.stop()
+    user._finish()
+    assert user.snapshot()["message"] == "你已手动停止每日循环" and user.snapshot()["stopped_reason"] == "user"
+
+
+def test_the_collection_and_delivery_time_limits_come_from_the_settings_and_can_be_overridden(tmp_path):
+    loop = DailyLoop(tmp_path / "loop.json", FakeServer().api, now=FakeServer().now, sleep=lambda _s: None,
+                     settings=lambda: {"daily_loop_collect_minutes": 30, "daily_loop_deliver_minutes": 120})
+    loop._launch = lambda: None
+    loop.start({"platform_order": ["liepin"], "time_window": False})
+    assert (loop.snapshot()["collect_minutes"], loop.snapshot()["deliver_minutes"]) == (30, 120)
+    loop.stop()
+    other = DailyLoop(tmp_path / "other.json", FakeServer().api, now=FakeServer().now, sleep=lambda _s: None, settings=lambda: {"daily_loop_collect_minutes": 30})
+    other._launch = lambda: None
+    other.start({"platform_order": ["liepin"], "time_window": False, "collect_minutes": 45})
+    assert (other.snapshot()["collect_minutes"], other.snapshot()["deliver_minutes"]) == (45, 240)       # not set: the built-in 240
+    unset = DailyLoop(tmp_path / "unset.json", FakeServer().api, now=FakeServer().now, sleep=lambda _s: None)
+    unset._launch = lambda: None
+    unset.start({"platform_order": ["liepin"], "time_window": False})
+    assert (unset.snapshot()["collect_minutes"], unset.snapshot()["deliver_minutes"]) == (90, 240)

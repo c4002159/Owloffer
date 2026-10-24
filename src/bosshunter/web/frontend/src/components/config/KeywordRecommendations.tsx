@@ -15,6 +15,8 @@ interface KeywordPlan {
   explore: string[]
   intern?: string[]
   excludes: string[]
+  /** Vague words the model proposed that were rewritten or dropped on the way in (see ai/keyword_lint.py). */
+  lint?: { word: string; action: 'rewritten' | 'dropped'; to?: string; reason: string }[]
 }
 
 interface KeywordRecommendationsProps {
@@ -103,6 +105,11 @@ export function KeywordRecommendations({ keywords, onChange, internKeywords = []
               </div>
             </div>
           ))}
+          {(plan.lint ?? []).length > 0 && (
+            <div className="text-[11px] leading-5 text-muted">
+              已自动处理含糊的词：{(plan.lint ?? []).map(item => (item.action === 'rewritten' ? `「${item.word}」改写成「${item.to}」` : `「${item.word}」已去掉`) + `（${item.reason}）`).join('；')}
+            </div>
+          )}
           {plan.directions.length > 0 && (
             <div className="text-[11px] leading-5 text-muted">
               岗位方向：{plan.directions.map(direction => `${direction.name}（${direction.evidence}）`).join('；')}

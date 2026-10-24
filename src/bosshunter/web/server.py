@@ -4097,7 +4097,10 @@ def _get_daily_loop():
 
 	path = DATA_DIR / "daily_loop.json"
 	if _daily_loop is None or _daily_loop.path != path:
-		_daily_loop = DailyLoop(path, _loopback_api, on_event=lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs))
+		_daily_loop = DailyLoop(
+			path, _loopback_api, on_event=lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs),
+			settings=lambda: load_config(CONFIG_PATH).get("automation") or {},
+		)
 	return _daily_loop
 
 

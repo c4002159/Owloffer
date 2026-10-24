@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from bosshunter import keyword_strategy as ks
+from bosshunter.ai import keyword_lint
 
 CORE_PASS_FLOOR = 0.10
 CORE_MIN_SAMPLES = 30
@@ -122,7 +123,7 @@ def _candidate_words(conn: sqlite3.Connection, words: list[str]) -> list[tuple[s
     lowered = [word.lower() for word in words]
     result = []
     for title, count in counts.items():
-        if count < CANDIDATE_MIN_PASSED:
+        if count < CANDIDATE_MIN_PASSED or keyword_lint.check(title) is not None:     # vague titles make vague keywords
             continue
         low = title.lower()
         if any(word in low or low in word for word in lowered):
