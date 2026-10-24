@@ -3,6 +3,7 @@ import { Play, Settings2, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PLATFORM_LABELS } from '@/lib/platforms'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import { describeLimit } from '@/lib/limitReasons'
 import { LOOP_PLATFORMS, type DailyLoopController, type DailyLoopIncident, type LoopMode, type LoopPlatform } from '@/hooks/useDailyLoop'
 
@@ -100,7 +101,7 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
           <p className={cn('text-xs leading-5', running ? 'text-primary-foreground/85' : 'text-muted')}>
             {running
               ? `${loop.state.end_at ? `${settings.start}–${clock(loop.state.end_at)}` : '全天运行'} · 每平台最多投递 ${loop.state.delivery_cap || '不限'}`
-              : `参加 ${counts.auto + counts.manual} 个平台：${counts.auto} 个全自动${counts.manual ? `，${counts.manual} 个手动确认` : ''}${counts.off ? `，${counts.off} 个不参加` : ''}${schedule.enabled ? ` · 每天 ${schedule.time} 自动启动` : ''}`}
+              : `参加 ${counts.auto + counts.manual} 个平台：${counts.auto} 个全自动${counts.manual ? `，${counts.manual} 个手动确认` : ''}${counts.off ? `，${counts.off} 个不参加` : ''}${schedule.enabled ? ` · 每天 ${schedule.time} 自动启动` : ''}${loop.state.ended?.needs_attention ? ` · 上次已停止：${loop.state.ended.reason_label}` : ''}`}
           </p>
           {!running && (
             <button type="button" aria-label="每日循环设置" aria-expanded={open} onClick={() => setOpen(value => !value)} className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-secondary hover:text-primary">
@@ -202,6 +203,7 @@ export function DailyLoopProgress({ loop }: { loop: DailyLoopController }) {
           <a className="ml-2 font-bold text-primary underline" href={describeLimit(info.code, platform)?.href ?? '/config?section=safety'}>去调整</a>
         </div>
       ))}
+      <DailyLoopLastRun loop={loop} />
       {Object.keys(totals).length > 0 && (
         <div className="flex flex-wrap gap-2 text-xs">
           {Object.entries(totals).map(([platform, values]) => (
@@ -263,6 +265,59 @@ function Clock24({ label, value, onChange }: { label: string; value: string; onC
           {Array.from({ length: 60 }, (_, n) => <option key={n} value={two(n)}>{two(n)}</option>)}
         </select>
       </div>
+    </div>
+  )
+}
+
+const STARTED_BY: Record<string, string> = { manual: '手动', schedule: '定时', agent: 'Claude / Codex' }
+
+/** When the loop is not running: the last run, why it ended, and what can be done now (restart, skip or move today's own start). */
+export function DailyLoopLastRun({ loop }: { loop: DailyLoopController }) {
+  const { state, running, schedule, history, start, overrideSchedule, busy } = loop
+  const [moveTo, setMoveTo] = useState('10:00')
+  const ended = state.ended
+  if (running || !ended) return null
+  const attention = ended.needs_attention
+  const override = schedule.override
+  return (
+    <div
+      className={cn('space-y-2 rounded-xl border p-3 text-xs', attention ? 'border-warning-border bg-warning-soft text-warning-strong' : 'border-card-border bg-card text-foreground')}
+      aria-label="上次运行"
+    >
+      <div className="font-black">
+        上次运行 {clock(ended.started_at)}–{clock(ended.ended_at)}（{STARTED_BY[ended.started_by] || ended.started_by}启动）：{ended.reason_label}
+      </div>
+      <div>{ended.message}</div>
+      {ended.suggestion && <div className="font-bold">{ended.suggestion}</div>}
+      <div className="text-muted">共 {ended.rounds} 轮{ended.open_incidents ? `，还有 ${ended.open_incidents} 条异常没处理` : ''}</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" disabled={busy} onClick={() => void start()}>现在重新启动</Button>
+        {schedule.enabled && !override && (
+          <>
+            <Button size="sm" variant="secondary" onClick={() => void overrideSchedule('skip')}>今天不再自动启动</Button>
+            <Clock24 label="今天改到" value={moveTo} onChange={setMoveTo} />
+            <Button size="sm" variant="secondary" onClick={() => void overrideSchedule('time', moveTo)}>改到这个时间启动</Button>
+          </>
+        )}
+        {schedule.enabled && override && (
+          <>
+            <span className="font-bold">今天已临时更改：{override.action === 'skip' ? '不自动启动' : `改到 ${override.time} 启动`}（明天照常）</span>
+            <Button size="sm" variant="secondary" onClick={() => void overrideSchedule('clear')}>取消临时更改</Button>
+          </>
+        )}
+      </div>
+      {history.length > 1 && (
+        <details>
+          <summary className="cursor-pointer font-bold">最近 {history.length} 次运行</summary>
+          <ul className="mt-1 space-y-0.5 text-muted">
+            {history.map(run => (
+              <li key={run.ended_at}>
+                {run.started_at.slice(5, 16).replace('T', ' ')}–{clock(run.ended_at)} · {STARTED_BY[run.started_by] || run.started_by}启动 · {run.reason_label}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
 }

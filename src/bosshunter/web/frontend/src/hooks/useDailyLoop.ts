@@ -14,7 +14,23 @@ export interface DailyLoopIncident {
   resolved: boolean
 }
 
+/** One finished run of the loop: how it started, how it ended and whether the ending deserves a decision from the user. */
+export interface LoopRun {
+  started_at: string
+  ended_at: string
+  started_by: 'manual' | 'schedule' | 'agent' | string
+  reason: 'user' | 'end_time' | 'cap' | 'limit' | 'crash' | 'unknown' | string
+  reason_label: string
+  message: string
+  needs_attention: boolean
+  suggestion: string
+  rounds: number
+  totals: Record<string, Record<string, number>>
+  open_incidents: number
+}
+
 export interface DailyLoopState {
+  ended?: LoopRun | null
   alive?: boolean
   running?: boolean
   started_at?: string
@@ -60,6 +76,8 @@ export interface DailyLoopSchedule {
   next_run_at?: string
   last_start_at?: string
   last_error?: string
+  /** A change for today only (skip the automatic start, or start at another time). */
+  override?: { day: string; action: 'skip' | 'time'; time?: string } | null
 }
 
 const SETTINGS_KEY = 'owloffer.dailyLoop.settings'
@@ -107,6 +125,7 @@ export function useDailyLoop(setNotice: (message: string) => void) {
   const [busy, setBusy] = useState(false)
   const [settings, setSettings] = useState<DailyLoopSettings>(loadSettings)
   const [schedule, setSchedule] = useState<DailyLoopSchedule>({ enabled: false, time: DEFAULTS.scheduleTime })
+  const [history, setHistory] = useState<LoopRun[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -116,6 +135,19 @@ export function useDailyLoop(setNotice: (message: string) => void) {
       // the next poll tries again
     }
   }, [])
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await fetch('/api/daily-loop/history')
+      if (res.ok) setHistory((await res.json()).runs ?? [])
+    } catch {
+      // shown again after the next run
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadHistory()
+  }, [loadHistory, state.ended?.ended_at])
 
   const loadSchedule = useCallback(async () => {
     try {
@@ -169,6 +201,16 @@ export function useDailyLoop(setNotice: (message: string) => void) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(loopOptions(settings)), schedule.enabled, schedule.time])
 
+  /** Change only today's automatic start: skip it, move it, or take the change back. */
+  const overrideSchedule = async (action: 'skip' | 'time' | 'clear', time?: string) => {
+    try {
+      setSchedule(await post('/api/daily-loop/schedule/override', { action, ...(time ? { time } : {}) }))
+      setNotice(action === 'skip' ? '今天不会自动启动，明天照常。' : action === 'time' ? `今天改到 ${time} 自动启动，明天照常。` : '已取消今天的临时更改。')
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '临时更改失败')
+    }
+  }
+
   const start = async () => {
     setBusy(true)
     try {
@@ -201,7 +243,7 @@ export function useDailyLoop(setNotice: (message: string) => void) {
   }
 
   const incidents = (state.incidents || []).filter(item => !item.resolved)
-  return { state, running: Boolean(state.running), busy, settings, change, start, stop, resolve, incidents, schedule, saveSchedule }
+  return { state, running: Boolean(state.running), busy, settings, change, start, stop, resolve, incidents, schedule, saveSchedule, history, overrideSchedule }
 }
 
 export type DailyLoopController = ReturnType<typeof useDailyLoop>

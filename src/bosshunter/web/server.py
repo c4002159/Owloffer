@@ -4125,7 +4125,7 @@ def _get_daily_schedule():
 	path = DATA_DIR / "daily_schedule.json"
 	if _daily_schedule is None or _daily_schedule.path != path:
 		_daily_schedule = DailySchedule(
-			path, lambda options: _get_daily_loop().start(options), lambda: _get_daily_loop().running(),
+			path, lambda options: _get_daily_loop().start({**options, "started_by": "schedule"}), lambda: _get_daily_loop().running(),
 			on_event=lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs),
 		)
 	return _daily_schedule
@@ -4141,6 +4141,21 @@ def api_daily_loop_schedule_set():
 	body = request.json if isinstance(request.json, dict) else {}
 	try:
 		return _json_response(_get_daily_schedule().update(bool(body.get("enabled")), body.get("time"), body.get("options")))
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 400)
+
+
+@app.route("/api/daily-loop/history")
+def api_daily_loop_history():
+	return _json_response({"runs": _get_daily_loop().history(int(request.params.get("limit", 10) or 10))})
+
+
+@app.route("/api/daily-loop/schedule/override", method="POST")
+def api_daily_loop_schedule_override():
+	"""Change only today's automatic start: skip it, move it to another time, or take the change back."""
+	body = request.json if isinstance(request.json, dict) else {}
+	try:
+		return _json_response(_get_daily_schedule().override(str(body.get("action") or ""), body.get("time")))
 	except ValueError as exc:
 		return _json_response({"error": str(exc)}, 400)
 
@@ -4221,7 +4236,7 @@ def _execute_agent_action(action: str, params: dict) -> dict:
 	if action == "daily_loop_start":
 		if loop.running():
 			return {"ok": True, "message": "每日循环已经在运行", "loop": loop.snapshot()}
-		state = loop.start(params if isinstance(params, dict) else {})
+		state = loop.start({**(params if isinstance(params, dict) else {}), "started_by": "agent"})
 		access.emit("agent", "智能体启动了每日循环", level="info")
 		return {"ok": True, "loop": state}
 	if action == "daily_loop_stop":
@@ -4282,6 +4297,7 @@ def api_agent_control_status():
 		"platform_limits": bench.get("platform_limit_details") or {},
 		"funnel_today": bench.get("funnel_today"),
 		"sent_by_platform": bench.get("sent_by_platform"),
+		"last_run": loop.get("ended"),
 		"daily_schedule": {k: _get_daily_schedule().snapshot().get(k) for k in ("enabled", "time", "next_run_at", "last_start_at", "last_error")},
 		"replies_waiting": bench.get("monitor_pending_count"),
 		"send_quota": bench.get("send_quota"),

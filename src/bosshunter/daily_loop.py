@@ -32,6 +32,16 @@ MODES = ("auto", "manual", "off")      # collect + approve + deliver / collect, 
 DEFAULT_END = "20:00"
 DEFAULT_CAP = 150                               # deliveries per platform and day; 0 = no limit
 MAX_INCIDENTS = 300
+MAX_HISTORY = 30
+# Why a run ended, how it is told, and whether it deserves a decision from the user (restart, change today's start, ...).
+STOP_REASONS = {
+    "user": ("你已手动停止每日循环", False, ""),
+    "end_time": ("已到结束时间", False, ""),
+    "cap": ("各平台都已达到投递上限", False, ""),
+    "limit": ("各平台今天都用完了额度", True, "额度明天恢复；也可以到设置里调高上限后现在重新启动"),
+    "crash": ("每日循环出错退出", True, "建议现在重新启动；出错原因见异常列表"),
+    "unknown": ("每日循环结束，原因不明", True, "先看异常列表，再决定要不要现在重新启动"),
+}
 GREETING_STATUSES = {"ready", "approved", "error"}      # the statuses the greeting API accepts (not the unscored ones)
 PLATFORM_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS 直聘", "51job": "前程无忧", "liepin": "猎聘"}
 SETTING_NAMES = {"zhilian_campus": "智联校招", "zhilian": "智联招聘", "boss": "BOSS", "51job": "前程无忧", "liepin": "猎聘"}
@@ -97,6 +107,7 @@ class DailyLoop:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._collect_closed: set[str] = set()      # platforms whose collecting is over for today (delivering may go on)
+        self.history_path = self.path.with_name("daily_loop_history.json")
         self.state = self._load()
 
     # ------------------------------------------------------------------ state
@@ -202,9 +213,10 @@ class DailyLoop:
             collect_minutes = self._minutes(options.get("collect_minutes", configured.get("daily_loop_collect_minutes")), MAX_COLLECT_MINUTES)
             deliver_minutes = self._minutes(options.get("deliver_minutes", configured.get("daily_loop_deliver_minutes")), MAX_DELIVER_MINUTES)
             self._collect_closed = set()
+            started_by = str(options.get("started_by") or "manual")
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds") if end else "", "day": now.date().isoformat(),
-                "delivered_base": {}, "monitor_minutes": monitor_minutes, "last_monitor": "", "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
+                "started_by": started_by, "ended": None, "delivered_base": {}, "monitor_minutes": monitor_minutes, "last_monitor": "", "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
                 "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "time_window", "auto_approve", "delivery_cap") if k in options},
@@ -236,7 +248,9 @@ class DailyLoop:
         end = datetime.fromisoformat(state["end_at"]) if state.get("end_at") else None
         if end is not None and self.now() >= end:
             self._set(running=False, step="finished", message="已到结束时间", stopped_reason="end_time")
+            self._record_run("end_time", "程序重启时已过了结束时间")
             return False
+        self._news("loop", "程序重启过，每日循环已接着运行", level="info")
         self._launch()
         return True
 
@@ -355,6 +369,7 @@ class DailyLoop:
                     self._set(step="idle", message="连续两轮没有新岗位，等待后再试")
                     self._wait(self.idle_seconds)
         except Exception as exc:                                  # the loop must not die silently
+            self.state["stopped_reason"] = "crash"
             self.incident("", "loop", "loop_crashed", f"每日循环异常退出：{type(exc).__name__}: {exc}")
         finally:
             self._finish()
@@ -380,7 +395,44 @@ class DailyLoop:
             else "每日循环结束"
         )
         self._set(running=False, step="finished", message=message, platform="", summary=self.summary())
-        self._news("loop", f"{message}：{json.dumps(self.summary(), ensure_ascii=False)}", level="info")
+        record = self._record_run(stopped or "unknown", message)
+        level = "warning" if record["needs_attention"] else "info"
+        suffix = f"。{record['suggestion']}" if record["suggestion"] else ""
+        self._news("loop", f"{message}：{json.dumps(self.summary(), ensure_ascii=False)}{suffix}", level=level,
+                   data={"reason": record["reason"], "needs_attention": record["needs_attention"]})
+
+    def _record_run(self, reason: str, message: str) -> dict[str, Any]:
+        """Keep what a run did and why it ended, so the app can show it and ask the user what to do next."""
+        label, attention, suggestion = STOP_REASONS.get(reason, STOP_REASONS["unknown"])
+        summary = self.summary()
+        record = {
+            "started_at": self.state.get("started_at", ""), "ended_at": self.now().isoformat(timespec="seconds"),
+            "started_by": self.state.get("started_by") or "manual", "reason": reason if reason in STOP_REASONS else "unknown",
+            "reason_label": label, "message": message, "needs_attention": attention, "suggestion": suggestion,
+            "rounds": summary["rounds"], "totals": summary["totals"], "open_incidents": summary["open_incidents"],
+        }
+        with self._lock:
+            self.state["ended"] = record
+            self._save()
+        try:
+            history = json.loads(self.history_path.read_text(encoding="utf-8"))
+            history = history if isinstance(history, list) else []
+        except (OSError, ValueError):
+            history = []
+        try:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            self.history_path.write_text(json.dumps((history + [record])[-MAX_HISTORY:], ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+        return record
+
+    def history(self, limit: int = 10) -> list[dict[str, Any]]:
+        """The last runs, newest first."""
+        try:
+            data = json.loads(self.history_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return list(reversed(data if isinstance(data, list) else []))[:max(1, limit)]
 
     def _limits_message(self) -> str:
         parts = [f"{PLATFORM_NAMES.get(p, p)}「{info['label']}」" for p, info in (self.state.get("out_today") or {}).items()]

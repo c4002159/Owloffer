@@ -446,3 +446,58 @@ def test_replies_are_not_checked_when_it_is_switched_off_or_boss_is_not_part_of_
         loop.start({"platform_order": order, "end_time": "09:40"})
         loop.join(20)
         assert not [1 for method, path, body in server.calls if method == "POST" and (body or {}).get("mode") == "monitor"], name
+
+
+def test_every_run_is_kept_with_how_it_started_and_why_it_ended(tmp_path):
+    server = FakeServer()
+    loop = _loop(server, tmp_path)
+    events = _events(loop)
+    loop.start({"platform_order": ["liepin"], "end_time": "09:20", "started_by": "schedule"})
+    loop.join(10)
+    ended = loop.snapshot()["ended"]
+    assert ended["reason"] == "end_time" and ended["started_by"] == "schedule" and ended["needs_attention"] is False
+    assert ended["message"] == "已到结束时间 09:20，每日循环结束" and ended["rounds"] >= 1
+    runs = loop.history()
+    assert len(runs) == 1 and runs[0]["reason"] == "end_time"
+    assert events[-1][2]["level"] == "info" and events[-1][2]["data"] == {"reason": "end_time", "needs_attention": False}
+
+
+def test_a_run_that_died_asks_for_a_decision_and_says_what_to_do(tmp_path):
+    server = FakeServer()
+    original = server.api
+
+    def broken(method, path, body=None):
+        if path == "/api/workbench" and method == "GET" and any(c[1] == "/api/workbench/task" for c in server.calls):
+            raise RuntimeError("boom")                                     # outside ApiError: the loop itself breaks
+        return original(method, path, body)
+
+    loop = DailyLoop(tmp_path / "loop.json", broken, now=server.now, sleep=server.sleep, poll_seconds=60, idle_seconds=600)
+    events = _events(loop)
+    loop.start({"platform_order": ["liepin"], "end_time": "11:00"})
+    loop.join(10)
+    ended = loop.snapshot()["ended"]
+    assert ended["reason"] == "crash" and ended["needs_attention"] is True and "重新启动" in ended["suggestion"]
+    assert events[-1][2]["level"] == "warning" and events[-1][2]["data"]["needs_attention"] is True
+
+
+def test_using_up_every_platform_is_worth_a_look_and_a_manual_stop_is_not(tmp_path):
+    from bosshunter.daily_loop import STOP_REASONS
+
+    assert STOP_REASONS["limit"][1] is True and STOP_REASONS["crash"][1] is True and STOP_REASONS["unknown"][1] is True
+    assert not any(STOP_REASONS[reason][1] for reason in ("user", "end_time", "cap"))
+    user = _loop(FakeServer(), tmp_path)
+    user._launch = lambda: None
+    user.start({"platform_order": ["liepin"], "time_window": False})
+    user.stop()
+    user._finish()
+    assert user.history()[0]["reason"] == "user" and user.history()[0]["needs_attention"] is False
+
+
+def test_history_is_newest_first_and_bounded(tmp_path):
+    loop = _loop(FakeServer(), tmp_path)
+    loop._launch = lambda: None
+    for number in range(35):
+        loop.state = {"started_at": f"2026-10-22T0{number % 10}:00:00", "round": number, "totals": {}, "incidents": []}
+        loop._record_run("end_time", f"第 {number} 次")
+    runs = loop.history(100)
+    assert len(runs) == 30 and runs[0]["message"] == "第 34 次" and runs[-1]["message"] == "第 5 次"

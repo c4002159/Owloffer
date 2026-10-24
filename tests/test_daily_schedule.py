@@ -84,3 +84,37 @@ def test_the_time_is_a_24_hour_clock_time(tmp_path):
     with pytest.raises(ValueError):
         schedule.update(True, "24:30", {})
     assert schedule.snapshot()["enabled"] is False                          # nothing was saved
+
+
+def test_today_can_be_skipped_or_moved_without_touching_the_daily_setting(tmp_path):
+    clock = Clock(datetime(2026, 10, 24, 6, 0))
+    schedule, started = _schedule(tmp_path, clock)
+    schedule.update(True, "07:30", {})
+    schedule.override("skip")
+    assert schedule.snapshot()["override"]["action"] == "skip" and schedule.snapshot()["next_run_at"].startswith("2026-10-25T07:30")
+    clock.at = datetime(2026, 10, 24, 7, 40)
+    assert schedule.tick() is False and not started                       # skipped today
+    clock.at = datetime(2026, 10, 25, 7, 31)
+    assert schedule.snapshot()["override"] is None                        # the change was only for 24th
+    assert schedule.tick() is True and len(started) == 1                  # the daily setting is untouched
+
+    clock.at = datetime(2026, 10, 26, 6, 0)
+    schedule.override("time", "10:15")
+    assert schedule.snapshot()["next_run_at"].startswith("2026-10-26T10:15")
+    clock.at = datetime(2026, 10, 26, 7, 45)
+    assert schedule.tick() is False                                       # the usual time passes: moved to 10:15
+    clock.at = datetime(2026, 10, 26, 10, 16)
+    assert schedule.tick() is True and len(started) == 2
+
+
+def test_a_change_can_be_taken_back_and_a_bad_one_is_refused(tmp_path):
+    clock = Clock(datetime(2026, 10, 24, 6, 0))
+    schedule, started = _schedule(tmp_path, clock)
+    schedule.update(True, "07:30", {})
+    schedule.override("skip")
+    schedule.override("clear")
+    clock.at = datetime(2026, 10, 24, 7, 31)
+    assert schedule.tick() is True
+    for action, time_of_day in (("nope", None), ("time", "30:00")):
+        with pytest.raises(ValueError):
+            schedule.override(action, time_of_day)

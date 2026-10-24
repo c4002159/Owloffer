@@ -72,8 +72,30 @@ class DailySchedule:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             state = {"enabled": False, "time": DEFAULT_TIME, "options": {}, "last_start_day": "", "last_start_at": "", "last_error": "", **self.state}
+            state["override"] = self._override_today()                    # only today's change counts; older ones are gone
             state["next_run_at"] = self.next_run()
             return state
+
+    def _override_today(self) -> dict | None:
+        override = self.state.get("override")
+        if isinstance(override, dict) and override.get("day") == self.now().date().isoformat():
+            return override
+        return None
+
+    def override(self, action: str, time_of_day: object = None) -> dict[str, Any]:
+        """Change only today: ``skip`` (no automatic start today), ``time`` (start today at another time) or ``clear``."""
+        if action not in {"skip", "time", "clear"}:
+            raise ValueError("只能是 skip（今天不启动）、time（今天改到另一个时间）或 clear（取消临时更改）")
+        with self._lock:
+            if action == "clear":
+                self.state.pop("override", None)
+            elif action == "skip":
+                self.state["override"] = {"day": self.now().date().isoformat(), "action": "skip"}
+            else:
+                hour, minute = parse_time(time_of_day)
+                self.state["override"] = {"day": self.now().date().isoformat(), "action": "time", "time": f"{hour:02d}:{minute:02d}"}
+            self._save()
+        return self.snapshot()
 
     def update(self, enabled: bool, time_of_day: object, options: dict | None) -> dict[str, Any]:
         parse_time(time_of_day)                                   # refuse nonsense before anything is saved
@@ -83,12 +105,14 @@ class DailySchedule:
             if isinstance(options, dict):
                 self.state["options"] = options
             self.state["last_error"] = ""
+            self.state.pop("override", None)                              # a new regular time replaces a one-off change
             self._save()
         return self.snapshot()
 
     # ------------------------------------------------------------------ when
     def _planned(self, day: datetime) -> datetime:
-        hour, minute = parse_time(self.state.get("time"))
+        override = self._override_today()
+        hour, minute = parse_time(override["time"] if override and override.get("action") == "time" else self.state.get("time"))
         return day.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     def next_run(self) -> str:
@@ -97,7 +121,8 @@ class DailySchedule:
             return ""
         now = self.now()
         today = self._planned(now)
-        started_today = self.state.get("last_start_day") == now.date().isoformat()
+        override = self._override_today()
+        started_today = self.state.get("last_start_day") == now.date().isoformat() or bool(override and override.get("action") == "skip")
         if not started_today and now <= today + timedelta(hours=GRACE_HOURS):
             return (today if now <= today else now).isoformat(timespec="seconds")      # late but within the grace: at the next tick
         return (today + timedelta(days=1)).isoformat(timespec="seconds")
@@ -110,7 +135,8 @@ class DailySchedule:
             now = self.now()
             day = now.date().isoformat()
             planned = self._planned(now)
-            if self.state.get("last_start_day") == day or now < planned:
+            override = self._override_today()
+            if self.state.get("last_start_day") == day or now < planned or (override and override.get("action") == "skip"):
                 return False
             if now > planned + timedelta(hours=GRACE_HOURS):          # too late: today is skipped
                 self.state["last_start_day"] = day
