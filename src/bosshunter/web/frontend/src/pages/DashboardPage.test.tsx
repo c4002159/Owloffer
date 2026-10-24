@@ -194,6 +194,27 @@ describe('DashboardPage workbench task panel', () => {
     expect(screen.getByText('历史累计 373')).toBeTruthy()
   })
 
+  it('turns the apps own daily start on from the loop settings, with the time on a 24-hour clock', async () => {
+    workbenchPayload = baseWorkbench({ funnel: { collected: 2 } })
+    fetchMock.mockClear()
+    render(<DashboardPage view="workbench" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '每日循环设置' }))
+    expect(screen.getByRole('combobox', { name: '启动时间（时）' })).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox', { name: '启动时间（时）' }), { target: { value: '19' } })
+    fireEvent.click(screen.getByRole('switch', { name: '每天定时自动启动' }))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/daily-loop/schedule' && init?.method === 'POST')
+      expect(call).toBeTruthy()
+      const body = JSON.parse(String(call![1]!.body))
+      expect(body.enabled).toBe(true)
+      expect(body.time).toBe('19:30')
+      expect(body.options.monitor_minutes).toBe(60)                      // the reply check is on by default and goes with the start
+      expect(body.options.modes.boss).toBe('auto')
+    })
+  })
+
   it('shows setup check failures next to the getting started steps', async () => {
     preflightResponse = () => jsonResponse({
       ok: false,

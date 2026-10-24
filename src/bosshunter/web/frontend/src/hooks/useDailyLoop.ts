@@ -46,12 +46,26 @@ export interface DailyLoopSettings {
   cap: string
   campusTarget: string
   platformTarget: string
+  /** Look for HR replies on BOSS now and then (a read-only pass; the replies show up in the message center). */
+  monitorOn: boolean
+  monitorMinutes: string
+  /** The time of day (24-hour clock) the app starts the loop by itself when the schedule is on. */
+  scheduleTime: string
   modes: Record<LoopPlatform, LoopMode>
+}
+
+export interface DailyLoopSchedule {
+  enabled: boolean
+  time: string
+  next_run_at?: string
+  last_start_at?: string
+  last_error?: string
 }
 
 const SETTINGS_KEY = 'owloffer.dailyLoop.settings'
 const DEFAULTS: DailyLoopSettings = {
   windowOn: false, start: '07:00', end: '20:00', cap: '150', campusTarget: '50', platformTarget: '80',
+  monitorOn: true, monitorMinutes: '60', scheduleTime: '07:30',
   modes: { zhilian_campus: 'manual', zhilian: 'auto', boss: 'auto', '51job': 'auto', liepin: 'auto' },
 }
 
@@ -73,11 +87,26 @@ async function post(path: string, body: Record<string, unknown> = {}) {
 
 const count = (text: string, fallback: number) => Math.max(Number.parseInt(text, 10) || fallback, 0)
 
+/** What the loop is started with: the same for a start by hand and for the app's own daily start. */
+export function loopOptions(settings: DailyLoopSettings) {
+  const campus = count(settings.campusTarget, 50)
+  const other = count(settings.platformTarget, 80)
+  return {
+    time_window: settings.windowOn,
+    ...(settings.windowOn ? { start_time: settings.start, end_time: settings.end } : {}),
+    delivery_cap: count(settings.cap, 150),
+    monitor_minutes: settings.monitorOn ? Math.max(count(settings.monitorMinutes, 60), 1) : 0,
+    modes: settings.modes,
+    targets: { zhilian_campus: campus, zhilian: other, boss: other, '51job': other, liepin: other },
+  }
+}
+
 /** The daily loop: the fixed collect → approve → deliver → repeat job, its settings and its incident list. */
 export function useDailyLoop(setNotice: (message: string) => void) {
   const [state, setState] = useState<DailyLoopState>({})
   const [busy, setBusy] = useState(false)
   const [settings, setSettings] = useState<DailyLoopSettings>(loadSettings)
+  const [schedule, setSchedule] = useState<DailyLoopSchedule>({ enabled: false, time: DEFAULTS.scheduleTime })
 
   const load = useCallback(async () => {
     try {
@@ -87,6 +116,21 @@ export function useDailyLoop(setNotice: (message: string) => void) {
       // the next poll tries again
     }
   }, [])
+
+  const loadSchedule = useCallback(async () => {
+    try {
+      const res = await fetch('/api/daily-loop/schedule')
+      if (res.ok) setSchedule(await res.json())
+    } catch {
+      // the next poll tries again
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadSchedule()
+    const timer = window.setInterval(() => void loadSchedule(), 60000)
+    return () => window.clearInterval(timer)
+  }, [loadSchedule])
 
   useEffect(() => {
     void load()
@@ -104,18 +148,31 @@ export function useDailyLoop(setNotice: (message: string) => void) {
     }
   }
 
+  /** Turn the app's own daily start on or off (and send it the loop options as they are now). */
+  const saveSchedule = async (enabled: boolean, time = settings.scheduleTime) => {
+    try {
+      setSchedule(await post('/api/daily-loop/schedule', { enabled, time, options: loopOptions(settings) }))
+      setNotice(enabled ? `已开启定时：每天 ${time} 自动启动每日循环。` : '已关闭定时启动。')
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '保存定时失败')
+      void loadSchedule()
+    }
+  }
+
+  // While the schedule is on, a change of the loop settings is sent along, so the 07:30 start is the one the user sees here.
+  useEffect(() => {
+    if (!schedule.enabled) return
+    const timer = window.setTimeout(() => {
+      post('/api/daily-loop/schedule', { enabled: true, time: schedule.time, options: loopOptions(settings) }).then(setSchedule).catch(() => undefined)
+    }, 800)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(loopOptions(settings)), schedule.enabled, schedule.time])
+
   const start = async () => {
-    const campus = count(settings.campusTarget, 50)
-    const other = count(settings.platformTarget, 80)
     setBusy(true)
     try {
-      setState(await post('/api/daily-loop/start', {
-        time_window: settings.windowOn,
-        ...(settings.windowOn ? { start_time: settings.start, end_time: settings.end } : {}),
-        delivery_cap: count(settings.cap, 150),
-        modes: settings.modes,
-        targets: { zhilian_campus: campus, zhilian: other, boss: other, '51job': other, liepin: other },
-      }))
+      setState(await post('/api/daily-loop/start', loopOptions(settings)))
       setNotice('每日循环已启动。')
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : '启动失败')
@@ -144,7 +201,7 @@ export function useDailyLoop(setNotice: (message: string) => void) {
   }
 
   const incidents = (state.incidents || []).filter(item => !item.resolved)
-  return { state, running: Boolean(state.running), busy, settings, change, start, stop, resolve, incidents }
+  return { state, running: Boolean(state.running), busy, settings, change, start, stop, resolve, incidents, schedule, saveSchedule }
 }
 
 export type DailyLoopController = ReturnType<typeof useDailyLoop>

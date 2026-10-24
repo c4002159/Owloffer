@@ -4114,6 +4114,37 @@ def _get_daily_loop():
 	return _daily_loop
 
 
+_daily_schedule = None
+
+
+def _get_daily_schedule():
+	"""The daily loop's own timer (daily_schedule.py): the app starts the loop at the chosen time every day."""
+	global _daily_schedule
+	from bosshunter.daily_schedule import DailySchedule
+
+	path = DATA_DIR / "daily_schedule.json"
+	if _daily_schedule is None or _daily_schedule.path != path:
+		_daily_schedule = DailySchedule(
+			path, lambda options: _get_daily_loop().start(options), lambda: _get_daily_loop().running(),
+			on_event=lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs),
+		)
+	return _daily_schedule
+
+
+@app.route("/api/daily-loop/schedule")
+def api_daily_loop_schedule():
+	return _json_response(_get_daily_schedule().snapshot())
+
+
+@app.route("/api/daily-loop/schedule", method="POST")
+def api_daily_loop_schedule_set():
+	body = request.json if isinstance(request.json, dict) else {}
+	try:
+		return _json_response(_get_daily_schedule().update(bool(body.get("enabled")), body.get("time"), body.get("options")))
+	except ValueError as exc:
+		return _json_response({"error": str(exc)}, 400)
+
+
 @app.route("/api/daily-loop")
 def api_daily_loop_state():
 	loop = _get_daily_loop()
@@ -4251,6 +4282,7 @@ def api_agent_control_status():
 		"platform_limits": bench.get("platform_limit_details") or {},
 		"funnel_today": bench.get("funnel_today"),
 		"sent_by_platform": bench.get("sent_by_platform"),
+		"daily_schedule": {k: _get_daily_schedule().snapshot().get(k) for k in ("enabled", "time", "next_run_at", "last_start_at", "last_error")},
 		"replies_waiting": bench.get("monitor_pending_count"),
 		"send_quota": bench.get("send_quota"),
 		"pending_requests": _get_agent_access().pending_requests(),
@@ -4813,6 +4845,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	threading.Timer(6.0, lambda: _get_daily_loop().resume()).start()       # a restart continues a loop that was running
 	_start_news_watcher()
 	_start_backup_scheduler()
+	_get_daily_schedule().start()
 
 	if open_browser:
 		import webbrowser

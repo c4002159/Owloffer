@@ -141,3 +141,17 @@ def test_the_keyword_advice_routes_pause_add_and_undo(tmp_path, monkeypatch):
     assert status.startswith("200") and payload["enabled"] is False
     assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["automation"]["keyword_advice_popup"] is False
     assert _call("/api/keywords/advice")[1]["popup_enabled"] is False
+
+
+def test_the_schedule_routes_save_the_time_and_options_and_refuse_a_bad_time(tmp_path, monkeypatch):
+    server.set_base_dir(tmp_path)
+    monkeypatch.setattr(server, "_agent_access", None)
+    monkeypatch.setattr(server, "_daily_schedule", None)
+    status, payload = _call("/api/daily-loop/schedule")
+    assert status.startswith("200") and payload["enabled"] is False and payload["next_run_at"] == ""
+    status, payload = _call("/api/daily-loop/schedule", "POST", {"enabled": True, "time": "07:30", "options": {"modes": {"boss": "auto"}, "monitor_minutes": 60}})
+    assert status.startswith("200") and payload["enabled"] is True and payload["time"] == "07:30" and payload["options"]["monitor_minutes"] == 60
+    assert payload["next_run_at"]
+    status, payload = _call("/api/daily-loop/schedule", "POST", {"enabled": True, "time": "25:00"})
+    assert status.startswith("400")
+    assert _call("/api/daily-loop/schedule")[1]["time"] == "07:30"          # the refused change did not touch it

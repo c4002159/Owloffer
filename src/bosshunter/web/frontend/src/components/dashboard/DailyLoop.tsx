@@ -17,6 +17,15 @@ const STEP_LABELS: Record<string, string> = {
 }
 const TOTAL_LABELS: Record<string, string> = { collected: '新增', approved: '已批准', delivered: '已投递', failed: '失败' }
 
+function scheduleText(iso?: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso || '')
+  if (!match) return '—'
+  const today = new Date().toLocaleDateString('sv-SE')
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE')
+  const day = `${match[1]}-${match[2]}-${match[3]}`
+  return `${day === today ? '今天' : day === tomorrow ? '明天' : `${match[2]}-${match[3]}`} ${match[4]}`
+}
+
 function clock(iso?: string) {
   const match = /T(\d{2}:\d{2})/.exec(iso || '')
   return match ? match[1] : ''
@@ -26,7 +35,7 @@ function clock(iso?: string) {
 export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopController; blocked: boolean; onBlocked: () => void }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  const { settings, change, running, busy } = loop
+  const { settings, change, running, busy, schedule, saveSchedule } = loop
   // the settings popover closes on a click anywhere else, and on Escape
   useEffect(() => {
     if (!open) return
@@ -91,7 +100,7 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
           <p className={cn('text-xs leading-5', running ? 'text-primary-foreground/85' : 'text-muted')}>
             {running
               ? `${loop.state.end_at ? `${settings.start}–${clock(loop.state.end_at)}` : '全天运行'} · 每平台最多投递 ${loop.state.delivery_cap || '不限'}`
-              : `参加 ${counts.auto + counts.manual} 个平台：${counts.auto} 个全自动${counts.manual ? `，${counts.manual} 个手动确认` : ''}${counts.off ? `，${counts.off} 个不参加` : ''}`}
+              : `参加 ${counts.auto + counts.manual} 个平台：${counts.auto} 个全自动${counts.manual ? `，${counts.manual} 个手动确认` : ''}${counts.off ? `，${counts.off} 个不参加` : ''}${schedule.enabled ? ` · 每天 ${schedule.time} 自动启动` : ''}`}
           </p>
           {!running && (
             <button type="button" aria-label="每日循环设置" aria-expanded={open} onClick={() => setOpen(value => !value)} className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-secondary hover:text-primary">
@@ -139,6 +148,35 @@ export function DailyLoopCard({ loop, blocked, onBlocked }: { loop: DailyLoopCon
             <label className="space-y-1 font-bold">校招目标（新增岗位）<input type="number" min={1} value={settings.campusTarget} onChange={e => change({ campusTarget: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="space-y-1 font-bold">其他平台目标（各）<input type="number" min={1} value={settings.platformTarget} onChange={e => change({ platformTarget: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
             <label className="col-span-2 space-y-1 font-bold">每个全自动平台每天投递上限（0 = 不限）<input type="number" min={0} max={1000} value={settings.cap} onChange={e => change({ cap: e.target.value })} className="w-full rounded-lg border border-card-border bg-surface px-2 py-1.5" /></label>
+          </div>
+          <div className="space-y-2 rounded-lg border border-card-border bg-surface p-2" aria-label="定时自动启动">
+            <label className="flex items-center justify-between gap-2 font-bold text-foreground">
+              每天定时自动启动
+              <Switch aria-label="每天定时自动启动" checked={schedule.enabled} onChange={value => void saveSchedule(value)} />
+            </label>
+            <div className="flex items-center justify-between gap-2">
+              <Clock24 label="启动时间" value={settings.scheduleTime} onChange={value => { change({ scheduleTime: value }); if (schedule.enabled) void saveSchedule(true, value) }} />
+              <p className="flex-1 leading-5 text-muted">
+                {schedule.enabled
+                  ? `已开启：下次 ${scheduleText(schedule.next_run_at)} 自动启动（用上面这些设置）。程序要开着；即使 Claude 没打开也会启动。`
+                  : '关着：不会自动启动，需要你点「运行全流程」。24 小时制。'}
+              </p>
+            </div>
+            {schedule.last_error && <p className="leading-5 text-warning">{schedule.last_error}</p>}
+          </div>
+          <div className="space-y-2 rounded-lg border border-card-border bg-surface p-2" aria-label="检查 HR 回复">
+            <label className="flex items-center justify-between gap-2 font-bold text-foreground">
+              循环里检查 BOSS 的 HR 回复
+              <Switch aria-label="检查 HR 回复" checked={settings.monitorOn} onChange={value => change({ monitorOn: value })} />
+            </label>
+            {settings.monitorOn ? (
+              <label className="flex items-center gap-2 font-bold">
+                每隔
+                <input type="number" min={5} max={720} value={settings.monitorMinutes} onChange={event => change({ monitorMinutes: event.target.value })} aria-label="检查回复的间隔（分钟）" className="w-20 rounded-lg border border-card-border bg-card px-2 py-1" />
+                分钟读一次
+              </label>
+            ) : null}
+            <p className="leading-5 text-muted">只读：把 HR 的新回复读进来，在消息中心提醒你，不会自动回复 HR。目前只有 BOSS 支持。</p>
           </div>
           <p className="leading-5 text-muted">设置会记住。采集时间窗口、发送窗口在「配置 → 投递与自动化」里调整。</p>
         </div>
