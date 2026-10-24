@@ -125,6 +125,8 @@ export interface TaskSummary {
 interface WorkbenchData {
   funnel: FunnelData
   funnel_today: FunnelData
+  /** Delivered jobs per platform: what was sent today and everything delivered so far. */
+  sent_by_platform?: { today: Record<string, number>; total: Record<string, number> }
   pending_confirmation: Job[]
   approved_unsent: Job[]
   delivery_job_ids?: string[]

@@ -42,6 +42,8 @@ class FakeServer:
         if path == "/api/workbench":
             task = {"id": "t1", "status": "running", "logs": ["working"]} if self.running else None
             return {"task": task, "queued_tasks": [], "last_task": self.last, "platform_limit_details": self.limits}
+        if path == "/api/workbench/task" and method == "POST" and body.get("mode") == "monitor":
+            return self._start({})
         if path == "/api/workbench/task" and method == "POST":
             platform = body["options"]["platform_order"][0]
             if self.refuse_collect:
@@ -204,7 +206,8 @@ def test_each_platform_can_be_automatic_manual_or_left_out(tmp_path):
     loop = _loop(server, tmp_path)
     loop.start({"modes": {"zhilian_campus": "off", "boss": "manual", "liepin": "auto", "zhilian": "off", "51job": "off"}, "end_time": "09:20"})
     loop.join(10)
-    collected = [body["options"]["platform_order"][0] for method, path, body in server.calls if path == "/api/workbench/task" and method == "POST"]
+    collected = [body["options"]["platform_order"][0] for method, path, body in server.calls
+                 if path == "/api/workbench/task" and method == "POST" and body.get("mode") != "monitor"]
     assert set(collected) == {"boss", "liepin"}                                    # the ones left out are never touched
     delivers = [body for method, path, body in server.calls if path == "/api/workbench/deliver"]
     assert delivers and all(all(job.startswith("liepin") for job in body["job_ids"]) for body in delivers)   # manual: collected, never delivered
@@ -421,3 +424,25 @@ def test_the_collection_and_delivery_time_limits_come_from_the_settings_and_can_
     unset._launch = lambda: None
     unset.start({"platform_order": ["liepin"], "time_window": False})
     assert (unset.snapshot()["collect_minutes"], unset.snapshot()["deliver_minutes"]) == (90, 240)
+
+
+def test_the_loop_checks_boss_for_replies_now_and_then_with_a_read_only_pass(tmp_path):
+    server = FakeServer()
+    loop = DailyLoop(tmp_path / "loop.json", server.api, now=server.now, sleep=server.sleep, poll_seconds=60, idle_seconds=600,
+                     settings=lambda: {"daily_loop_monitor_minutes": 30})
+    loop.start({"platform_order": ["boss"], "end_time": "11:00"})
+    loop.join(20)
+    monitors = [body for method, path, body in server.calls if method == "POST" and path == "/api/workbench/task" and (body or {}).get("mode") == "monitor"]
+    assert monitors and all(body["options"] == {"once": True} for body in monitors)
+    assert len(monitors) >= 2                                        # more than once in two hours, but not every round
+    rounds = loop.snapshot()["round"]
+    assert len(monitors) < rounds
+
+
+def test_replies_are_not_checked_when_it_is_switched_off_or_boss_is_not_part_of_the_loop(tmp_path):
+    for name, settings, order in (("off", {"daily_loop_monitor_minutes": 0}, ["boss"]), ("other", {"daily_loop_monitor_minutes": 30}, ["liepin"])):
+        server = FakeServer()
+        loop = DailyLoop(tmp_path / f"{name}.json", server.api, now=server.now, sleep=server.sleep, poll_seconds=60, idle_seconds=600, settings=lambda s=settings: s)
+        loop.start({"platform_order": order, "end_time": "09:40"})
+        loop.join(20)
+        assert not [1 for method, path, body in server.calls if method == "POST" and (body or {}).get("mode") == "monitor"], name

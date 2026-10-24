@@ -1619,6 +1619,33 @@ def get_funnel_stats(conn: sqlite3.Connection, *, today: bool = False) -> dict[s
     return {"采集总数": total, "初筛通过": prefilter_passed, "AI评分": ai_scored, "人工确认": approved, "发送": sent, "回复": replied, "简历已发": resume_sent, "待手动发简历": needs_resume, "简历生成": resume_generated, "跟进": follow_up, "拒绝": rejected}
 
 
+def get_sent_by_platform(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    """Delivered jobs per platform: ``today`` counts what was sent (or marked as sent by hand) today, ``total`` every delivered job."""
+    today = {
+        str(row["platform"]): int(row["n"])
+        for row in conn.execute(
+            """
+            SELECT COALESCE(j.source_platform, 'boss') AS platform, COUNT(DISTINCT h.job_id) AS n
+            FROM history h JOIN jobs j ON j.id = h.job_id
+            WHERE h.action IN ('sent', 'manual_sent') AND j.deleted_at IS NULL
+              AND date(h.created_at, 'localtime') = date('now', 'localtime')
+            GROUP BY platform
+            """
+        ).fetchall()
+    }
+    total = {
+        str(row["platform"]): int(row["n"])
+        for row in conn.execute(
+            """
+            SELECT COALESCE(source_platform, 'boss') AS platform, COUNT(*) AS n FROM jobs
+            WHERE deleted_at IS NULL AND status IN ('sent', 'replied', 'resume_sent', 'needs_resume', 'follow_up_sent')
+            GROUP BY platform
+            """
+        ).fetchall()
+    }
+    return {"today": today, "total": total}
+
+
 def get_daily_activity(conn: sqlite3.Connection, days: int = 7) -> list[dict]:
     """Get daily activity for last N days."""
     rows = conn.execute("""

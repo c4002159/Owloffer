@@ -72,6 +72,8 @@ export function AutomationSettings({ config, updateConfig }: { config: Config; u
           hint="看到的岗位太少时（页面没加载好）不下结论" />
         <NumberSetting label="每日循环：单次采集最长（分钟）" value={config.automation?.daily_loop_collect_minutes ?? 90} onChange={v => updateConfig('automation.daily_loop_collect_minutes', v)} min={10} max={720}
           hint="超过就强制停止这一次采集，循环继续投递并开始下一轮" />
+        <NumberSetting label="每日循环：每隔多久检查一次 BOSS 的 HR 回复（分钟，0 = 不检查）" value={config.automation?.daily_loop_monitor_minutes ?? 60} onChange={v => updateConfig('automation.daily_loop_monitor_minutes', v)} min={0} max={720}
+          hint="只读检查，不会自动回复 HR；有新回复时消息中心和 Claude / Codex 的状态里都会提示" />
         <NumberSetting label="每日循环：单次投递最长（分钟）" value={config.automation?.daily_loop_deliver_minutes ?? 240} onChange={v => updateConfig('automation.daily_loop_deliver_minutes', v)} min={10} max={720}
           hint="超过就强制停止这一次投递" />
       </div>

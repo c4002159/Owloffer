@@ -198,12 +198,13 @@ class DailyLoop:
                 configured = self.settings() or {}
             except Exception:
                 configured = {}
+            monitor_minutes = max(self._int(options.get("monitor_minutes", configured.get("daily_loop_monitor_minutes")), 60), 0)
             collect_minutes = self._minutes(options.get("collect_minutes", configured.get("daily_loop_collect_minutes")), MAX_COLLECT_MINUTES)
             deliver_minutes = self._minutes(options.get("deliver_minutes", configured.get("daily_loop_deliver_minutes")), MAX_DELIVER_MINUTES)
             self._collect_closed = set()
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds") if end else "", "day": now.date().isoformat(),
-                "delivered_base": {}, "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
+                "delivered_base": {}, "monitor_minutes": monitor_minutes, "last_monitor": "", "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
                 "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "time_window", "auto_approve", "delivery_cap") if k in options},
@@ -212,6 +213,13 @@ class DailyLoop:
             self._save()
         self._launch()
         return self.snapshot()
+
+    @staticmethod
+    def _int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _minutes(value: Any, default: int) -> int:
@@ -341,6 +349,7 @@ class DailyLoop:
                     new_in_round += self._platform(platform)
                 if self._over():
                     break
+                self._check_replies()
                 idle_rounds = idle_rounds + 1 if new_in_round == 0 else 0
                 if idle_rounds >= 2:                              # nothing new to collect: keep delivering and look again later
                     self._set(step="idle", message="连续两轮没有新岗位，等待后再试")
@@ -383,6 +392,29 @@ class DailyLoop:
             return {"rounds": self.state.get("round", 0), "totals": self.state.get("totals", {}), "open_incidents": len(open_incidents)}
 
     # ------------------------------------------------------------------ one platform
+    def _check_replies(self) -> None:
+        """Every ``monitor_minutes`` minutes: one read-only pass over BOSS for HR replies (BOSS is the only platform with a monitor).
+
+        The pass only reads. The new replies show up in the message center (news watcher) and for Claude / Codex in the status.
+        """
+        minutes = int(self.state.get("monitor_minutes") or 0)
+        if minutes <= 0 or "boss" not in self.state.get("order", []) or self._mode("boss") == "off" or self._out("boss"):
+            return
+        last = self.state.get("last_monitor")
+        if last and self.now() < datetime.fromisoformat(last) + timedelta(minutes=minutes):
+            return
+        if "boss" in (self._get("/api/workbench").get("platform_limit_details") or {}):
+            return                                              # paused (verification, limit): no page of BOSS is opened for this
+        self._set(platform="boss", step="monitor", message="BOSS 直聘：检查 HR 回复")
+        try:
+            self.api("POST", "/api/workbench/task", {"mode": "monitor", "options": {"once": True}})
+        except ApiError:
+            return                                              # busy or refused: it is tried again next round
+        with self._lock:
+            self.state["last_monitor"] = self.now().isoformat(timespec="seconds")
+            self._save()
+        self._wait_idle("BOSS 直聘：检查 HR 回复", limit_minutes=20)
+
     def _platform(self, platform: str) -> int:
         self._set(platform=platform, step="check", message=f"{PLATFORM_NAMES.get(platform, platform)}：检查状态")
         if self._capped(platform):

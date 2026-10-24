@@ -180,6 +180,20 @@ describe('DashboardPage workbench task panel', () => {
     expect(screen.queryByRole('region', { name: '开始使用' })).toBeNull()
   })
 
+  it('shows how many jobs each platform delivered, today and in all', async () => {
+    workbenchPayload = baseWorkbench({
+      funnel: { collected: 2 },
+      sent_by_platform: { today: { boss: 6, '51job': 2 }, total: { boss: 231, '51job': 111, liepin: 31 } },
+    })
+    render(<DashboardPage view="workbench" />)
+
+    const list = await screen.findByRole('list', { name: '各平台投递数' })
+    expect(within(list).getByText(/BOSS 直聘/).parentElement?.textContent).toContain('今日 6 · 累计 231')
+    expect(within(list).getByText(/前程无忧/).parentElement?.textContent).toContain('今日 2 · 累计 111')
+    expect(within(list).getByText(/猎聘/).parentElement?.textContent).toContain('今日 0 · 累计 31')
+    expect(screen.getByText('历史累计 373')).toBeTruthy()
+  })
+
   it('shows setup check failures next to the getting started steps', async () => {
     preflightResponse = () => jsonResponse({
       ok: false,

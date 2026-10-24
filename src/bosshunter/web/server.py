@@ -56,6 +56,7 @@ from bosshunter.db import (
 	get_daily_activity,
 	get_db,
 	get_funnel_stats,
+	get_sent_by_platform,
 	get_jobs_needing_resume,
 	get_jobs_pending_confirmation,
 	get_jobs_by_status,
@@ -655,6 +656,9 @@ def _execute_monitor(task: WorkbenchTask, config: dict, *, initial_cooldown: boo
 				task.stop_reason = reason
 				task.stop_requested.set()
 				_log(task, reason)
+				return
+			if config.get("_monitor_once"):                       # one pass for the daily loop; the loop asks again later
+				_log(task, "本轮监测完成")
 				return
 			_log(task, f"本轮监测完成，{interval_min:g} 分钟后再次检查")
 			wakeup_event.wait(interval_sec)
@@ -1721,6 +1725,8 @@ def api_workbench():
 			"recent_tasks": [_task_summary(item) for item in (status.get("tasks") or [])[-8:]][::-1],
 			"funnel": get_funnel_stats(db),
 			"funnel_today": get_funnel_stats(db, today=True),
+			"sent_by_platform": get_sent_by_platform(db),
+			"monitor_pending_count": count_unresolved_monitor_items(db),
 			"pending_confirmation": [
 				_serialize_job(job) for job in get_jobs_pending_confirmation(db)
 				if int(job.get("score") or 0) >= threshold
@@ -2037,6 +2043,10 @@ def api_workbench_task_start():
 					"platforms": limited,
 				}, 409)
 		extra = {"_collection_options": collection_options} if collection_options is not None else {}
+		if mode == "monitor" and (options or {}).get("once"):
+			# A single pass that only reads: it fetches the HR replies (the message center tells the user) and neither answers HR
+			# nor sends follow-ups by itself (the same flag the agent workflow uses).
+			extra = {**extra, "_monitor_once": True, "_agent_workflow": True}
 		before_start = None
 		if collection_options is not None and not collection_options.get("resume_run_id"):
 			# Persist only non-secret collection preferences so the next dialog can
@@ -4240,6 +4250,8 @@ def api_agent_control_status():
 		"task": {k: task.get(k) for k in ("mode", "label", "status")} if task else None,
 		"platform_limits": bench.get("platform_limit_details") or {},
 		"funnel_today": bench.get("funnel_today"),
+		"sent_by_platform": bench.get("sent_by_platform"),
+		"replies_waiting": bench.get("monitor_pending_count"),
 		"send_quota": bench.get("send_quota"),
 		"pending_requests": _get_agent_access().pending_requests(),
 	})

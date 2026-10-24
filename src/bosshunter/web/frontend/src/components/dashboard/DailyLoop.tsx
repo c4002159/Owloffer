@@ -13,7 +13,7 @@ const MODE_OPTIONS: Array<{ value: LoopMode; label: string }> = [
 ]
 
 const STEP_LABELS: Record<string, string> = {
-  starting: '启动', waiting: '等待开始', check: '检查', collect: '采集', approve: '批准', greet: '生成招呼语', deliver: '投递', idle: '等待', finished: '已结束', api: '接口', loop: '循环',
+  starting: '启动', waiting: '等待开始', check: '检查', collect: '采集', approve: '批准', greet: '生成招呼语', deliver: '投递', monitor: '检查回复', idle: '等待', finished: '已结束', api: '接口', loop: '循环',
 }
 const TOTAL_LABELS: Record<string, string> = { collected: '新增', approved: '已批准', delivered: '已投递', failed: '失败' }
 

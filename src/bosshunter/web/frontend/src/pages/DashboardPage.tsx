@@ -945,10 +945,16 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
   const funnelTotal = workbench.funnel ?? {}
   const approvedWaiting = workbench.approved_unsent?.length ?? 0
   const pendingOnly = workbench.pending_confirmation.filter(job => job.status !== 'approved').length
-  const overviewTiles = [
+  // Delivered jobs: what was sent today (not the jobs that were collected today), and by platform.
+  const sentBy = workbench.sent_by_platform ?? { today: {}, total: {} }
+  const sentToday = Object.values(sentBy.today).reduce((sum, n) => sum + n, 0)
+  const sentTotal = Object.values(sentBy.total).reduce((sum, n) => sum + n, 0) || funnelTotal['发送'] || 0
+  const sentSplit = Object.keys({ ...sentBy.total, ...sentBy.today }).sort((a, b) => (sentBy.total[b] ?? 0) - (sentBy.total[a] ?? 0))
+    .map(platform => ({ platform, today: sentBy.today[platform] ?? 0, total: sentBy.total[platform] ?? 0 }))
+  const overviewTiles: { label: string; value: number; sub: string; split?: typeof sentSplit }[] = [
     { label: '今日新增岗位', value: funnelToday['采集总数'] || 0, sub: `累计 ${funnelTotal['采集总数'] || 0}` },
     { label: '待投递岗位', value: approvedWaiting, sub: `另有 ${pendingOnly} 个待确认` },
-    { label: '已投递岗位', value: funnelToday['发送'] || 0, sub: `历史累计 ${funnelTotal['发送'] || 0}` },
+    { label: '已投递岗位', value: sentToday, sub: `历史累计 ${sentTotal}`, split: sentSplit },
   ]
   const renderModeCard = (item: { mode: WorkbenchMode; title: string; description: string }) => {
     const isActive = activeTask?.mode === item.mode && !loopBlocksOthers
@@ -1034,6 +1040,15 @@ export default function DashboardPage({ view = 'workbench' }: DashboardPageProps
                 <div>
                   <div className="text-xs text-muted">{tile.label}</div>
                   <div className="text-[10px] font-bold text-muted">{tile.sub}</div>
+                  {tile.split && tile.split.length > 0 && (
+                    <ul className="mt-1 space-y-0.5 text-[10px] text-muted" aria-label="各平台投递数">
+                      {tile.split.map(item => (
+                        <li key={item.platform}>
+                          <span className="font-bold text-foreground">{PLATFORM_LABELS[item.platform] || item.platform}</span> 今日 {item.today} · 累计 {item.total}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
                 <div className="text-2xl font-black text-primary">{tile.value}</div>
               </div>
