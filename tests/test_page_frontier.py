@@ -31,6 +31,11 @@ class FrontierMathTests(TestCase):
         self.assertEqual(sf.deep_start(2, 3, None), 4)
 
 
+def chunks(first, last, size=5):
+    """The ranges the deep window is read in."""
+    return [(page, min(page + size - 1, last)) for page in range(first, last + 1, size)]
+
+
 class ScanRunTests(TestCase):
     """Several days of one keyword against a list whose pages hold 4 postings each."""
 
@@ -87,7 +92,7 @@ class ScanRunTests(TestCase):
             db.close()
 
     def test_the_first_day_reads_the_head_and_a_window_after_it(self):
-        self.assertEqual(self._day(1), [(1, 3), (4, 23)])
+        self.assertEqual(self._day(1), [(1, 3), *chunks(4, 23)])
         state = self._state()
         self.assertEqual(state["frontier"], 23)
         self.assertEqual(state["head_pages"], 5)           # everything was new: the head is worth more pages
@@ -97,7 +102,7 @@ class ScanRunTests(TestCase):
         asked = self._day(2)
         self.assertEqual(asked[0], (1, 5))                 # the head, as long as day 1 left it
         self.assertEqual(asked[1], (23, 23))               # probe of the remembered page: all known
-        self.assertEqual(asked[2], (24, 43))               # so on after it
+        self.assertEqual(asked[2:], chunks(24, 43))        # so on after it
         self.assertEqual(self._state()["frontier"], 43)
         self.assertEqual(self._state()["head_pages"], 4)   # the head was all known
 
@@ -118,3 +123,64 @@ class ScanRunTests(TestCase):
         asked = self._day(3)                               # probe of page 43: the list ends before it
         self.assertEqual(asked[1], (43, 43))
         self.assertLessEqual(asked[2][0], 10)             # deep reading starts afresh right after the head
+
+
+class SaturationTests(TestCase):
+    """A keyword whose list has nothing new stops after one chunk of the deep window instead of reading all of it."""
+
+    def _run(self, new_pages):
+        asked = []
+
+        class Site:
+            platform = "liepin"
+
+            def collect(self, request, hooks):
+                asked.append((request.first_page, request.max_pages))
+                for page in range(request.first_page, request.max_pages + 1):
+                    for index in range(12):                                   # 12 postings a page: a chunk is 60
+                        fresh = page in new_pages
+                        candidate = JobCandidate(platform="liepin", source_job_id=f"w-{page}-{index}-{'n' if fresh else 'old'}",
+                                                 title=f"Agent工程师{page}", company=f"公司{page}号{index}", city="上海", jd="负责Agent开发",
+                                                 url=f"https://x.test/{page}/{index}", source_keyword="Agent")
+                        if not hooks.on_list_candidate(candidate):
+                            continue
+                        hooks.on_candidate(candidate)
+                return PlatformCollectionResult("liepin", "completed", "search_exhausted", "ok")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data" / "c.db"
+            db = get_db(db_path)
+            try:                                                              # every posting of the "old" pages is already known
+                for page in range(1, 41):
+                    if page not in new_pages:
+                        for index in range(12):
+                            from bosshunter.db import insert_job
+
+                            insert_job(db, JobCandidate(platform="liepin", source_job_id=f"w-{page}-{index}-old", title=f"Agent工程师{page}",
+                                                        company=f"公司{page}号{index}", city="上海", jd="x" * 60, url=f"https://x.test/{page}/{index}").as_job_record())
+            finally:
+                db.close()
+            options = _options(order=["liepin"])
+            options["platforms"]["liepin"].update(cities=["上海"], keywords=["Agent"], max_pages=20)
+            config = {"automation": {"keyword_budget": True, "page_frontier": True}}
+            CollectionOrchestrator(config, db_path=db_path, registry=CollectorRegistry({"liepin": Site})).run(options)
+            db = get_db(db_path)
+            try:
+                state = sf.get(db, "liepin", "Agent", "上海")
+            finally:
+                db.close()
+        return asked, state
+
+    def test_a_chunk_with_nothing_new_ends_the_keyword(self):
+        asked, state = self._run(new_pages=set())
+        self.assertEqual(asked, [(1, 3), (4, 8)])                              # the head, then one chunk, then it gives up
+        self.assertEqual(state["frontier"], 8)
+
+    def test_new_postings_keep_the_window_going(self):
+        asked, _ = self._run(new_pages=set(range(1, 41)))
+        self.assertEqual(asked, [(1, 3), *chunks(4, 23)])
+
+    def test_the_window_stops_at_the_first_dry_chunk(self):
+        asked, state = self._run(new_pages={4, 5, 6})                           # the first chunk has news, the second has none
+        self.assertEqual(asked, [(1, 3), (4, 8), (9, 13)])
+        self.assertEqual(state["frontier"], 13)

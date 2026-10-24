@@ -1103,9 +1103,26 @@ class CollectionOrchestrator:
             start = sf.deep_start(frontier, head, probe_rate)
             end = start + window - 1
             processor.event(message=f"「{word}」深层读第 {start}–{end} 页")
-            deep, deep_seen, deep_dup = run(start, end, scope=f"w{start}-{end}")
-            if stop_here(deep):
-                return deep
+            # The window is read a few pages at a time. A chunk that brought nothing new (all known, or all turned away by the
+            # filters) means the list has nothing more for us here, so the keyword does not read on: a keyword that was already
+            # emptied used to cost 13-15 minutes a pass for 300 postings and no new job.
+            deep, deep_seen, deep_dup, position, read_to = None, 0, 0, start, start - 1
+            while position <= end:
+                last = min(position + sf.SATURATION_CHUNK_PAGES - 1, end)
+                new_before = len(processor.new_job_ids)
+                deep, chunk_seen, chunk_dup = run(position, last, scope=f"w{position}-{last}")
+                if stop_here(deep):
+                    return deep
+                deep_seen, deep_dup = deep_seen + chunk_seen, deep_dup + chunk_dup
+                if chunk_seen == 0:                      # the list ended inside the window: the memory moves to its end as before
+                    read_to = end
+                    break
+                read_to = last
+                if chunk_seen >= sf.SATURATION_MIN_SEEN and len(processor.new_job_ids) == new_before:
+                    processor.event(message=f"「{word}」第 {position}–{last} 页没有新岗位，不再往后读")
+                    break
+                position = last + 1
+            end = read_to if read_to >= start else end
             if deep_seen == 0:                           # nothing there: the end of the list, begin again from the top next time
                 sf.save(conn, platform, word, cities, frontier=0, deep_rate=None)
             else:

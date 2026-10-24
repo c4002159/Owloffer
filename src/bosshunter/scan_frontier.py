@@ -21,6 +21,8 @@ HEAD_DEFAULT = 3
 HEAD_MIN = 1
 HEAD_MAX = 10
 FRESH_HIGH = 0.30                      # at least this share new: the page (or head) is worth reading
+SATURATION_CHUNK_PAGES = 5            # the deep window is read in chunks of this many pages ...
+SATURATION_MIN_SEEN = 30               # ... and reading stops after a chunk of at least this many postings that brought nothing new
 FRESH_LOW = 0.15                       # below this share new: the head is mostly known, read less of it next time
 
 
