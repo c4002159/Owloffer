@@ -45,12 +45,15 @@ export function KeywordAdviceCard() {
   const advisor = useKeywordAdvice()
   const { advice } = advisor
   const [selected, setSelected] = useSelection(advice)
-  if (!advice || (!advice.level3 && !advice.last_applied)) return null
+  if (!advice || !Array.isArray(advice.suggestions)) return null          // an answer without the lists (an old server) shows nothing
+  const quiet = !advice.level3 && !advice.last_applied && advice.suggestions.length === 0
   return (
-    <div className="space-y-3 rounded-2xl border border-warning-border bg-warning-soft p-4" aria-label="关键词优化建议">
-      <div className="text-sm font-black text-warning-strong">关键词优化建议</div>
-      {advice.level3 && <AdviceBody advice={advice} advisor={advisor} selected={selected} setSelected={setSelected} />}
+    <div className={`space-y-3 rounded-2xl border p-4 ${quiet ? 'border-card-border bg-surface' : 'border-warning-border bg-warning-soft'}`} aria-label="关键词优化建议">
+      <div className={`text-sm font-black ${quiet ? 'text-foreground' : 'text-warning-strong'}`}>关键词优化建议</div>
+      {quiet && <p className="text-xs text-muted">暂时没有建议。点「让模型扩展方向」，模型会根据你的简历和已采到的岗位，提出现有关键词没有覆盖的新方向和新说法，你确认后才会加入搜索。</p>}
+      {(advice.level3 || advice.suggestions.length > 0) && <AdviceBody advice={advice} advisor={advisor} selected={selected} setSelected={setSelected} />}
       <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="secondary" disabled={advisor.busy} onClick={() => void advisor.expand()}>{advisor.busy ? '处理中…' : '让模型扩展方向'}</Button>
         {advice.suggestions.length > 0 && (
           <Button size="sm" disabled={advisor.busy || !selected.length} onClick={() => void advisor.apply(selected)}>一键应用所选（{selected.length}）</Button>
         )}

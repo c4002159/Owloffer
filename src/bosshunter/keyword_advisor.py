@@ -23,7 +23,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from bosshunter import keyword_strategy as ks
-from bosshunter.ai import keyword_lint
+from bosshunter import term_stats
+from bosshunter.ai import keyword_expansion, keyword_lint
 
 CORE_PASS_FLOOR = 0.10
 CORE_MIN_SAMPLES = 30
@@ -132,7 +133,12 @@ def _candidate_words(conn: sqlite3.Connection, words: list[str]) -> list[tuple[s
     return sorted(result, key=lambda item: (-item[1], item[0]))[:MAX_ADDITIONS]
 
 
-def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, today: date | None = None) -> dict:
+def _display(term: str) -> str:
+    """A mined word as it should be searched: short English words are acronyms (aigc -> AIGC)."""
+    return term.upper() if term.isascii() and term.isalpha() and len(term) <= 5 else term
+
+
+def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, today: date | None = None, base_dir: Path | None = None) -> dict:
     """``{"level3": bool, "reasons": [...], "suggestions": [...]}``; every suggestion has an ``id`` the apply call takes."""
     ks.ensure_tables(conn)
     today = today or date.today()
@@ -183,7 +189,22 @@ def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, tod
     for title, count in additions:
         suggest("add", title, f"{count} 个通过评分的岗位都叫这个名字，现有关键词没有覆盖")
 
-    return {"level3": bool(reasons), "reasons": reasons, "suggestions": suggestions}
+    # 5. words that the postings themselves point to (term_stats.py), and what the model proposed with those numbers in front of it
+    try:
+        mined = term_stats.mine(conn, words, today=today)
+    except Exception:
+        mined = {"lift": [], "frequent": [], "baseline": 0.0}
+    for item in mined["lift"][:3]:
+        suggest("add", _display(item["term"]), f"挖词：标题里有「{item['term']}」的岗位 {item['passed']}/{item['scored']} 通过（{item['rate']:.0%}，是平均的 {item['lift']} 倍），现有关键词没有覆盖")
+    strong = [item for item in mined["lift"] if item["scored"] >= 15 and item["lift"] >= 1.5]
+    if strong:
+        reasons.append({"code": "mined_terms", "message": f"{len(strong)} 个标题词的岗位通过率明显高于平均，现有关键词没有覆盖（如「{_display(strong[0]['term'])}」）"})
+    if base_dir is not None:
+        for item in keyword_expansion.load(base_dir)[:5]:
+            if not any(word.lower() == str(item["keyword"]).lower() for word in words) and keyword_lint.check(str(item["keyword"])) is None:
+                suggest("add", str(item["keyword"]), f"模型建议（{item.get('direction') or '新方向'}）：{item.get('reason') or '现有关键词没有覆盖这个说法'}")
+
+    return {"level3": bool(reasons), "reasons": reasons, "suggestions": suggestions, "mined": {"baseline": mined["baseline"], "lift": mined["lift"][:8], "frequent": mined["frequent"][:8]}}
 
 
 # ---------------------------------------------------------------- state, apply and undo
@@ -248,6 +269,13 @@ def apply(conn: sqlite3.Connection, config: dict, state_path: Path, picks: list[
         elif kind == "add" and word.lower() not in [w.lower() for w in words]:
             words.append(word)
             changes.append({"kind": "add", "keyword": word})
+    for change in changes:
+        if change["kind"] == "add":                                      # a new word starts in the explore tier: a small share of the reads
+            conn.execute(
+                "INSERT INTO keyword_tiers (keyword, tier, pinned, reason, updated_at) VALUES (?, 'explore', 0, '按建议试用', CURRENT_TIMESTAMP) "
+                "ON CONFLICT(keyword) DO NOTHING",
+                (change["keyword"],),
+            )
     conn.commit()
     added = [change["keyword"] for change in changes if change["kind"] == "add"]
     config = _with_words(config, lambda current: current + [word for word in added if word not in current])

@@ -3084,7 +3084,37 @@ def _keyword_advice_now(db) -> tuple[dict, dict]:
 	from bosshunter.ai.keywords import load_plan
 
 	config = load_config(CONFIG_PATH)
-	return config, keyword_advisor.advise(db, config, load_plan(BASE_DIR))
+	return config, keyword_advisor.advise(db, config, load_plan(BASE_DIR), base_dir=BASE_DIR)
+
+
+def _expand_keywords() -> list[dict] | None:
+	"""Ask the model for directions and words the search does not cover (ai/keyword_expansion.py); the answer is stored."""
+	from bosshunter import keyword_advisor, keyword_strategy, term_stats
+	from bosshunter.ai import keyword_expansion
+	from bosshunter.ai.keywords import load_plan
+
+	config = load_config(CONFIG_PATH)
+	words = keyword_advisor._words(config)
+	db = _get_web_db()
+	try:
+		tiers = keyword_strategy.current_tiers(db, words, load_plan(BASE_DIR))
+		scores = keyword_strategy.keyword_scores(db)
+		mined = term_stats.mine(db, words)
+		return keyword_expansion.expand(config, db, BASE_DIR, words, tiers, scores, mined)
+	finally:
+		db.close()
+
+
+@app.route("/api/keywords/expand", method="POST")
+def api_keywords_expand():
+	"""The model proposes directions and words for the search (they appear as suggestions; nothing is added by itself)."""
+	try:
+		suggestions = _expand_keywords()
+	except Exception as exc:
+		return _json_response({"error": f"扩展失败：{type(exc).__name__}: {exc}"}, 500)
+	if suggestions is None:
+		return _json_response({"error": "AI 没有连接或这次调用失败，请到「配置 → 系统」检查 AI 设置后再试"}, 409)
+	return _json_response({"success": True, "count": len(suggestions), "suggestions": suggestions})
 
 
 @app.route("/api/keywords/advice")
@@ -3123,6 +3153,12 @@ def api_keywords_advice_apply():
 		done = keyword_advisor.apply(db, config, _keyword_advice_state_path(), picks)
 	finally:
 		db.close()
+	try:
+		from bosshunter.ai import keyword_expansion
+
+		keyword_expansion.forget(BASE_DIR, [change["keyword"] for change in done["changes"] if change["kind"] == "add"])
+	except Exception:
+		pass
 	save_config(done["config"], CONFIG_PATH)
 	_get_agent_access().emit("keyword", f"已按建议调整关键词：{len(done['changes'])} 项（可在配置页撤销）")
 	return _json_response({"success": True, "changes": done["changes"]})
@@ -4131,6 +4167,21 @@ def _get_daily_loop():
 _daily_schedule = None
 
 
+def _keyword_expander_loop():
+	"""Once the stored suggestions have expired (a week) or never existed, ask the model again, at night when nobody is looking."""
+	from bosshunter.ai import keyword_expansion
+
+	time.sleep(120)
+	while True:
+		try:
+			hour = datetime.now().hour
+			if not keyword_expansion.load(BASE_DIR) and (hour in range(2, 7) or not keyword_expansion.store_path(BASE_DIR).exists()):
+				_expand_keywords()
+		except Exception as exc:
+			print(f"关键词扩展失败：{type(exc).__name__}: {exc}", flush=True)
+		time.sleep(3600)
+
+
 def _deliver_reminders():
 	"""Tell the user what was left to be told at a later start (reminders.py): once, in the message center and on the console."""
 	from bosshunter import posting_depth, reminders
@@ -4911,6 +4962,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	_start_backup_scheduler()
 	_get_daily_schedule().start()
 	threading.Timer(10.0, _deliver_reminders).start()                  # what the user asked to be told at a later start
+	threading.Thread(target=_keyword_expander_loop, daemon=True, name="keyword-expander").start()
 
 	if open_browser:
 		import webbrowser

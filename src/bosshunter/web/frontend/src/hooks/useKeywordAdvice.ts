@@ -14,6 +14,7 @@ export interface KeywordAdvice {
   popup: boolean
   popup_enabled: boolean
   last_applied: { time: string; changes: { kind: string; keyword: string }[] } | null
+  mined?: { baseline: number; lift: { term: string; scored: number; passed: number; rate: number; lift: number }[]; frequent: { term: string; seen: number }[] }
 }
 
 const POLL_MS = 5 * 60 * 1000
@@ -66,6 +67,8 @@ export function useKeywordAdvice() {
     reload,
     apply: (ids: string[]) => run('/api/keywords/advice/apply', { ids }),
     undo: () => run('/api/keywords/advice/undo', {}),
+    /** Ask the model for directions and words the search does not cover; they come back as suggestions. */
+    expand: () => run('/api/keywords/expand', {}),
     snooze: (hours = 24) => run('/api/keywords/advice/snooze', { hours }),
     setPopup: (enabled: boolean) => run('/api/keywords/advice/popup', { enabled }),
   }

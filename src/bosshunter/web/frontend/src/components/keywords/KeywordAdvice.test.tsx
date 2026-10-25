@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { KeywordAdvicePopup } from './KeywordAdvice'
+import { KeywordAdviceCard, KeywordAdvicePopup } from './KeywordAdvice'
 
 const ADVICE = {
   level3: true,
@@ -54,5 +54,23 @@ describe('KeywordAdvicePopup', () => {
     await waitFor(() => expect(calls.some(call => call.url === '/api/keywords/advice/snooze')).toBe(true))
     fireEvent.click(screen.getByText('以后不弹窗，只在设置页和消息中心提示'))
     await waitFor(() => expect(JSON.parse(calls.find(call => call.url === '/api/keywords/advice/popup')!.body!)).toEqual({ enabled: false }))
+  })
+})
+
+describe('KeywordAdviceCard', () => {
+  it('asks the model to widen the search even when there is no advice, and shows what comes back', async () => {
+    const quiet = { ...ADVICE, level3: false, reasons: [], suggestions: [], popup: false, last_applied: null }
+    const calls = mockApi(quiet)
+    render(<KeywordAdviceCard />)
+    expect(await screen.findByText(/暂时没有建议/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '让模型扩展方向' }))
+    await waitFor(() => expect(calls.some(call => call.url === '/api/keywords/expand')).toBe(true))
+  })
+
+  it('lists the words the model or the mining proposed with where they come from', async () => {
+    mockApi({ ...ADVICE, popup: false, suggestions: [{ id: 'add:AIGC', kind: 'add', keyword: 'AIGC', reason: '模型建议（AIGC 应用）：同类工作的另一种叫法' }] })
+    render(<KeywordAdviceCard />)
+    expect(await screen.findByText('AIGC')).toBeTruthy()
+    expect(screen.getByText(/模型建议（AIGC 应用）/)).toBeTruthy()
   })
 })

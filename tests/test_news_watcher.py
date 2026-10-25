@@ -155,3 +155,20 @@ def test_the_schedule_routes_save_the_time_and_options_and_refuse_a_bad_time(tmp
     status, payload = _call("/api/daily-loop/schedule", "POST", {"enabled": True, "time": "25:00"})
     assert status.startswith("400")
     assert _call("/api/daily-loop/schedule")[1]["time"] == "07:30"          # the refused change did not touch it
+
+
+def test_the_expand_route_stores_what_the_model_proposed_and_says_when_there_is_no_ai(tmp_path, monkeypatch):
+    server.set_base_dir(tmp_path)
+    monkeypatch.setattr(server, "_agent_access", None)
+    monkeypatch.setattr(server, "_expand_keywords", lambda: None)
+    status, payload = _call("/api/keywords/expand", "POST", {})
+    assert status.startswith("409") and "AI" in payload["error"]
+    monkeypatch.setattr(server, "_expand_keywords", lambda: [{"keyword": "AIGC", "direction": "x", "reason": "y", "source": "model"}])
+    status, payload = _call("/api/keywords/expand", "POST", {})
+    assert status.startswith("200") and payload["count"] == 1 and payload["suggestions"][0]["keyword"] == "AIGC"
+
+    def broken():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "_expand_keywords", broken)
+    assert _call("/api/keywords/expand", "POST", {})[0].startswith("500")

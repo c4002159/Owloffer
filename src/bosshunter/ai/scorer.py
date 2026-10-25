@@ -411,6 +411,16 @@ def _structured_score_result(result: dict, *, reviewed: bool = False) -> ScoreRe
     )
 
 
+def _note_terms(db, job: dict, passed: bool) -> None:
+    """Count the title and skill words of a posting the AI has decided about (see term_stats.py); never disturbs the scoring."""
+    try:
+        from bosshunter import term_stats
+
+        term_stats.note_outcome(db, str(job.get("id")), str(job.get("title") or ""), str(job.get("jd") or ""), passed)
+    except Exception:
+        pass
+
+
 def _apply_field_aliases(result: dict) -> dict:
     """Normalize common model-side field shortenings (e.g. minimaxi M3's `transferable`)."""
     for alias, canonical in FIELD_ALIASES.items():
@@ -930,9 +940,11 @@ def score_jobs(
                             ):
                                 update_job_status(db, job["id"], "ready")
                                 scored += 1
+                                _note_terms(db, job, True)
                             else:
                                 update_job_status(db, job["id"], "filtered")
                                 filtered += 1
+                                _note_terms(db, job, False)
                         completed_job = True
                     elif outcome.failure_detail:
                         failed += 1
