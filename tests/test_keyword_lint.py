@@ -32,3 +32,11 @@ def test_the_model_is_told_the_rules_in_its_prompt():
     prompt = build_prompt("技能说明", "简历", {})
     assert "不要生成含糊的关键词" in prompt and "应用开发工程师" in prompt and "算法工程师" in prompt
     assert prompt.index("不要生成含糊的关键词") < prompt.index("候选人设置")
+
+
+def test_the_template_placeholders_are_not_passed_to_the_model_as_target_roles():
+    template = {"profile": {"target_roles": ["你的目标岗位1", "目标岗位2", "目标岗位3"], "target_cities": ["上海"]}}
+    prompt = build_prompt("技能说明", "简历", template)
+    assert "目标岗位1" not in prompt and "未填写（请从简历推断）" in prompt
+    real = {"profile": {"target_roles": ["AI 应用工程师", "目标岗位2"], "target_cities": ["上海"]}}
+    assert "候选人已写明的意向岗位：AI 应用工程师\n" in build_prompt("技能说明", "简历", real)

@@ -40,7 +40,9 @@ def build_prompt(skill: str, resume: str, config: dict) -> str:
     skill = skill + "\n\n" + keyword_lint.prompt_section()
     profile = config.get("profile") or {}
     cities = "、".join(str(c) for c in profile.get("target_cities") or []) or "未填写"
-    roles = "、".join(str(r) for r in profile.get("target_roles") or []) or "未填写（请从简历推断）"
+    # The settings template ships with "你的目标岗位1 / 目标岗位2 / 目标岗位3": those are not roles the candidate wrote.
+    written = [str(r).strip() for r in profile.get("target_roles") or [] if str(r).strip() and not re.fullmatch(r"(?:你的)?目标岗位\s*\d*", str(r).strip())]
+    roles = "、".join(written) or "未填写（请从简历推断）"
     return (
         f"{skill}\n\n---\n"
         f"## 候选人设置\n目标城市：{cities}\n候选人已写明的意向岗位：{roles}\n\n"

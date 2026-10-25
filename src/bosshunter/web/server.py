@@ -4131,6 +4131,29 @@ def _get_daily_loop():
 _daily_schedule = None
 
 
+def _deliver_reminders():
+	"""Tell the user what was left to be told at a later start (reminders.py): once, in the message center and on the console."""
+	from bosshunter import posting_depth, reminders
+
+	def depth_report() -> str:
+		db = _get_web_db()
+		try:
+			bands = posting_depth.report(db, None, 14)
+		finally:
+			db.close()
+		if not bands:
+			return "页数统计：还没有数据。"
+		lines = [f"{item['platform']} 第 {item['pages']} 页：读到 {item['seen']} 个，存下 {item['saved']} 个，通过评分 {item['passed']} 个"
+				 + (f"（{item['rate']:.0%}）" if item["rate"] is not None else "") for item in bands]
+		return "按页数分段的结果（近 14 天，通过率随页数下降说明深页不值得读）：
+" + "
+".join(lines)
+
+	texts = reminders.deliver_due(DATA_DIR / "reminders.json", lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), {"depth": depth_report})
+	for text in texts:
+		print(text, flush=True)
+
+
 def _get_daily_schedule():
 	"""The daily loop's own timer (daily_schedule.py): the app starts the loop at the chosen time every day."""
 	global _daily_schedule
@@ -4889,6 +4912,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	_start_news_watcher()
 	_start_backup_scheduler()
 	_get_daily_schedule().start()
+	threading.Timer(10.0, _deliver_reminders).start()                  # what the user asked to be told at a later start
 
 	if open_browser:
 		import webbrowser
