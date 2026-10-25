@@ -112,3 +112,17 @@ class ListStageAgeTests(TestCase):
                 self.assertEqual([c.source_job_id for c in saved], ["J1"])
             finally:
                 db.close()
+
+    def test_one_in_ten_early_rejections_is_opened_to_keep_checking_the_list_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = get_db(Path(tmp) / "t.db")
+            try:
+                for _ in range(30):
+                    probe.record(db, True, True)
+                items = [self._item(f"J{n}", self.OLD) for n in range(1, 21)]
+                opened, saved, _ = self._run(db, items, [self._detail(60), self._detail(60)])
+                self.assertEqual(len(opened), 2)                                       # 20 old-looking postings: 18 rejected on the list, 2 checked
+                self.assertEqual(saved, [])
+                self.assertEqual(probe.stats(db)["rejected"], 32)                      # the two checks were added to the comparisons
+            finally:
+                db.close()

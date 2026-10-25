@@ -72,6 +72,7 @@ DETAIL_PATH_PATTERN = re.compile(r"/(?:jobdetail|job|position|detail)/[^/?]+", r
 DETAIL_LOAD_WAIT_SECONDS = 4.0        # the page's own load event can take long in a background tab; the JD is read as soon as it is there
 DETAIL_READ_ATTEMPTS = 14
 DETAIL_READ_RETRY_SECONDS = 0.7
+VERIFY_EVERY = 10                     # of the postings the list date rejects early, one in this many is opened to check the list date
 SLOW_DETAIL_SECONDS = 10.0            # a detail page that took longer than this is noted in the task log
 DETAIL_DELAY_MIN_SECONDS = 8.0
 DETAIL_DELAY_MAX_SECONDS = 15.0
@@ -1269,6 +1270,12 @@ class ZhilianCollector:
         except Exception:
             return
 
+    def _verify_list_age(self) -> bool:
+        """Every 10th posting the list date would reject is opened anyway: that keeps comparing the list date with the page, so the
+        shortcut switches itself off again if Zhilian ever changes what the list date means."""
+        self._age_skips = getattr(self, "_age_skips", 0) + 1
+        return self._age_skips % VERIFY_EVERY == 0
+
     def _list_age_trusted(self) -> bool:
         """Whether the list's date has agreed with the detail pages so far (checked again every 20 comparisons)."""
         if self.safety_conn is None:
@@ -1307,7 +1314,7 @@ class ZhilianCollector:
         # The age limit used to be checked only on the detail page, after it had been opened: most opened pages were opened for
         # nothing. The list date is used to reject early once it has proved to agree with the pages (zhilian_age_probe.py).
         list_age = update_age_reason(self.config, {"published_days": candidate.updated_days}) if candidate.updated_days is not None else ""
-        if not reason and list_age and self._list_age_trusted():
+        if not reason and list_age and self._list_age_trusted() and not self._verify_list_age():
             reason = list_age
         if not reason and candidate.hr_active:
             profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
