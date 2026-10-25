@@ -213,11 +213,12 @@ class DailyLoop:
             monitor_minutes = max(self._int(options.get("monitor_minutes", configured.get("daily_loop_monitor_minutes")), 60), 0)
             collect_minutes = self._minutes(options.get("collect_minutes", configured.get("daily_loop_collect_minutes")), MAX_COLLECT_MINUTES)
             deliver_minutes = self._minutes(options.get("deliver_minutes", configured.get("daily_loop_deliver_minutes")), MAX_DELIVER_MINUTES)
+            pinned = "collect_minutes" in options or "deliver_minutes" in options     # asked for in the start itself: not changed by the settings later
             self._collect_closed = set()
             started_by = str(options.get("started_by") or "manual")
             self.state = {
                 "running": True, "started_at": now.isoformat(timespec="seconds"), "end_at": end.isoformat(timespec="seconds") if end else "", "day": now.date().isoformat(),
-                "started_by": started_by, "ended": None, "delivered_base": {}, "monitor_minutes": monitor_minutes, "last_monitor": "", "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
+                "started_by": started_by, "ended": None, "delivered_base": {}, "minutes_pinned": pinned, "monitor_minutes": monitor_minutes, "last_monitor": "", "collect_minutes": collect_minutes, "deliver_minutes": deliver_minutes,
                 "start_at": begin.isoformat(timespec="seconds") if begin and begin > now else "", "delivery_cap": cap,
                 "order": order, "modes": modes, "targets": targets, "round": 0, "platform": "", "step": "starting", "message": "每日循环启动",
                 "totals": {}, "incidents": [], "options": {k: options[k] for k in ("start_time", "end_time", "time_window", "auto_approve", "delivery_cap") if k in options},
@@ -522,10 +523,26 @@ class DailyLoop:
             self.incident("", "api", "api_error", f"{path}：{exc}")
             return {}
 
+    def _limit_minutes(self, which: str) -> int:
+        """How long one collection / delivery may run. The settings page is read every time, so a change there counts at once
+        (unless the loop was started with an explicit value)."""
+        default = MAX_COLLECT_MINUTES if which == "collect" else MAX_DELIVER_MINUTES
+        stored = self._minutes(self.state.get(f"{which}_minutes"), default)
+        if self.state.get("minutes_pinned"):
+            return stored
+        try:
+            live = (self.settings() or {}).get(f"daily_loop_{which}_minutes")
+        except Exception:
+            live = None
+        minutes = self._minutes(live, stored)
+        if minutes != stored:
+            self._set(**{f"{which}_minutes": minutes})
+        return minutes
+
     def _wait_idle(self, label: str, limit_minutes: float | None = None) -> dict:
         """Wait until no task is running or queued; stop a task that runs longer than the limit. Returns the last task."""
         if limit_minutes is None:
-            limit_minutes = self._minutes(self.state.get("collect_minutes"), MAX_COLLECT_MINUTES)
+            limit_minutes = self._limit_minutes("collect")
         waited = 0.0
         while not self._over():
             status = self._get("/api/workbench")
@@ -633,7 +650,7 @@ class DailyLoop:
                 self.incident(platform, "deliver", str(exc.payload.get("code") or "deliver_refused"), f"{name}投递没有启动：{exc}")
             return
         self._bump(platform, "approved", len(ids))
-        last = self._wait_idle(f"{name}：投递中", limit_minutes=self._minutes(self.state.get("deliver_minutes"), MAX_DELIVER_MINUTES))
+        last = self._wait_idle(f"{name}：投递中", limit_minutes=self._limit_minutes("deliver"))
         self._report_delivery(platform, last, result)
         limit = day_long_limit(last.get("stop_reason"))
         if limit in SHARED_LIMITS:

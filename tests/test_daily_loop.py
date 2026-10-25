@@ -530,3 +530,19 @@ def test_history_is_newest_first_and_bounded(tmp_path):
         loop._record_run("end_time", f"第 {number} 次")
     runs = loop.history(100)
     assert len(runs) == 30 and runs[0]["message"] == "第 34 次" and runs[-1]["message"] == "第 5 次"
+
+
+def test_a_change_of_the_time_limits_in_the_settings_counts_without_restarting_the_loop(tmp_path):
+    current = {"daily_loop_collect_minutes": 90, "daily_loop_deliver_minutes": 240}
+    loop = DailyLoop(tmp_path / "loop.json", FakeServer().api, now=FakeServer().now, sleep=lambda _s: None, settings=lambda: current)
+    loop._launch = lambda: None
+    loop.start({"platform_order": ["liepin"], "time_window": False})
+    assert (loop._limit_minutes("collect"), loop._limit_minutes("deliver")) == (90, 240)
+    current["daily_loop_collect_minutes"] = 30                                  # the user changes it on the settings page
+    assert loop._limit_minutes("collect") == 30 and loop.snapshot()["collect_minutes"] == 30
+    loop.stop()
+    pinned = DailyLoop(tmp_path / "p.json", FakeServer().api, now=FakeServer().now, sleep=lambda _s: None, settings=lambda: current)
+    pinned._launch = lambda: None
+    pinned.start({"platform_order": ["liepin"], "time_window": False, "collect_minutes": 45})
+    current["daily_loop_collect_minutes"] = 20
+    assert pinned._limit_minutes("collect") == 45                              # a value given in the start itself stays
