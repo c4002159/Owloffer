@@ -176,7 +176,8 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 	"""Handle Chrome preconnect sockets without blocking other requests."""
 
 	daemon_threads = True
-	allow_reuse_address = True
+	# On Windows SO_REUSEADDR lets a second server bind a port that already listens: it would join the first instead of failing.
+	allow_reuse_address = os.name != "nt"
 
 # Paths
 FRONTEND_DIR = Path(__file__).parent / "frontend" / "dist"
@@ -4835,6 +4836,19 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 		)
 
 	import threading
+
+	from bosshunter import single_instance
+
+	try:
+		single_instance.acquire(DATA_DIR / "server.lock", host, port)
+	except single_instance.AlreadyRunning as exc:
+		url = f"http://{host}:{port}"
+		print(f"没有再启动第二个服务器：{exc.detail}。已有的服务器在 {url}。", flush=True)
+		if open_browser:
+			import webbrowser
+
+			webbrowser.open(url)
+		raise SystemExit(0)
 
 	def _sync_resumes_at_start():
 		"""After the server is up, and then from time to time: check which resumes Liepin has, read the new or
