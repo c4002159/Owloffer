@@ -328,19 +328,48 @@ def test_the_names_the_loop_uses_for_limits_are_the_names_on_the_settings_page()
         assert f"label: '{label}'" in index, label
 
 
-def test_without_a_time_window_the_loop_has_no_end_time_and_stops_only_when_nothing_is_left():
-    import tempfile
-    from pathlib import Path
+def test_without_a_time_window_the_loop_waits_for_tomorrow_when_every_platform_is_out_and_goes_on(tmp_path):
+    server = LimitServer(deliver_stop="daily_platform_page_limit", only="boss")
+    server.confirm = [{"id": "boss:1", "source_platform": "boss"}]
+    loop = DailyLoop(tmp_path / "loop.json", server.api, now=server.now, sleep=lambda s: None, poll_seconds=60, idle_seconds=600)
+    seen = {"out": False, "waiting": False, "boss_collects_after_midnight": 0}
+    midnight = datetime(2026, 10, 23, 0, 0)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        server = LimitServer(deliver_stop="daily_platform_page_limit")
-        server.confirm = [{"id": "boss:1", "source_platform": "boss"}]
-        loop = _loop(server, Path(tmp))
-        loop.start({"platform_order": ["boss"], "time_window": False})
-        loop.join(10)
-        snapshot = loop.snapshot()
-        assert snapshot["end_at"] == "" and snapshot["running"] is False                # it ended because the platform was out, not by the clock
-        assert "额度" in snapshot["message"]
+    def sleep(seconds):
+        server.sleep(seconds)
+        state = loop.state
+        seen["out"] = seen["out"] or bool(state.get("out_today"))
+        seen["waiting"] = seen["waiting"] or "等到明天自动继续" in str(state.get("message"))
+        if server.t >= midnight + timedelta(hours=3):
+            loop.stop()
+
+    loop.sleep = sleep
+    loop.start({"platform_order": ["boss"], "time_window": False})
+    loop.join(30)
+    boss_collects = [(i, c) for i, c in enumerate(server.calls) if c[1] == "/api/workbench/task" and c[2]["options"].get("platform_order") == ["boss"]]
+    assert seen["out"] and seen["waiting"]                                  # it used up the day and said it waits, instead of ending
+    assert len(boss_collects) >= 2                                          # and collected again after the day changed
+    assert loop.snapshot()["ended"]["reason"] == "user"                     # it ended only because the test stopped it
+
+
+def test_a_round_that_fails_does_not_end_the_loop(tmp_path):
+    server = FakeServer()
+    original = server.api
+    failures = {"left": 2}
+
+    def flaky(method, path, body=None):
+        if path == "/api/workbench" and method == "GET" and failures["left"] > 0 and any(c[1] == "/api/workbench/task" for c in server.calls):
+            failures["left"] -= 1
+            raise RuntimeError("boom")
+        return original(method, path, body)
+
+    loop = DailyLoop(tmp_path / "loop.json", flaky, now=server.now, sleep=server.sleep, poll_seconds=60, idle_seconds=600)
+    loop.start({"platform_order": ["liepin"], "end_time": "11:00"})
+    loop.join(20)
+    ended = loop.snapshot()["ended"]
+    assert ended["reason"] == "end_time"                                    # it went on until its own end time
+    failed = [i for i in loop.snapshot()["incidents"] if i["code"] == "round_failed"]
+    assert len(failed) == 1 and failed[0]["count"] == 2                      # the same trouble twice is one entry seen twice
 
 
 def test_a_loop_without_a_window_is_resumed_after_a_restart(tmp_path):

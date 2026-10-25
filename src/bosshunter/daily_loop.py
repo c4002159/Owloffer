@@ -33,6 +33,7 @@ DEFAULT_END = "20:00"
 DEFAULT_CAP = 150                               # deliveries per platform and day; 0 = no limit
 MAX_INCIDENTS = 300
 MAX_HISTORY = 30
+MAX_FAILED_ROUNDS = 5                          # rounds in a row that raise before the loop gives up
 # Why a run ended, how it is told, and whether it deserves a decision from the user (restart, change today's start, ...).
 STOP_REASONS = {
     "user": ("你已手动停止每日循环", False, ""),
@@ -271,7 +272,10 @@ class DailyLoop:
     # ------------------------------------------------------------------ the loop
     def _over(self) -> bool:
         end = datetime.fromisoformat(self.state["end_at"]) if self.state.get("end_at") else None
-        return self._stop.is_set() or (end is not None and self.now() >= end) or self._all_capped() or self._all_out()
+        if end is None:
+            # No time window: the loop does not end because the day's quotas are used up, it waits for tomorrow (_wait_for_tomorrow).
+            return self._stop.is_set()
+        return self._stop.is_set() or self.now() >= end or self._all_capped() or self._all_out()
 
     def _delivered(self, platform: str) -> int:
         """Deliveries of the current day (a loop without a time window runs through midnight: the day's count starts again)."""
@@ -345,10 +349,20 @@ class DailyLoop:
             self.sleep(self.poll_seconds)
         self._set(start_at="")
 
+    def _wait_for_tomorrow(self) -> bool:
+        """A loop without a time window whose platforms have all used up their day waits for the next day instead of ending."""
+        if self.state.get("end_at") or not (self._all_capped() or self._all_out()):
+            return False
+        reason = "达到了投递上限" if self._all_capped() else "用完了今天的额度"
+        self._set(step="idle", platform="", message=f"各平台今天都{reason}，等到明天自动继续（每日循环没有停）")
+        self._wait(self.idle_seconds)
+        return True
+
     def _run(self) -> None:
         try:
             self._wait_for_start()
             idle_rounds = 0
+            failed_rounds = 0
             while not self._over():
                 self._roll_day()
                 if self._over():
@@ -357,13 +371,25 @@ class DailyLoop:
                     self.state["round"] = int(self.state.get("round", 0)) + 1
                     self._save()
                 new_in_round = 0
-                for platform in self.state["order"]:
+                try:
+                    for platform in self.state["order"]:
+                        if self._over():
+                            break
+                        new_in_round += self._platform(platform)
                     if self._over():
                         break
-                    new_in_round += self._platform(platform)
-                if self._over():
-                    break
-                self._check_replies()
+                    self._check_replies()
+                    failed_rounds = 0
+                except Exception as exc:                          # one bad round must not end the loop: note it, wait, go on
+                    failed_rounds += 1
+                    self.incident("", "loop", "round_failed", f"第 {self.state.get('round')} 轮出错（连续第 {failed_rounds} 次）：{type(exc).__name__}: {exc}")
+                    if failed_rounds >= MAX_FAILED_ROUNDS:
+                        raise
+                    self._wait(self.poll_seconds)
+                    continue
+                if self._wait_for_tomorrow():
+                    idle_rounds = 0
+                    continue
                 idle_rounds = idle_rounds + 1 if new_in_round == 0 else 0
                 if idle_rounds >= 2:                              # nothing new to collect: keep delivering and look again later
                     self._set(step="idle", message="连续两轮没有新岗位，等待后再试")
