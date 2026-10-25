@@ -1054,3 +1054,11 @@ class NativeFilterTests(TestCase):
         script = evaluate.call_args_list[0].args[1]
         self.assertIn("&scene=7&workYear=01&jobType=01", script)
         self.assertNotIn("__FILTERS__", script)
+
+
+def test_no_answer_from_the_page_is_not_described_as_a_platform_limit():
+    from bosshunter.collection.platforms.job51 import _api_error_text
+
+    empty = _api_error_text({"level": 3, "signal": "empty_result", "note": "evaluate 返回空（超时/断连）"})
+    assert "不是平台限流" in empty and "empty_result" not in empty
+    assert "L3 hard_risk" in _api_error_text({"level": 3, "signal": "hard_risk", "note": "验证"})

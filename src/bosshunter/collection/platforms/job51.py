@@ -500,6 +500,13 @@ def _analyze_api_response(http_status: int, content_type: str, body: str) -> dic
             "note": "正常", "jobs": items, "total": int(total or len(items))}
 
 
+def _api_error_text(analysis: dict) -> str:
+    """What the user reads when a page request fails; no answer at all (a stuck tab, a dropped connection) is not a platform limit."""
+    if analysis.get("signal") in ("empty_result", "fetch_error"):
+        return f"51job 页面或接口没有响应（浏览器卡住或网络问题，不是平台限流或风控）：{analysis['note']}"
+    return f"51job API 异常（L{analysis['level']} {analysis['signal']}）：{analysis['note']}"
+
+
 def _reason_code_for(analysis: dict) -> str:
     """把风控分析结果映射到官方的 reason_code。"""
     if analysis.get("signal") == "parse_error":
@@ -1009,7 +1016,7 @@ class Job51Collector:
                         continue
                 raise CollectionBlockedError(
                     _reason_code_for(analysis),
-                    f"51job API 异常（L{analysis['level']} {analysis['signal']}）：{analysis['note']}",
+                    _api_error_text(analysis),
                 )
             if not analysis["jobs"]:
                 self._log(hooks, f"51job {kw} p{pp} 抽查无数据 signal={analysis.get('signal','?')}",
@@ -1073,7 +1080,7 @@ class Job51Collector:
                             continue
                     raise CollectionBlockedError(
                         _reason_code_for(fp_a),
-                        f"51job API 异常（L{fp_a['level']} {fp_a['signal']}）：{fp_a['note']}",
+                        _api_error_text(fp_a),
                     )
                 if not fp_a["jobs"]:
                     continue
@@ -1144,7 +1151,7 @@ class Job51Collector:
                     break
                 raise CollectionBlockedError(
                     _reason_code_for(analysis),
-                    f"51job API 异常（L{analysis['level']} {analysis['signal']}）：{analysis['note']}",
+                    _api_error_text(analysis),
                 )
 
             jobs_list = analysis["jobs"]

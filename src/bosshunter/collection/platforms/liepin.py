@@ -156,6 +156,10 @@ JS_EXTRACT_LIST = r"""
 (function () {
     var text = (document.body && document.body.innerText) || '';
     var pageText = text + ' ' + (document.title || '');
+    // The account is asked to confirm itself (SMS code): only the user can do that, waiting and reloading changes nothing.
+    if (location.hostname.indexOf('safe.liepin.com') >= 0 || location.href.indexOf('/intercept/') >= 0) {
+        return JSON.stringify({status: 'verify', jobs: []});
+    }
     if (/滑动验证|安全验证|访问过于频繁|请完成安全验证|人机验证|网络异常/.test(pageText)) {
         return JSON.stringify({status: 'blocked', jobs: []});
     }
@@ -537,6 +541,8 @@ class LiepinCollector:
                                     break
                                 if self._wait(hooks, RENDER_POLL_INTERVAL_SECONDS):
                                     return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
+                        if status == "verify":
+                            return PlatformCollectionResult(self.platform, "blocked", "captcha", "猎聘要求账号做短信验证，请在浏览器里手动完成验证后再恢复猎聘采集")
                         for wait in BLOCK_RECOVERY_WAITS:
                             if status != "blocked":
                                 break

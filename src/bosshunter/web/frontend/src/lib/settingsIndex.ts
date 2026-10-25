@@ -59,6 +59,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { path: 'automation.saturation_stop', label: '饱和检测（没有新岗位的词不再往下读）', category: 'delivery', aliases: ['饱和', '翻页', '没有新岗位', '采集慢'] },
   { path: 'automation.saturation_chunk_pages', label: '饱和检测：每段读几页', category: 'delivery', aliases: ['饱和', '翻页'] },
   { path: 'automation.saturation_min_seen', label: '饱和检测：一段至少看到多少个岗位才判断', category: 'delivery', aliases: ['饱和'] },
+  { path: 'automation.daily_loop_slice_minutes', label: '每日循环：采集每隔多久先投递一次（分钟）', category: 'delivery', aliases: ['分段', '先投递', '投递延迟', '每日循环'] },
   { path: 'automation.daily_loop_collect_minutes', label: '每日循环：单次采集最长（分钟）', category: 'delivery', aliases: ['90分钟', '采集时间', '超时', '每日循环'] },
   { path: 'automation.daily_loop_monitor_minutes', label: '每日循环：每隔多久检查一次 BOSS 的 HR 回复（分钟，0 = 不检查）', category: 'delivery', aliases: ['回复', '监测', 'HR', '消息', '提醒'] },
   { path: 'automation.daily_loop_deliver_minutes', label: '每日循环：单次投递最长（分钟）', category: 'delivery', aliases: ['240分钟', '投递时间', '超时', '每日循环'] },

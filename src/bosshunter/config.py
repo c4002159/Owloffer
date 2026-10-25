@@ -202,6 +202,8 @@ DEFAULTS: dict[str, Any] = {
         "saturation_min_seen": 30,
         # The daily loop stops one collection / one delivery that runs longer than this (daily_loop.py).
         "daily_loop_collect_minutes": 90,
+        # The collection is cut into slices of this many minutes and what a slice found is delivered before the next slice; 0 = one piece.
+        "daily_loop_slice_minutes": 15,
         # Every this many minutes the daily loop checks BOSS for HR replies (one read-only pass); 0 = never.
         "daily_loop_monitor_minutes": 60,
         "daily_loop_deliver_minutes": 240,

@@ -1052,3 +1052,33 @@ class LiepinSiteFilterTests(TestCase):
         self.assertEqual(collector._filter_reason(candidate("酒店前台")), "职位与搜索关键词、简历关键词都不相关")
         self.assertEqual(collector._filter_reason(candidate("Agent工程师（上海）")), "")
         self.assertEqual(collector._filter_reason(candidate("Java后端开发")), "")             # speaks of the resume
+
+
+class LiepinVerifyWallTests(TestCase):
+    def test_an_sms_verification_wall_stops_the_platform_at_once_without_retrying(self):
+        polls, navigations = [], []
+
+        def evaluate(_target, script):
+            if "job-detail-job-info" in script:
+                polls.append(1)
+                return json.dumps({"status": "verify", "jobs": []})
+            return json.dumps({"status": "ready"})
+
+        browser = LiepinBrowser(
+            new_tab=lambda url, **_kwargs: url, close_tab=lambda _target: True, evaluate=evaluate,
+            scroll=lambda *_args, **_kwargs: True, wait_for_load=lambda *_args, **_kwargs: True,
+            navigate_action=lambda _target, url: navigations.append(url) or True,
+        )
+        hooks = CollectorHooks(stop_event=None, on_list_candidate=lambda _c: True, on_candidate=lambda _c: True,
+                               on_parse_failed=lambda _r: None, on_event=lambda **_kw: None)
+        with patch("bosshunter.collection.platforms.liepin.SendWindowChecker.is_active", return_value=True),                 patch("bosshunter.collection.platforms.liepin.should_take_day_off", return_value=False):
+            result = LiepinCollector(browser=browser, config={"throttle": {"collect_windows": ["00:00-23:59"], "day_off_probability": 0}},
+                                     sleep=lambda _s: None, uniform=lambda _a, _b: 1.0).collect(
+                PlatformCollectionRequest("liepin", ["AI"], ["上海"], {"上海": "020"}, max_pages=1), hooks)
+        self.assertEqual((result.status, result.reason_code), ("blocked", "captcha"))
+        self.assertEqual(len(polls), 1)
+        self.assertEqual(len(navigations), 1)                      # no reload against a wall that only the user can pass
+
+    def test_the_list_script_recognises_the_verification_page(self):
+        self.assertIn("safe.liepin.com", JS_EXTRACT_LIST)
+        self.assertIn("'verify'", JS_EXTRACT_LIST)

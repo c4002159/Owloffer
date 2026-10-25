@@ -608,3 +608,44 @@ def test_a_state_file_saved_with_a_byte_order_mark_is_still_read(tmp_path):
     (tmp_path / "loop.json").write_bytes(b"\xef\xbb\xbf" + json.dumps({"running": True, "round": 7, "platform": "51job"}).encode("utf-8"))
     loop = _loop(FakeServer(), tmp_path)
     assert loop.state["round"] == 7 and loop.state["platform"] == "51job"      # not silently treated as "no loop was running"
+
+
+def _sliced_loop(tmp_path, settings):
+    server = FakeServer()
+    loop = DailyLoop(tmp_path / "loop.json", server.api, now=server.now, sleep=server.sleep, poll_seconds=60, idle_seconds=600, settings=lambda: settings)
+    loop._launch = lambda: None
+    loop.start({"platform_order": ["liepin"], "time_window": False})
+    return loop
+
+
+def test_collecting_is_cut_into_slices_and_what_a_slice_found_is_delivered_before_the_next_one(tmp_path):
+    loop = _sliced_loop(tmp_path, {"daily_loop_collect_minutes": 45, "daily_loop_slice_minutes": 15})
+    calls = []
+
+    def collect(platform, limit=None):
+        calls.append(("collect", limit))
+        loop._cut = len(calls) < 5                                   # the first slices end by their limit, the last one by itself
+        return 2
+
+    loop._collect = collect
+    loop._deliver = lambda platform: calls.append(("deliver",))
+    loop._platform("liepin")
+    assert calls == [("collect", 15), ("deliver",), ("collect", 15), ("deliver",), ("collect", 15), ("deliver",)]    # 45 minutes in all
+
+
+def test_without_a_slice_setting_the_collection_is_one_piece_followed_by_the_delivery(tmp_path):
+    loop = _sliced_loop(tmp_path, {"daily_loop_collect_minutes": 45, "daily_loop_slice_minutes": 0})
+    calls = []
+    loop._collect = lambda platform, limit=None: (calls.append(("collect", limit)), setattr(loop, "_cut", True), 2)[-1]
+    loop._deliver = lambda platform: calls.append(("deliver",))
+    loop._platform("liepin")
+    assert calls == [("collect", 45), ("deliver",)]
+
+
+def test_a_collection_that_ends_by_itself_is_not_repeated(tmp_path):
+    loop = _sliced_loop(tmp_path, {"daily_loop_collect_minutes": 45, "daily_loop_slice_minutes": 15})
+    calls = []
+    loop._collect = lambda platform, limit=None: (calls.append(("collect", limit)), 0)[-1]      # blocked, finished or out of postings
+    loop._deliver = lambda platform: calls.append(("deliver",))
+    loop._platform("liepin")
+    assert calls == [("collect", 15), ("deliver",)]

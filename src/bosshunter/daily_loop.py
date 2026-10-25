@@ -26,6 +26,7 @@ DEFAULT_TARGETS = {"zhilian_campus": 50, "zhilian": 80, "boss": 80, "51job": 80,
 MANUAL_ONLY = {"zhilian_campus"}                 # collected, scored and greeted, but delivered by the user
 POLL_SECONDS = 60
 IDLE_SECONDS = 600                              # nothing to collect (window closed, all paused): look again later
+SLICE_MINUTES = 15                              # collecting is cut into slices this long, what was found is delivered between them (automation.daily_loop_slice_minutes)
 MAX_COLLECT_MINUTES = 90                        # one collection that runs longer is stopped (the setting automation.daily_loop_collect_minutes)
 MAX_DELIVER_MINUTES = 240                       # the same for one delivery (automation.daily_loop_deliver_minutes)
 MODES = ("auto", "manual", "off")      # collect + approve + deliver / collect, then you confirm by hand / not in the loop
@@ -109,6 +110,7 @@ class DailyLoop:
         self._lock = threading.RLock()
         self._collect_closed: set[str] = set()      # platforms whose collecting is over for today (delivering may go on)
         self._resume_from = ""                      # after a restart: the platform the first round starts with
+        self._cut = False                           # the last collection was stopped by its time limit (it had more to read)
         self.history_path = self.path.with_name("daily_loop_history.json")
         self.state = self._load()
 
@@ -513,13 +515,24 @@ class DailyLoop:
             detail = status["platform_limit_details"][platform]
             self.incident(platform, "check", "platform_paused", f"{PLATFORM_NAMES[platform]}当前被暂停：{detail.get('reason', '')}")
             return 0
-        added = self._collect(platform)
-        if self._over():
-            return added
+        # Collecting is done in slices and what a slice found is delivered before the next one starts: a posting does not wait
+        # for the rest of the collection (one account does one thing at a time, as before). Without a slice setting (0) or when the
+        # whole limit fits in one slice this is a single collection followed by the delivery.
+        total, piece, spent, added = self._limit_minutes("collect"), self._slice_minutes(), 0.0, 0
+        delivers = platform not in MANUAL_ONLY and self._mode(platform) == "auto" and self.state.get("options", {}).get("auto_approve", True)
+        while True:
+            limit = min(piece, total - spent) if 0 < piece < total else total
+            self._cut = False
+            added += self._collect(platform, limit)
+            if self._over():
+                return added
+            if delivers:
+                self._deliver(platform)
+            spent += limit
+            if not self._cut or spent >= total or platform in self._collect_closed or self._out(platform) or self._capped(platform):
+                break
         if platform in MANUAL_ONLY:
             self._greet_for_manual(platform)
-        elif self._mode(platform) == "auto" and self.state.get("options", {}).get("auto_approve", True):
-            self._deliver(platform)
         return added
 
     def _get(self, path: str) -> dict:
@@ -545,6 +558,14 @@ class DailyLoop:
             self._set(**{f"{which}_minutes": minutes})
         return minutes
 
+    def _slice_minutes(self) -> float:
+        """How long one slice of collecting lasts before the loop delivers what it found (0 = no slicing)."""
+        try:
+            live = (self.settings() or {}).get("daily_loop_slice_minutes")
+            return max(float(live), 0.0) if live is not None else float(SLICE_MINUTES)
+        except (TypeError, ValueError):
+            return float(SLICE_MINUTES)
+
     def _wait_idle(self, label: str, limit_minutes: float | None = None, *, routine: bool = False) -> dict:
         """Wait until no task is running or queued; stop a task that runs longer than the limit. Returns the last task."""
         if limit_minutes is None:
@@ -558,7 +579,9 @@ class DailyLoop:
             self._set(message=f"{label}（{(active.get('logs') or [''])[-1][:60]}）")
             if waited >= limit_minutes * 60 and active.get("id"):
                 if routine:                                       # the time limit of a collection is how the loop alternates, not a fault
-                    self._news("loop", f"{label}已到单次上限 {limit_minutes:g} 分钟，先去投递，之后继续采集", level="info", platform=self.state.get("platform", ""))
+                    self._cut = True
+                    if limit_minutes >= self._limit_minutes("collect"):       # a slice that ends is not worth a message
+                        self._news("loop", f"{label}已到单次上限 {limit_minutes:g} 分钟，先去投递，之后继续采集", level="info", platform=self.state.get("platform", ""))
                 else:
                     self.incident(self.state.get("platform", ""), self.state.get("step", ""), "task_too_long", f"{label}超过 {limit_minutes:g} 分钟，已请求停止")
                 self.api("POST", f"/api/workbench/task/{active['id']}/stop", {})
@@ -567,7 +590,7 @@ class DailyLoop:
             waited += self.poll_seconds
         return {}
 
-    def _collect(self, platform: str) -> int:
+    def _collect(self, platform: str, limit_minutes: float | None = None) -> int:
         name = PLATFORM_NAMES.get(platform, platform)
         self._set(step="collect", message=f"{name}：采集")
         body = {"mode": "collect", "options": {"platform_order": [platform], "auto_score": True, "target_new": self.state["targets"][platform],
@@ -588,7 +611,7 @@ class DailyLoop:
                 self.incident(platform, "collect", "start_refused", f"{name}采集没有启动：{exc}", "；".join(map(str, messages or []))[:1000])
                 self._wait(self.idle_seconds)                      # window closed, preflight failing ...: try again later
                 return 0
-        last = self._wait_idle(f"{name}：采集中", routine=True)
+        last = self._wait_idle(f"{name}：采集中", limit_minutes, routine=True)
         metrics = last.get("metrics") or {}
         new = int(metrics.get("collect_new") or 0)
         self._bump(platform, "collected", new)
