@@ -63,6 +63,11 @@ def build_prompt(resume: str, keywords: list[dict], mined: dict, config: dict) -
         f"## 市场数据一：通过评分明显高于平均、但现有关键词没有覆盖的词\n{lift}\n\n"
         f"## 市场数据二：在岗位标题里很常见、但几乎没被评分过的词（可能是被相关性预筛挡掉的方向，请判断是否和候选人相关）\n{frequent}\n\n"
         f"{keyword_lint.prompt_section()}\n\n"
+        "## 怎么用这些数据\n"
+        "- 标注「标题」的词是岗位名称里的写法，可以直接参考其叫法；标注「岗位描述」的词只是技术栈线索，**不要**原样当搜索词，"
+        "要判断它对应什么岗位，再给出这类岗位在标题里的常见叫法。\n"
+        "- 通过率高的方向优先；几乎没被评分过的常见词，先判断是否被相关性预筛挡掉、和简历是否相关，不相关就忽略。\n"
+        "- 方向要和简历里的真实经历相符，不要为了覆盖面编造能力。\n\n"
         "## 要求\n"
         "- 先找 2–4 个**新方向**或新的叫法（同义岗位名、中英文写法、相邻岗位、技术栈或行业场景命名），每个方向给 1–4 个搜索词。\n"
         "- 只给与简历能力相符、现有关键词没有的词；不要重复现有关键词，也不要只是加标点或空格的变体。\n"
@@ -96,6 +101,15 @@ def parse(text: str, existing: list[str]) -> list[dict]:
                 known.add(key)
                 suggestions.append({"keyword": word, "direction": name, "reason": reason, "source": "model"})
     return suggestions[:MAX_WORDS]
+
+
+def fresh(base_dir: Path, now: datetime | None = None) -> bool:
+    """Whether the model was asked within the last week (even if it had nothing to add)."""
+    try:
+        generated = datetime.fromisoformat(json.loads(store_path(base_dir).read_text(encoding="utf-8-sig"))["generated_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return (now or datetime.now()) - generated <= timedelta(days=TTL_DAYS)
 
 
 def load(base_dir: Path, now: datetime | None = None) -> list[dict]:

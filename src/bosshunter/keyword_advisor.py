@@ -10,7 +10,9 @@ The pop-up appears only when one of these holds:
 * the core keywords' pass rate is below 10 % on each of the last two days with data (at least 30 jobs in all);
 * half or more of the keywords are paused or dead (15+ jobs, none passed);
 * each of the last two full days brought fewer than 30 new jobs although collection ran;
-* postings the user's scoring passed share a title no keyword covers yet (3+ passed jobs).
+* postings the user's scoring passed share a title no keyword covers yet (3+ passed jobs);
+* a platform read 500+ postings in 24 hours and found fewer than 30 new ones (its pool is used up): the pop-up then offers to ask
+  the model for new directions (``ai/keyword_expansion.py``); the same button is always in the settings page.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ DAY_MIN_SAMPLES = 5
 DEAD_SHARE = 0.5
 DEAD_MIN_WORDS = 4
 LOW_NEW_PER_DAY = 30
+DRY_NEW = 30                      # a platform that brought fewer new jobs than this in 24 hours ...
+DRY_MIN_SEEN = 500                # ... although at least this many postings were read there: its pool is nearly used up
+NOT_TARGETS = {"liepin", "zhilian_campus"}
 CANDIDATE_MIN_PASSED = 3
 MAX_ADDITIONS = 5
 PAUSE_DAYS = ks.PAUSE_DAYS
@@ -100,6 +105,20 @@ def _new_per_day(conn: sqlite3.Connection, today: date) -> dict[str, int]:
         (since,),
     ).fetchall()
     return {row["day"]: int(row["new"] or 0) for row in rows}
+
+
+def _dry_platforms(conn: sqlite3.Connection, config: dict, now: datetime | None = None) -> list[dict]:
+    """Platforms whose search has stopped finding new jobs: the existing keywords no longer reach anything there."""
+    automation = config.get("automation") or {}
+    limit = int(automation.get("keyword_dry_new", DRY_NEW))
+    least = int(automation.get("keyword_dry_seen", DRY_MIN_SEEN))
+    since = ((now or datetime.now()) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        rows = conn.execute("SELECT platform, SUM(seen) AS seen, SUM(new) AS new FROM keyword_runs WHERE run_at >= datetime(?, 'utc') GROUP BY platform", (since,)).fetchall()
+    except sqlite3.Error:
+        return []
+    return [{"platform": row["platform"], "seen": int(row["seen"] or 0), "new": int(row["new"] or 0)}
+            for row in rows if row["platform"] not in NOT_TARGETS and int(row["seen"] or 0) >= least and int(row["new"] or 0) < limit]
 
 
 def _clean_title(title: str) -> str:
@@ -194,18 +213,24 @@ def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, tod
         mined = term_stats.mine(conn, words, today=today)
     except Exception:
         mined = {"lift": [], "frequent": [], "baseline": 0.0}
-    for item in mined["lift"][:3]:
-        where = "岗位描述里提到" if item.get("source") == "jd" else "标题里有"
-        suggest("add", _display(item["term"]), f"挖词：{where}「{item['term']}」的岗位 {item['passed']}/{item['scored']} 通过（{item['rate']:.0%}，是平均的 {item['lift']} 倍），现有关键词没有覆盖")
-    strong = [item for item in mined["lift"] if item["scored"] >= 15 and item["lift"] >= 1.5]
+    titles = [item for item in mined["lift"] if item.get("source") != "jd"]          # description words only inform the model, they are not searched
+    for item in titles[:3]:
+        suggest("add", _display(item["term"]), f"挖词：标题里有「{item['term']}」的岗位 {item['passed']}/{item['scored']} 通过（{item['rate']:.0%}，是平均的 {item['lift']} 倍），现有关键词没有覆盖")
+    strong = [item for item in titles if item["scored"] >= 15 and item["lift"] >= 1.5]
     if strong:
         reasons.append({"code": "mined_terms", "message": f"{len(strong)} 个标题词的岗位通过率明显高于平均，现有关键词没有覆盖（如「{_display(strong[0]['term'])}」）"})
+    dry = _dry_platforms(conn, config)
+    names = {"boss": "BOSS 直聘", "zhilian": "智联招聘", "51job": "前程无忧"}
+    fresh = base_dir is not None and keyword_expansion.fresh(base_dir)
+    if dry:
+        reasons.append({"code": "platform_dry", "message": "；".join(
+            f"{names.get(item['platform'], item['platform'])}最近 24 小时读了 {item['seen']} 个岗位，新增只有 {item['new']} 个" for item in dry) + "：现有关键词在这里快挖完了，可以让模型扩展新方向"})
     if base_dir is not None:
         for item in keyword_expansion.load(base_dir)[:5]:
             if not any(word.lower() == str(item["keyword"]).lower() for word in words) and keyword_lint.check(str(item["keyword"])) is None:
                 suggest("add", str(item["keyword"]), f"模型建议（{item.get('direction') or '新方向'}）：{item.get('reason') or '现有关键词没有覆盖这个说法'}")
 
-    return {"level3": bool(reasons), "reasons": reasons, "suggestions": suggestions, "mined": {"baseline": mined["baseline"], "lift": mined["lift"][:8], "frequent": mined["frequent"][:8]}}
+    return {"level3": bool(reasons), "reasons": reasons, "suggestions": suggestions, "dry": dry, "expand_wanted": bool(dry) and not fresh, "mined": {"baseline": mined["baseline"], "lift": mined["lift"][:8], "frequent": mined["frequent"][:8]}}
 
 
 # ---------------------------------------------------------------- state, apply and undo
@@ -226,7 +251,7 @@ def _write(path: Path, state: dict) -> None:
 
 def popup_wanted(state_path: Path, config: dict, advice: dict, now: datetime | None = None) -> bool:
     """Whether the workbench should show the pop-up now: advice exists, the setting allows it and it was not snoozed."""
-    if not advice.get("level3") or not advice.get("suggestions"):
+    if not advice.get("level3") or not (advice.get("suggestions") or advice.get("expand_wanted")):
         return False
     if (config.get("automation") or {}).get("keyword_advice_popup") is False:
         return False

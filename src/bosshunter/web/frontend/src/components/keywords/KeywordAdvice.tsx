@@ -77,10 +77,11 @@ export function KeywordAdvicePopup() {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="关键词需要调整">
       <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-card-border bg-card p-6 shadow-xl">
         <h2 className="text-lg font-black text-foreground">关键词需要调整</h2>
-        <p className="mb-3 mt-1 text-sm text-muted">最近的采集结果显示，现在的关键词带来的合适岗位偏少。下面是建议，勾选后可以一键应用，之后也能撤销。</p>
+        <p className="mb-3 mt-1 text-sm text-muted">最近的采集结果显示，现在的关键词需要调整（原因见下）。有建议时勾选后可一键应用，之后也能撤销。</p>
         <AdviceBody advice={advice} advisor={advisor} selected={selected} setSelected={setSelected} />
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button size="sm" disabled={advisor.busy || !selected.length} onClick={() => void advisor.apply(selected)}>一键应用所选（{selected.length}）</Button>
+          {advice.expand_wanted && <Button size="sm" disabled={advisor.busy} onClick={() => void advisor.expand()}>{advisor.busy ? '模型思考中…' : '让模型扩展方向'}</Button>}
+          {advice.suggestions.length > 0 && <Button size="sm" disabled={advisor.busy || !selected.length} onClick={() => void advisor.apply(selected)}>一键应用所选（{selected.length}）</Button>}
           <Button size="sm" variant="secondary" onClick={() => { window.location.href = `/config?section=search&focus=${encodeURIComponent('关键词设置')}` }}>去设置里改</Button>
           <Button size="sm" variant="secondary" disabled={advisor.busy} onClick={() => void advisor.snooze(24)}>24 小时后再提醒</Button>
         </div>

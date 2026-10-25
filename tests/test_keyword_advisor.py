@@ -140,3 +140,28 @@ def test_a_new_keyword_goes_into_every_platform_list_and_undo_removes_it_from_al
     assert "keywords" not in new["platforms"]["zhilian"]["search"]              # a platform without its own list keeps using the shared one
     back = adv.undo(db, new, state)["config"]
     assert back["search"]["keywords"] == back["platforms"]["boss"]["search"]["keywords"] == ["AI"]
+
+
+def _runs(db, platform, seen, new):
+    db.execute("INSERT INTO keyword_runs (platform, keyword, kind, seen, new, filtered) VALUES (?, 'k', 'search', ?, ?, 0)", (platform, seen, new))
+    db.commit()
+
+
+def test_a_platform_that_reads_much_and_finds_little_asks_for_a_model_expansion(db, tmp_path):
+    _runs(db, "51job", 2600, 9)
+    _runs(db, "boss", 2000, 200)
+    _runs(db, "liepin", 900, 0)                                  # not a delivery target
+    result = adv.advise(db, _config("AI"), _plan("AI"), base_dir=tmp_path)
+    assert [item["platform"] for item in result["dry"]] == ["51job"]
+    assert result["expand_wanted"] and result["level3"]
+    assert any(reason["code"] == "platform_dry" for reason in result["reasons"])
+    assert adv.popup_wanted(tmp_path / "s.json", {}, result)             # the pop-up comes without any suggestion
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "keyword_expansion.json").write_text('{"generated_at": "%s", "suggestions": []}' % datetime.now().isoformat(), encoding="utf-8")
+    again = adv.advise(db, _config("AI"), _plan("AI"), base_dir=tmp_path)
+    assert not again["expand_wanted"] and not adv.popup_wanted(tmp_path / "s.json", {}, again)       # asked already: no nagging
+
+
+def test_few_postings_read_is_not_a_dry_pool(db):
+    _runs(db, "51job", 100, 0)
+    assert adv.advise(db, _config("AI"), _plan("AI"))["dry"] == []

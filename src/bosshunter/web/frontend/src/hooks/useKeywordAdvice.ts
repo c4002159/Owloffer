@@ -12,6 +12,7 @@ export interface KeywordAdvice {
   reasons: { code: string; message: string }[]
   suggestions: KeywordSuggestion[]
   popup: boolean
+  expand_wanted?: boolean
   popup_enabled: boolean
   last_applied: { time: string; changes: { kind: string; keyword: string }[] } | null
   mined?: { baseline: number; lift: { term: string; scored: number; passed: number; rate: number; lift: number }[]; frequent: { term: string; seen: number }[] }

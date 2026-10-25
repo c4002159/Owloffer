@@ -4962,7 +4962,6 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	_start_backup_scheduler()
 	_get_daily_schedule().start()
 	threading.Timer(10.0, _deliver_reminders).start()                  # what the user asked to be told at a later start
-	threading.Thread(target=_keyword_expander_loop, daemon=True, name="keyword-expander").start()
 
 	if open_browser:
 		import webbrowser
