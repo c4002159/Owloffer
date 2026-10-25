@@ -33,7 +33,9 @@ STOP_WORDS = {
     "招聘", "岗位", "公司", "方向", "团队", "部门", "项目", "人员", "技术", "研发", "管理", "助理", "岗", "届", "全职", "兼职", "急聘", "直招",
     "校园", "毕业", "毕业生", "社招", "五险一金", "双休", "可实习", "海量", "名额", "诚聘", "热招",
 }
-STOP_ASCII = {"and", "the", "for", "with", "pm", "hr", "it", "jd", "hc", "ok", "or", "of", "to", "in", "on", "at", "co", "ltd", "inc"}
+STOP_ASCII = {"and", "the", "for", "with", "pm", "hr", "it", "jd", "hc", "ok", "or", "of", "to", "in", "on", "at", "co", "ltd", "inc",
+              "api", "http", "https", "json", "xml", "web", "app", "sdk"}
+JD = "jd:"                                            # prefix of a word counted from a job description (a different thing from a title word)
 _STOP_LONGEST_FIRST = sorted(STOP_WORDS, key=len, reverse=True)
 _ASCII = re.compile(r"[A-Za-z][A-Za-z0-9+#.]{1,}")
 _CJK = re.compile(r"[一-鿿]+")
@@ -103,7 +105,7 @@ def note_outcome(conn: sqlite3.Connection, job_id: str, title: str, jd: str, pas
     if conn.execute("INSERT OR IGNORE INTO term_scored_jobs (job_id) VALUES (?)", (str(job_id),)).rowcount == 0:
         return
     day = (today or date.today()).isoformat()
-    terms = title_terms(title) | jd_terms(jd)
+    terms = title_terms(title) | {JD + word for word in jd_terms(jd)}
     _bump(conn, terms, day, scored=1, passed=int(passed))
     _bump(conn, [TOTAL], day, scored=1, passed=int(passed))
     conn.commit()
@@ -130,7 +132,7 @@ def backfill(conn: sqlite3.Connection) -> int:
         if row["status"] in scored_status and not prefiltered:
             ok = row["status"] in passed
             conn.execute("INSERT OR IGNORE INTO term_scored_jobs (job_id) VALUES (?)", (str(row["id"]),))
-            _bump(conn, title_terms(row["title"]) | jd_terms(row["jd"]), day, scored=1, passed=int(ok))
+            _bump(conn, title_terms(row["title"]) | {JD + word for word in jd_terms(row["jd"])}, day, scored=1, passed=int(ok))
             _bump(conn, [TOTAL], day, scored=1, passed=int(ok))
         count += 1
     conn.commit()
@@ -172,13 +174,14 @@ def mine(conn: sqlite3.Connection, keywords: list[str], days: int = WINDOW_DAYS,
     baseline = total_passed / total_scored if total_scored else 0.0
     candidates = [
         (term, seen, scored, passed) for term, (seen, scored, passed) in stats.items()
-        if term != TOTAL and not _covered(term, keywords) and keyword_lint.check(term) is None
+        if term != TOTAL and not _covered(term.removeprefix(JD), keywords) and keyword_lint.check(term.removeprefix(JD)) is None
     ]
     # A longer word that explains a shorter one's count makes the shorter one redundant ("工智能" inside "人工智能").
     by_text = {term: (seen, scored, passed) for term, seen, scored, passed in candidates}
 
     def explained(term: str, value: tuple[int, int, int]) -> bool:
-        return any(other != term and term in other and other_value[1] >= value[1] * 0.85 and other_value[0] >= value[0] * 0.85
+        return any(other != term and term in other and other.startswith(JD) == term.startswith(JD)
+                   and other_value[1] >= value[1] * 0.85 and other_value[0] >= value[0] * 0.85
                    for other, other_value in by_text.items() if len(other) > len(term))
 
     lift = []
@@ -187,12 +190,13 @@ def mine(conn: sqlite3.Connection, keywords: list[str], days: int = WINDOW_DAYS,
             continue
         rate = passed / scored
         if rate >= baseline * MIN_LIFT and _wilson_lower(passed, scored) >= baseline * 0.9 and not explained(term, (seen, scored, passed)):
-            lift.append({"term": term, "seen": seen, "scored": scored, "passed": passed, "rate": round(rate, 3), "lift": round(rate / baseline, 2)})
+            lift.append({"term": term.removeprefix(JD), "source": "jd" if term.startswith(JD) else "title", "seen": seen, "scored": scored,
+                         "passed": passed, "rate": round(rate, 3), "lift": round(rate / baseline, 2)})
     lift.sort(key=lambda item: (-item["passed"] * item["lift"], item["term"]))
     frequent = [
-        {"term": term, "seen": seen, "scored": scored, "passed": passed}
+        {"term": term, "source": "title", "seen": seen, "scored": scored, "passed": passed}
         for term, seen, scored, passed in candidates
-        if seen >= MIN_SEEN_FREQUENT and scored <= 3 and not explained(term, (seen, scored, passed))
+        if not term.startswith(JD) and seen >= MIN_SEEN_FREQUENT and scored <= 3 and not explained(term, (seen, scored, passed))
     ]
     frequent.sort(key=lambda item: (-item["seen"], item["term"]))
     return {"baseline": round(baseline, 3), "lift": lift[:15], "frequent": frequent[:15]}

@@ -53,7 +53,7 @@ def build_prompt(resume: str, keywords: list[dict], mined: dict, config: dict) -
     profile = config.get("profile") or {}
     cities = "、".join(str(city) for city in profile.get("target_cities") or []) or "未填写"
     current = "\n".join(f"- {item['keyword']}（{item['tier']}，近 14 天 {item.get('n', 0)} 个岗位，通过 {item.get('pass_rate', 0):.0%}）" for item in keywords) or "（还没有）"
-    lift = "\n".join(f"- {item['term']}：{item['scored']} 个评分过的岗位里通过 {item['passed']} 个（{item['rate']:.0%}，是平均的 {item['lift']} 倍）" for item in mined.get("lift", [])) or "（没有）"
+    lift = "\n".join(f"- {item['term']}（{'岗位描述' if item.get('source') == 'jd' else '标题'}）：{item['scored']} 个评分过的岗位里通过 {item['passed']} 个（{item['rate']:.0%}，是平均的 {item['lift']} 倍）" for item in mined.get("lift", [])) or "（没有）"
     frequent = "\n".join(f"- {item['term']}：在 {item['seen']} 个岗位标题里出现，但几乎没被评分过" for item in mined.get("frequent", [])) or "（没有）"
     return (
         "你是求职搜索策略师。下面是候选人的简历，以及招聘平台搜索一段时间后得到的数据。请提出**现有关键词没有覆盖的新方向和新说法**，"

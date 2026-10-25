@@ -195,7 +195,8 @@ def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, tod
     except Exception:
         mined = {"lift": [], "frequent": [], "baseline": 0.0}
     for item in mined["lift"][:3]:
-        suggest("add", _display(item["term"]), f"挖词：标题里有「{item['term']}」的岗位 {item['passed']}/{item['scored']} 通过（{item['rate']:.0%}，是平均的 {item['lift']} 倍），现有关键词没有覆盖")
+        where = "岗位描述里提到" if item.get("source") == "jd" else "标题里有"
+        suggest("add", _display(item["term"]), f"挖词：{where}「{item['term']}」的岗位 {item['passed']}/{item['scored']} 通过（{item['rate']:.0%}，是平均的 {item['lift']} 倍），现有关键词没有覆盖")
     strong = [item for item in mined["lift"] if item["scored"] >= 15 and item["lift"] >= 1.5]
     if strong:
         reasons.append({"code": "mined_terms", "message": f"{len(strong)} 个标题词的岗位通过率明显高于平均，现有关键词没有覆盖（如「{_display(strong[0]['term'])}」）"})

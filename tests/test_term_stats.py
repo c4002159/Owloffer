@@ -23,7 +23,7 @@ def test_an_outcome_is_counted_once_per_posting_and_the_counts_move_with_the_day
             ts.note_outcome(db, "j1", "AIGC应用开发", "用 LangChain 和 MCP", True, today)
             ts.note_outcome(db, "j1", "AIGC应用开发", "用 LangChain 和 MCP", True, today)       # the same job again: ignored
             row = {r["term"]: (r["seen"], r["scored"], r["passed"]) for r in db.execute("SELECT * FROM term_daily WHERE day = '2026-10-25'")}
-            assert row["aigc"] == (1, 1, 1) and row["langchain"] == (0, 1, 1) and row["*"] == (0, 1, 1)
+            assert row["aigc"] == (1, 1, 1) and row["jd:langchain"] == (0, 1, 1) and row["*"] == (0, 1, 1)
             ts.prune(db, today + timedelta(days=60))
             assert db.execute("SELECT COUNT(*) FROM term_daily").fetchone()[0] == 0           # older than the window it is gone
         finally:
@@ -86,5 +86,21 @@ def test_the_counters_start_from_the_postings_already_in_the_database():
             row = db.execute("SELECT seen, scored, passed FROM term_daily WHERE term = 'aigc'").fetchone()
             assert tuple(row) == (3, 3, 2)
             assert ts.backfill(db) == 0                                                      # only once
+        finally:
+            db.close()
+
+
+def test_job_description_words_are_mined_apart_from_title_words_and_generic_ones_are_ignored():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = get_db(Path(tmp) / "t.db")
+        try:
+            day = date.today()
+            for number in range(14):
+                ts.note_outcome(db, f"g{number}", "岗位甲", "熟悉 LangChain 和 API 开发", number < 12, day)
+            for number in range(40):
+                ts.note_outcome(db, f"b{number}", "岗位乙", "普通描述", False, day)
+            lift = ts.mine(db, [], today=day)["lift"]
+            jd_words = {item["term"] for item in lift if item["source"] == "jd"}
+            assert "langchain" in jd_words and "api" not in jd_words
         finally:
             db.close()
