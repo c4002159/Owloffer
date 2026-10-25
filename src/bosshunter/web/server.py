@@ -8,6 +8,7 @@ Serves:
 from bosshunter.employment import classify_employment, internship_rejection
 
 import json
+import os
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 import math
