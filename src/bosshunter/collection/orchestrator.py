@@ -21,6 +21,7 @@ from bosshunter.collection.platforms.job51 import Job51Collector, get_51job_city
 from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_city_code
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
 from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector
+from bosshunter import rejected_postings
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.collection.streaming_scorer import StreamingScorer
 from bosshunter.collection_run_store import (
@@ -471,28 +472,38 @@ class _SharedProcessor:
             self._note_repeat(True)
             self._note_yield(False)
             return False
+        if rejected_postings.is_remembered(self.conn, candidate.platform, candidate.source_job_id):
+            # Turned away within the last day: a known posting, not a new one (see rejected_postings.py).
+            self.progress.duplicate += 1
+            self.event()
+            self._note_repeat(True)
+            self._note_yield(False)
+            return False
         self._note_repeat(False)
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         if reason := self._city_mismatch(candidate):
-            self.event(message=reason, increment_filtered=True, filtered_candidate=candidate)
-            return False
+            return self._turn_away(candidate, reason)
         if matched := matching_deal_breaker(candidate.title, profile.get("deal_breakers") or []):
-            self.event(message=f"职位名命中排除词：{matched}", increment_filtered=True, filtered_candidate=candidate)
-            return False
+            return self._turn_away(candidate, f"职位名命中排除词：{matched}")
         if matched := matching_blocked_company(candidate.company, profile.get("blocked_companies") or []):
-            self.event(message=f"公司命中屏蔽规则：{matched}", increment_filtered=True, filtered_candidate=candidate)
-            return False
+            return self._turn_away(candidate, f"公司命中屏蔽规则：{matched}")
         if matched := is_rejected_company(candidate.company, self.rejected_companies):
-            self.event(message=f"公司已拒绝过：{matched}", increment_filtered=True, filtered_candidate=candidate)
-            return False
+            return self._turn_away(candidate, f"公司已拒绝过：{matched}")
         if self.company_dedup and (matched := matching_company(candidate.company, self.recent_companies)):
-            self.event(message=f"公司近期已投递过（任一平台）：{matched}", increment_filtered=True, filtered_candidate=candidate)
-            return False
+            return self._turn_away(candidate, f"公司近期已投递过（任一平台）：{matched}")
         if self.company_dedup and (matched := matching_company(candidate.company, self.pool_companies)):
-            self.event(message=f"公司已有岗位在岗位池中：{matched}", increment_filtered=True, filtered_candidate=candidate)
-            return False
+            return self._turn_away(candidate, f"公司已有岗位在岗位池中：{matched}")
         self.event()
         return True
+
+    def _turn_away(self, candidate: JobCandidate, reason: str) -> bool:
+        """Count the posting as filtered and remember it for a day, so that it does not look new at the next visit."""
+        self.event(message=reason, increment_filtered=True, filtered_candidate=candidate)
+        try:
+            rejected_postings.remember(self.conn, candidate.platform, candidate.source_job_id, reason)
+        except Exception:
+            pass                                                      # remembering is an optimisation: never break a collection
+        return False
 
     def precheck_company(self, company: str, city: str, title: str = "") -> str:
         """The company-level part of inspect(): why a posting of this company is not wanted ('' = fine).

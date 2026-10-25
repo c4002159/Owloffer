@@ -1273,3 +1273,54 @@ class KeywordContinuationTests(TestCase):
             self.assertEqual(first, ["甲", "乙", "丙", "丁"])
             self._run(db_path, self._collector(second, status="completed", reason="callback_stopped"))
             self.assertEqual(second[0], "丁")
+
+
+class TurnedAwayPostingsTests(TestCase):
+    """A posting the rules turned away is not new the next time it is listed: it counts as known, not as filtered again."""
+
+    def _run(self, db_path, config, candidates):
+        registry = CollectorRegistry({"boss": lambda: _FakeCollector("boss", [], candidates)})
+        return CollectionOrchestrator(config, db_path=db_path, registry=registry).run(_options())["platforms"]["boss"]
+
+    def test_a_filtered_posting_counts_as_a_duplicate_on_the_next_visit(self):
+        banned = JobCandidate(**{**_candidate("boss", "b1").__dict__, "company": "黑名单公司"})
+        config = {"profile": {"blocked_companies": ["黑名单公司"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "t.db"
+            first = self._run(db_path, config, [banned])
+            self.assertEqual((first["filtered"], first["duplicate"]), (1, 0))             # turned away now
+            second = self._run(db_path, config, [banned])
+            self.assertEqual((second["filtered"], second["duplicate"]), (0, 1))            # known from now on: the list is not "fresh"
+
+    def test_a_posting_is_looked_at_again_when_the_day_is_over_or_the_rules_no_longer_apply(self):
+        from bosshunter import rejected_postings
+
+        banned = JobCandidate(**{**_candidate("boss", "b2").__dict__, "company": "某公司"})
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "t.db"
+            self._run(db_path, {"profile": {"blocked_companies": ["某公司"]}}, [banned])
+            db = get_db(db_path)
+            try:
+                db.execute("UPDATE rejected_postings SET until = datetime('now', '-1 minute')")        # a day later
+                db.commit()
+                self.assertFalse(rejected_postings.is_remembered(db, "boss", "b2"))
+            finally:
+                db.close()
+            again = self._run(db_path, {"profile": {"blocked_companies": []}}, [banned])               # the company is no longer blocked
+            self.assertEqual((again["filtered"], again["new"]), (0, 1))
+
+    def test_remembered_postings_expire_and_stubs_of_list_cards_are_not_remembered(self):
+        from bosshunter import rejected_postings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = get_db(Path(tmp) / "t.db")
+            try:
+                rejected_postings.remember(db, "boss", "card:公司:上海")
+                rejected_postings.remember(db, "boss", "x1", "原因", hours=-1)
+                self.assertFalse(rejected_postings.is_remembered(db, "boss", "card:公司:上海"))
+                self.assertFalse(rejected_postings.is_remembered(db, "boss", "x1"))
+                rejected_postings.remember(db, "boss", "x2", "原因")
+                self.assertTrue(rejected_postings.is_remembered(db, "boss", "x2") and not rejected_postings.is_remembered(db, "zhilian", "x2"))
+                self.assertEqual(rejected_postings.prune(db), 0)                                       # nothing is old enough yet
+            finally:
+                db.close()
