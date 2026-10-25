@@ -546,3 +546,32 @@ def test_a_change_of_the_time_limits_in_the_settings_counts_without_restarting_t
     pinned.start({"platform_order": ["liepin"], "time_window": False, "collect_minutes": 45})
     current["daily_loop_collect_minutes"] = 20
     assert pinned._limit_minutes("collect") == 45                              # a value given in the start itself stays
+
+
+def test_hitting_the_collection_time_limit_is_a_routine_stop_but_a_delivery_that_overruns_is_an_incident(tmp_path):
+    server = FakeServer()
+    server.running = 10 ** 6                                             # a task that never ends by itself
+    loop = DailyLoop(tmp_path / "loop.json", server.api, now=server.now, sleep=lambda s: setattr(server, "t", server.t + timedelta(seconds=s)),
+                     poll_seconds=60, idle_seconds=600, settings=lambda: {"daily_loop_collect_minutes": 30})
+    events = _events(loop)
+    loop._launch = lambda: None
+    loop.start({"platform_order": ["liepin"], "time_window": False})
+    stopped = []
+    original = server.api
+
+    def api(method, path, body=None):
+        if path.endswith("/stop"):
+            stopped.append(path)
+            server.running = 0
+            return {}
+        return original(method, path, body)
+
+    loop.api = api
+    loop._set(platform="liepin", step="collect")
+    loop._wait_idle("猎聘：采集中", routine=True)
+    assert stopped and not loop.snapshot()["incidents"]                  # stopped, and no entry in the incident list
+    assert any("已到单次上限 30 分钟" in message for _kind, message, _kw in events)
+    server.running = 10 ** 6
+    stopped.clear()
+    loop._wait_idle("猎聘：投递中", limit_minutes=30)
+    assert [i["code"] for i in loop.snapshot()["incidents"]] == ["task_too_long"]

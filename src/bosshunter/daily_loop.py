@@ -539,7 +539,7 @@ class DailyLoop:
             self._set(**{f"{which}_minutes": minutes})
         return minutes
 
-    def _wait_idle(self, label: str, limit_minutes: float | None = None) -> dict:
+    def _wait_idle(self, label: str, limit_minutes: float | None = None, *, routine: bool = False) -> dict:
         """Wait until no task is running or queued; stop a task that runs longer than the limit. Returns the last task."""
         if limit_minutes is None:
             limit_minutes = self._limit_minutes("collect")
@@ -551,7 +551,10 @@ class DailyLoop:
                 return status.get("last_task") or {}
             self._set(message=f"{label}（{(active.get('logs') or [''])[-1][:60]}）")
             if waited >= limit_minutes * 60 and active.get("id"):
-                self.incident(self.state.get("platform", ""), self.state.get("step", ""), "task_too_long", f"{label}超过 {limit_minutes:g} 分钟，已请求停止")
+                if routine:                                       # the time limit of a collection is how the loop alternates, not a fault
+                    self._news("loop", f"{label}已到单次上限 {limit_minutes:g} 分钟，先去投递，之后继续采集", level="info", platform=self.state.get("platform", ""))
+                else:
+                    self.incident(self.state.get("platform", ""), self.state.get("step", ""), "task_too_long", f"{label}超过 {limit_minutes:g} 分钟，已请求停止")
                 self.api("POST", f"/api/workbench/task/{active['id']}/stop", {})
                 limit_minutes = 1e9
             self.sleep(self.poll_seconds)
@@ -579,7 +582,7 @@ class DailyLoop:
                 self.incident(platform, "collect", "start_refused", f"{name}采集没有启动：{exc}", "；".join(map(str, messages or []))[:1000])
                 self._wait(self.idle_seconds)                      # window closed, preflight failing ...: try again later
                 return 0
-        last = self._wait_idle(f"{name}：采集中")
+        last = self._wait_idle(f"{name}：采集中", routine=True)
         metrics = last.get("metrics") or {}
         new = int(metrics.get("collect_new") or 0)
         self._bump(platform, "collected", new)
