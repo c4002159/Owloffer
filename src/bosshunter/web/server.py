@@ -3030,6 +3030,18 @@ def api_resumes_sync():
 	return _json_response(run_sync(load_config(CONFIG_PATH), detect=True))
 
 
+@app.route("/api/keywords/depth")
+def api_keywords_depth():
+	"""How good the postings are by the page they were found on (does it pay to read deeper pages?)."""
+	from bosshunter import posting_depth
+
+	db = _get_web_db()
+	try:
+		return _json_response({"bands": posting_depth.report(db, request.params.get("platform") or None, int(request.params.get("days", 14) or 14))})
+	finally:
+		db.close()
+
+
 @app.route("/api/keywords/strategy")
 def api_keywords_strategy():
 	"""Tier, 14-day results and recent tier moves of the configured search keywords."""

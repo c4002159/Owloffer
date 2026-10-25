@@ -21,7 +21,7 @@ from bosshunter.collection.platforms.job51 import Job51Collector, get_51job_city
 from bosshunter.collection.platforms.liepin import LiepinCollector, get_liepin_city_code
 from bosshunter.collection.platforms.zhilian import ZhilianCollector, get_zhilian_city_code
 from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector
-from bosshunter import rejected_postings
+from bosshunter import posting_depth, rejected_postings
 from bosshunter.collection.registry import CollectorRegistry
 from bosshunter.collection.streaming_scorer import StreamingScorer
 from bosshunter.collection_run_store import (
@@ -480,6 +480,10 @@ class _SharedProcessor:
             self._note_yield(False)
             return False
         self._note_repeat(False)
+        try:                                                        # first sighting: on which page of the list it was found
+            posting_depth.record(self.conn, candidate.platform, candidate.source_job_id, self.progress.keyword or candidate.source_keyword, self.progress.page)
+        except Exception:
+            pass
         profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
         if reason := self._city_mismatch(candidate):
             return self._turn_away(candidate, reason)
