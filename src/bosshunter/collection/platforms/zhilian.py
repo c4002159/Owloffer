@@ -68,6 +68,10 @@ JD_CLASSES = (
     "job-description",
 )
 DETAIL_PATH_PATTERN = re.compile(r"/(?:jobdetail|job|position|detail)/[^/?]+", re.IGNORECASE)
+DETAIL_LOAD_WAIT_SECONDS = 4.0        # the page's own load event can take long in a background tab; the JD is read as soon as it is there
+DETAIL_READ_ATTEMPTS = 14
+DETAIL_READ_RETRY_SECONDS = 0.7
+SLOW_DETAIL_SECONDS = 10.0            # a detail page that took longer than this is noted in the task log
 DETAIL_DELAY_MIN_SECONDS = 8.0
 DETAIL_DELAY_MAX_SECONDS = 15.0
 ZHILIAN_SEARCH_INPUT_SELECTOR = (
@@ -1244,6 +1248,34 @@ class ZhilianCollector:
         finally:
             self.browser.close_tab(target_id)
 
+    def _list_age_trusted(self) -> bool:
+        """Whether the list's date has agreed with the detail pages so far (checked again every 20 comparisons)."""
+        if self.safety_conn is None:
+            return False
+        cache = getattr(self, "_age_trust", None)
+        if cache is None or cache[0] >= 20:
+            from bosshunter import zhilian_age_probe
+
+            try:
+                trusted = zhilian_age_probe.stats(self.safety_conn)["trusted"]
+            except Exception:
+                trusted = False
+            cache = self._age_trust = [0, trusted]
+        return bool(cache[1])
+
+    def _note_age(self, list_reject: bool, detail_reject: bool) -> None:
+        if self.safety_conn is None:
+            return
+        from bosshunter import zhilian_age_probe
+
+        try:
+            zhilian_age_probe.record(self.safety_conn, list_reject, detail_reject)
+        except Exception:
+            return
+        cache = getattr(self, "_age_trust", None)
+        if cache is not None:
+            cache[0] += 1
+
     def _process_position(self, hooks, candidate, city, page, keyword, detail_requests):
         """List-stage checks first; only a posting that passes gets its page opened. Returns how many pages were opened
         (0 or 1) or the result that ends the collection."""
@@ -1251,6 +1283,11 @@ class ZhilianCollector:
             if hooks.on_list_company(candidate.company, candidate.city, candidate.title):
                 return 0
         reason = self._salary_block_reason(candidate) or self._filter_reason(candidate) or self._relevance_reason(candidate)
+        # The age limit used to be checked only on the detail page, after it had been opened: most opened pages were opened for
+        # nothing. The list date is used to reject early once it has proved to agree with the pages (zhilian_age_probe.py).
+        list_age = update_age_reason(self.config, {"published_days": candidate.updated_days}) if candidate.updated_days is not None else ""
+        if not reason and list_age and self._list_age_trusted():
+            reason = list_age
         if not reason and candidate.hr_active:
             profile = self.config.get("profile", {}) if isinstance(self.config.get("profile"), dict) else {}
             score, why = freshness_filter_result({"hr_active": candidate.hr_active}, profile)
@@ -1269,13 +1306,14 @@ class ZhilianCollector:
             else:
                 self.sleep(delay)
         hooks.on_event(phase="loading_detail", keyword=keyword, city=city, page=page)
+        opened_at = time.monotonic()
         target = self.browser.new_tab(candidate.url, background=True)
         if not target:
             hooks.on_parse_failed("无法打开智联详情页")
             return 0
         try:
-            self.browser.wait_for_load(target, timeout=15)
-            detail = self._read_detail_with_retry(target, city, attempts=6, retry_delay=1.0)
+            self.browser.wait_for_load(target, timeout=DETAIL_LOAD_WAIT_SECONDS)
+            detail = self._read_detail_with_retry(target, city, attempts=DETAIL_READ_ATTEMPTS, retry_delay=DETAIL_READ_RETRY_SECONDS)
         except CollectionError as exc:
             hooks.on_parse_failed(str(exc) or "智联详情页读取失败")
             return 1
@@ -1289,9 +1327,14 @@ class ZhilianCollector:
         if status != "ready" or not str(detail.get("jd") or "").strip():
             hooks.on_parse_failed("智联详情页没有读到岗位描述")
             return 1
+        took = time.monotonic() - opened_at
+        if took > SLOW_DETAIL_SECONDS:
+            hooks.on_event(message=f"智联详情页读取用了 {took:.0f} 秒")
         final = self._candidate_from_detail(detail, candidate)
-        reason = (update_age_reason(self.config, {**detail, "published_days": candidate.updated_days})
-                  or self._salary_block_reason(final) or self._filter_reason(final))
+        age_reason = update_age_reason(self.config, {**detail, "published_days": candidate.updated_days})
+        if list_age:
+            self._note_age(bool(list_age), bool(age_reason))
+        reason = age_reason or self._salary_block_reason(final) or self._filter_reason(final)
         if reason:
             hooks.on_event(message=f"智联 {reason}", increment_filtered=True, filtered_candidate=final)
             return 1
