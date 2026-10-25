@@ -4145,9 +4145,7 @@ def _deliver_reminders():
 			return "页数统计：还没有数据。"
 		lines = [f"{item['platform']} 第 {item['pages']} 页：读到 {item['seen']} 个，存下 {item['saved']} 个，通过评分 {item['passed']} 个"
 				 + (f"（{item['rate']:.0%}）" if item["rate"] is not None else "") for item in bands]
-		return "按页数分段的结果（近 14 天，通过率随页数下降说明深页不值得读）：
-" + "
-".join(lines)
+		return "按页数分段的结果（近 14 天，通过率随页数下降说明深页不值得读）：" + chr(10) + chr(10).join(lines)
 
 	texts = reminders.deliver_due(DATA_DIR / "reminders.json", lambda *args, **kwargs: _get_agent_access().emit(*args, **kwargs), {"depth": depth_report})
 	for text in texts:
