@@ -575,3 +575,36 @@ def test_hitting_the_collection_time_limit_is_a_routine_stop_but_a_delivery_that
     stopped.clear()
     loop._wait_idle("猎聘：投递中", limit_minutes=30)
     assert [i["code"] for i in loop.snapshot()["incidents"]] == ["task_too_long"]
+
+
+def test_after_a_restart_the_first_round_goes_on_with_the_platform_that_was_in_progress(tmp_path):
+    import json
+
+    server = FakeServer()
+    (tmp_path / "loop.json").write_text(json.dumps({
+        "running": True, "end_at": "", "order": ["liepin", "zhilian"], "modes": {"liepin": "auto", "zhilian": "auto"}, "targets": {"liepin": 5, "zhilian": 5},
+        "delivery_cap": 150, "platform": "zhilian", "step": "collect", "round": 3, "monitor_minutes": 0}))
+    loop = _loop(server, tmp_path)
+    original_launch = loop._launch
+    loop._launch = lambda: None
+    assert loop.resume() is True
+    assert loop._resume_from == "zhilian"
+    loop._launch = original_launch
+    loop._set(running=True)
+    loop._launch()
+    for _ in range(200):                                                  # let the first round run, then stop it
+        if any(c[1] == "/api/workbench/task" for c in server.calls):
+            break
+        loop.join(0.02)
+    loop.stop()
+    loop.join(10)
+    first = next(c for c in server.calls if c[1] == "/api/workbench/task" and c[0] == "POST")
+    assert first[2]["options"]["platform_order"] == ["zhilian"]           # not liepin, the first one of the order
+
+
+def test_a_state_file_saved_with_a_byte_order_mark_is_still_read(tmp_path):
+    import json
+
+    (tmp_path / "loop.json").write_bytes(b"\xef\xbb\xbf" + json.dumps({"running": True, "round": 7, "platform": "51job"}).encode("utf-8"))
+    loop = _loop(FakeServer(), tmp_path)
+    assert loop.state["round"] == 7 and loop.state["platform"] == "51job"      # not silently treated as "no loop was running"

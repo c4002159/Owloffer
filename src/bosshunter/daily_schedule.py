@@ -57,7 +57,7 @@ class DailySchedule:
     # ------------------------------------------------------------------ state
     def _load(self) -> dict[str, Any]:
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
             return data if isinstance(data, dict) else {}
         except (OSError, ValueError):
             return {}

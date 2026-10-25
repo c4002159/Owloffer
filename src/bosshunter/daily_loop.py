@@ -108,13 +108,14 @@ class DailyLoop:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._collect_closed: set[str] = set()      # platforms whose collecting is over for today (delivering may go on)
+        self._resume_from = ""                      # after a restart: the platform the first round starts with
         self.history_path = self.path.with_name("daily_loop_history.json")
         self.state = self._load()
 
     # ------------------------------------------------------------------ state
     def _load(self) -> dict[str, Any]:
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
             return data if isinstance(data, dict) else {}
         except (OSError, ValueError):
             return {}
@@ -253,6 +254,7 @@ class DailyLoop:
             self._record_run("end_time", "程序重启时已过了结束时间")
             return False
         self._news("loop", "程序重启过，每日循环已接着运行", level="info")
+        self._resume_from = state.get("platform") or ""        # carry on with the platform that was in progress, not the first one
         self._launch()
         return True
 
@@ -372,8 +374,12 @@ class DailyLoop:
                     self.state["round"] = int(self.state.get("round", 0)) + 1
                     self._save()
                 new_in_round = 0
+                order = list(self.state["order"])
+                if self._resume_from in order:                    # the first round after a restart goes on where the loop was
+                    order = order[order.index(self._resume_from):]
+                self._resume_from = ""
                 try:
-                    for platform in self.state["order"]:
+                    for platform in order:
                         if self._over():
                             break
                         new_in_round += self._platform(platform)
