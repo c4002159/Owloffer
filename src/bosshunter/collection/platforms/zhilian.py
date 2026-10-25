@@ -18,6 +18,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse, urlunparse
 
 from bosshunter.collection.platforms import zhilian_replay as zr
+from bosshunter import zhilian_contacted
 from bosshunter.platform_safety import apply_pacing, pacing_multiplier
 from bosshunter.requirement_filter import requirement_reason
 
@@ -306,7 +307,11 @@ JS_EXTRACT_DETAIL = """
   const updatedMatch = (document.body ? document.body.innerText : '').match(/(\\d{4}-\\d{2}-\\d{2})\\s*更新/);
   const head = title ? (title.closest('.job-detail-summary, .summary-planes, header') || (title.parentElement ? title.parentElement.parentElement : null)) : null;
   const campus = Boolean(head && /校招网申/.test(head.textContent || ''));
+  // The same apply button the delivery looks at: it reads "继续沟通" once the account has applied to (or talked about) the posting.
+  const applyButton = Array.from(document.querySelectorAll('.summary-planes__action button, button.job-detail-summary__apply'))
+    .find((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
   return JSON.stringify({
+    applyLabel: applyButton ? (applyButton.innerText || '').replace(/\\s+/g, '') : '',
     hr_active: activeMatch ? activeMatch[0] : '',
     updated: updatedMatch ? updatedMatch[1] : '', campus,
     // Normal logged-in pages can contain incidental login copy in headers,
@@ -1248,6 +1253,22 @@ class ZhilianCollector:
         finally:
             self.browser.close_tab(target_id)
 
+    def _contacted_known(self, source_job_id: str) -> bool:
+        if self.safety_conn is None:
+            return False
+        try:
+            return zhilian_contacted.known(self.safety_conn, source_job_id)
+        except Exception:
+            return False
+
+    def _remember_contacted(self, source_job_id: str) -> None:
+        if self.safety_conn is None:
+            return
+        try:
+            zhilian_contacted.remember(self.safety_conn, source_job_id)
+        except Exception:
+            return
+
     def _list_age_trusted(self) -> bool:
         """Whether the list's date has agreed with the detail pages so far (checked again every 20 comparisons)."""
         if self.safety_conn is None:
@@ -1295,6 +1316,9 @@ class ZhilianCollector:
         if reason:
             hooks.on_event(message=f"智联 列表预筛：{reason}", increment_filtered=True, filtered_candidate=candidate)
             return 0
+        if self._contacted_known(candidate.source_job_id):
+            hooks.on_event(message="智联 列表预筛：这个岗位之前已经投递或沟通过（页面按钮是“继续沟通”）", increment_filtered=True, filtered_candidate=candidate)
+            return 0
         if not hooks.on_list_candidate(candidate):
             return 0
         if detail_requests:
@@ -1326,6 +1350,10 @@ class ZhilianCollector:
             return PlatformCollectionResult(self.platform, "blocked", "login_required", "智联页面要求重新登录，已停止智联当前任务；后续平台将继续")
         if status != "ready" or not str(detail.get("jd") or "").strip():
             hooks.on_parse_failed("智联详情页没有读到岗位描述")
+            return 1
+        if zhilian_contacted.is_contacted_label(detail.get("applyLabel")):
+            self._remember_contacted(candidate.source_job_id)
+            hooks.on_event(message="智联 页面按钮是“继续沟通”：之前已经投递或沟通过，不再投递", increment_filtered=True, filtered_candidate=candidate)
             return 1
         took = time.monotonic() - opened_at
         if took > SLOW_DETAIL_SECONDS:
