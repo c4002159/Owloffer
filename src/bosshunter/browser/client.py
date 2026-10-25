@@ -63,6 +63,15 @@ class RuntimeClient:
         except httpx.HTTPError:
             return None
 
+    def capture(self, target_id: str, match: str) -> bool:
+        """Remember the next request of this tab whose URL contains ``match`` (False when the runtime is too old to know how)."""
+        return self._get_ok("/capture", params={"target": target_id, "match": match}, timeout=10)
+
+    def captured(self, target_id: str) -> dict[str, Any] | None:
+        """The request remembered by ``capture`` (``url``, ``method``, ``headers``, ``postData``), or None while there is none."""
+        data = self._get_json("/captured", params={"target": target_id}, timeout=10)
+        return data if isinstance(data, dict) and data.get("url") else None
+
     def click(self, target_id: str, selector: str) -> bool:
         return self._post_ok("/click", params={"target": target_id}, content=selector, timeout=10)
 

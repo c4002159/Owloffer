@@ -87,6 +87,18 @@ def evaluate(target_id: str, expression: str, timeout: float = 30) -> Any:
     return _client().evaluate(target_id, expression, timeout)
 
 
+def capture_request(target_id: str, match: str) -> bool:
+    if not _ready():
+        return False
+    return _client().capture(target_id, match)
+
+
+def captured_request(target_id: str) -> dict | None:
+    if not _ready():
+        return None
+    return _client().captured(target_id)
+
+
 def click(target_id: str, selector: str) -> bool:
     """Click an element by CSS selector using DOM click."""
     if not _ready():

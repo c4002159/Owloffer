@@ -6,7 +6,7 @@ from unittest import TestCase
 from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import PlatformCollectionRequest
 from bosshunter.collection.platforms.zhilian import ZhilianBrowser
-from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector, parse_item
+from bosshunter.collection.platforms.zhilian_campus import ZhilianCampusCollector, parse_item, template_from_capture
 
 
 def _item(number, name="AI应用开发工程师", company="某公司", **extra):
@@ -123,3 +123,34 @@ class CampusCollectorTests(TestCase):
         self.assertEqual(candidate.city, "上海·浦东·金桥")
         self.assertEqual((candidate.education, candidate.experience), ("本科", "在校/应届"))
         self.assertIsNone(parse_item({"number": "", "name": "x"}, "k"))
+
+    def test_a_request_seen_on_the_network_is_the_template_when_the_page_hides_it_from_hooks(self):
+        scripts = []
+
+        def evaluate(_target, script):
+            scripts.append(script)
+            if "__campusHook" in script:
+                return "hooked"
+            if "pagination__number" in script:
+                return "pager"
+            return "null"                                              # the hook never sees the page's request
+
+        seen = {"url": "https://cgate.example/searchPositions?x=1", "method": "POST", "postData": '{"pageIndex":2}',
+                "headers": {"x-zp-platform": "14", "user-agent": "x", "content-type": "application/json", "cookie": "secret"}}
+        browser = ZhilianBrowser(
+            new_tab=lambda *_a, **_k: "t", close_tab=lambda _t: True, evaluate=evaluate, scroll=lambda *_a, **_k: True,
+            wait_for_load=lambda *_a, **_k: True, navigate_action=lambda *_a: True,
+            capture_action=lambda _t, match: match == "searchPositions", captured_action=lambda _t: seen)
+        collector = ZhilianCampusCollector(browser=browser, config=_config([]), sleep=lambda _s: None)
+        self.assertTrue(collector._capture_template("t"))
+        injected = next(script for script in scripts if script.startswith("window.__campusReq ="))
+        self.assertIn("searchPositions?x=1", injected)
+        self.assertIn("x-zp-platform", injected)
+        self.assertNotIn("cookie", injected)                           # only what a page script may set is replayed
+        self.assertNotIn("user-agent", injected)
+
+    def test_template_from_capture_needs_a_url_and_a_body(self):
+        self.assertIsNone(template_from_capture(None))
+        self.assertIsNone(template_from_capture({"url": "https://x"}))
+        template = template_from_capture({"url": "https://x", "postData": "{}", "headers": {"X-ZP-Device-SN": "a", "Referer": "r"}})
+        self.assertEqual(template, {"u": "https://x", "h": {"X-ZP-Device-SN": "a"}, "body": "{}"})

@@ -101,6 +101,15 @@ JS_EXTRACT_DETAIL = r"""
 """
 
 
+def template_from_capture(request: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The replay template (``u``, ``h``, ``body``) from a request seen on the network; only the headers a page script may set are kept."""
+    if not isinstance(request, dict) or not request.get("url") or not request.get("postData"):
+        return None
+    headers = {key: str(value) for key, value in (request.get("headers") or {}).items()
+               if str(key).lower().startswith("x-zp-") or str(key).lower() in ("content-type", "accept")}
+    return {"u": str(request["url"]), "h": headers, "body": str(request["postData"])}
+
+
 def _js_literal(value: Any) -> str:
     return json.dumps(value if isinstance(value, (int, float)) else str(value), ensure_ascii=False)
 
@@ -133,6 +142,8 @@ class ZhilianCampusCollector(ZhilianCollector):
     def _capture_template(self, target_id: str) -> bool:
         """Make the page ask for a list page once and keep that request. False when it never does."""
         self.browser.evaluate(target_id, JS_HOOK_SEARCH)
+        capture, captured = getattr(self.browser, "capture_action", None), getattr(self.browser, "captured_action", None)
+        watching = bool(capture and captured and capture(target_id, "searchPositions"))
         deadline = time.monotonic() + TEMPLATE_WAIT_SECONDS
         triggered = False
         while time.monotonic() < deadline:
@@ -141,6 +152,11 @@ class ZhilianCampusCollector(ZhilianCollector):
             raw = self.browser.evaluate(target_id, JS_READ_TEMPLATE)
             if raw and raw != "null":
                 return True
+            if watching:                                               # the page's own request is seen by the network layer even when its scripts hide it
+                template = template_from_capture(captured(target_id))
+                if template:
+                    self.browser.evaluate(target_id, f"window.__campusReq = {json.dumps(template, ensure_ascii=False)}; 'ok'")
+                    return True
             self.sleep(0.5)
         return False
 

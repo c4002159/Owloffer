@@ -23,6 +23,9 @@ let cmdId = 0;
 const pending = new Map();
 const sessions = new Map();
 const portGuardedSessions = new Set();
+// Per tab: the request a page makes whose URL contains `match` (armed by /capture, read with /captured). Pages that keep their own
+// references to XMLHttpRequest/fetch cannot be hooked from inside, the network layer sees every request.
+const captures = new Map();
 let chromePort = null;
 let chromeWsPath = null;
 let chromeWsUrl = null;
@@ -268,6 +271,14 @@ async function connect() {
         const { sessionId, targetInfo } = msg.params;
         sessions.set(targetInfo.targetId, sessionId);
       }
+      if (msg.method === 'Network.requestWillBeSent' && msg.sessionId) {
+        const cap = captures.get(msg.sessionId);
+        const request = msg.params?.request;
+        if (cap && cap.match && request?.url?.includes(cap.match)) {
+          cap.hit = { url: request.url, method: request.method, headers: request.headers || {}, postData: request.postData ?? null,
+                      hasPostData: Boolean(request.hasPostData), requestId: msg.params.requestId };
+        }
+      }
       if (msg.method === 'Fetch.requestPaused') {
         const { requestId, sessionId } = msg.params;
         sendCDP('Fetch.failRequest', { requestId, errorReason: 'ConnectionRefused' }, sessionId).catch(() => {});
@@ -433,6 +444,21 @@ const server = http.createServer(async (req, res) => {
       await sendCDP('Runtime.evaluate', { expression: 'history.back()' }, sessionId);
       await waitForLoad(sessionId);
       sendJson(res, { ok: true });
+    } else if (pathname === '/capture') {
+      const sessionId = await ensureSession(q.target);
+      await sendCDP('Network.enable', {}, sessionId);
+      captures.set(sessionId, { match: q.match || '', hit: null });
+      sendJson(res, { ok: true });
+    } else if (pathname === '/captured') {
+      const sessionId = await ensureSession(q.target);
+      const hit = captures.get(sessionId)?.hit || null;
+      if (hit && hit.postData == null && hit.hasPostData) {
+        try {
+          const body = await sendCDP('Network.getRequestPostData', { requestId: hit.requestId }, sessionId);
+          hit.postData = body.result?.postData ?? null;
+        } catch {}
+      }
+      sendJson(res, hit ? { url: hit.url, method: hit.method, headers: hit.headers, postData: hit.postData } : {});
     } else if (pathname === '/eval') {
       const sessionId = await ensureSession(q.target);
       const expr = await readBody(req) || q.expr || 'document.title';
@@ -659,7 +685,7 @@ const server = http.createServer(async (req, res) => {
     } else {
       sendJson(res, {
         error: 'unknown endpoint',
-        endpoints: ['/health', '/targets', '/new', '/close', '/navigate', '/back', '/eval', '/click', '/clickAt', '/type', '/key', '/setFiles', '/scroll', '/screenshot', '/pdf', '/info'],
+        endpoints: ['/health', '/targets', '/new', '/close', '/navigate', '/back', '/capture', '/captured', '/eval', '/click', '/clickAt', '/type', '/key', '/setFiles', '/scroll', '/screenshot', '/pdf', '/info'],
       }, 404);
     }
   } catch (error) {

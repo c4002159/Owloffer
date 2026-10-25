@@ -24,6 +24,8 @@ from bosshunter.requirement_filter import requirement_reason
 
 from bosshunter.ai.prefilter import freshness_filter_result, salary_filter_result
 from bosshunter.browser import (
+    capture_request as browser_capture_request,
+    captured_request as browser_captured_request,
     click as browser_click,
     close_tab,
     evaluate,
@@ -922,6 +924,9 @@ class ZhilianBrowser:
     type_text_action: Callable[..., bool] | None = None
     press_key_action: Callable[..., bool] | None = None
     navigate_action: Callable[[str, str], bool] | None = None
+    # Network-level capture of one request (the page's own scripts cannot always be hooked); None in offline fakes.
+    capture_action: Callable[[str, str], bool] | None = None
+    captured_action: Callable[[str], dict | None] | None = None
 
 
 class ZhilianCollector:
@@ -950,6 +955,8 @@ class ZhilianCollector:
                 type_text_action=browser_type_text,
                 press_key_action=browser_press_key,
                 navigate_action=browser_navigate,
+                capture_action=browser_capture_request,
+                captured_action=browser_captured_request,
             )
 
     def _passes_filters(self, candidate: JobCandidate) -> bool:
