@@ -12,6 +12,7 @@ export interface KeywordAdvice {
   reasons: { code: string; message: string }[]
   suggestions: KeywordSuggestion[]
   popup: boolean
+  enabled?: boolean
   expand_wanted?: boolean
   popup_enabled: boolean
   last_applied: { time: string; changes: { kind: string; keyword: string }[] } | null
@@ -71,6 +72,7 @@ export function useKeywordAdvice() {
     /** Ask the model for directions and words the search does not cover; they come back as suggestions. */
     expand: () => run('/api/keywords/expand', {}),
     snooze: (hours = 24) => run('/api/keywords/advice/snooze', { hours }),
+    setEnabled: (enabled: boolean) => run('/api/keywords/advice/enabled', { enabled }),
     setPopup: (enabled: boolean) => run('/api/keywords/advice/popup', { enabled }),
   }
 }

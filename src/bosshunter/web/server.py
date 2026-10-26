@@ -3108,6 +3108,8 @@ def _expand_keywords() -> list[dict] | None:
 @app.route("/api/keywords/expand", method="POST")
 def api_keywords_expand():
 	"""The model proposes directions and words for the search (they appear as suggestions; nothing is added by itself)."""
+	if (load_config(CONFIG_PATH).get("automation") or {}).get("keyword_advice_enabled") is False:
+		return _json_response({"error": "关键词推荐已暂停，先在「关键词优化建议」里恢复"}, 409)
 	try:
 		suggestions = _expand_keywords()
 	except Exception as exc:
@@ -3186,6 +3188,16 @@ def api_keywords_advice_snooze():
 
 	hours = int((request.json or {}).get("hours") or keyword_advisor.SNOOZE_HOURS)
 	return _json_response({"success": True, "until": keyword_advisor.snooze(_keyword_advice_state_path(), min(max(hours, 1), 24 * 30))})
+
+
+@app.route("/api/keywords/advice/enabled", method="POST")
+def api_keywords_advice_enabled():
+	"""Switch the keyword recommendations (advice, pop-up, model expansion) off for now, or on again."""
+	config = load_config(CONFIG_PATH)
+	automation = dict(config.get("automation") or {})
+	automation["keyword_advice_enabled"] = bool((request.json or {}).get("enabled", True))
+	save_config({**config, "automation": automation}, CONFIG_PATH)
+	return _json_response({"success": True, "enabled": automation["keyword_advice_enabled"]})
 
 
 @app.route("/api/keywords/advice/popup", method="POST")

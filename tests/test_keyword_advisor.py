@@ -165,3 +165,13 @@ def test_a_platform_that_reads_much_and_finds_little_asks_for_a_model_expansion(
 def test_few_postings_read_is_not_a_dry_pool(db):
     _runs(db, "51job", 100, 0)
     assert adv.advise(db, _config("AI"), _plan("AI"))["dry"] == []
+
+
+def test_switched_off_advice_is_empty_and_never_pops_up(db, tmp_path):
+    _runs(db, "51job", 2600, 9)
+    config = {**_config("AI"), "automation": {"keyword_advice_enabled": False}}
+    result = adv.advise(db, config, _plan("AI"), base_dir=tmp_path)
+    assert result["enabled"] is False and result["suggestions"] == [] and not result["level3"]
+    assert not adv.popup_wanted(tmp_path / "s.json", config, result)
+    assert adv.advise(db, _config("AI"), _plan("AI"), base_dir=tmp_path)["enabled"] is True
+
