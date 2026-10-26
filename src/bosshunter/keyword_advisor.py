@@ -159,9 +159,6 @@ def _display(term: str) -> str:
 
 def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, today: date | None = None, base_dir: Path | None = None) -> dict:
     """``{"level3": bool, "reasons": [...], "suggestions": [...]}``; every suggestion has an ``id`` the apply call takes."""
-    if (config.get("automation") or {}).get("keyword_advice_enabled") is False:         # switched off for now: no advice, no pop-up, no model call
-        return {"level3": False, "enabled": False, "reasons": [], "suggestions": [], "dry": [], "expand_wanted": False,
-                "mined": {"baseline": 0.0, "lift": [], "frequent": []}}
     ks.ensure_tables(conn)
     today = today or date.today()
     words = _words(config)
@@ -233,7 +230,7 @@ def advise(conn: sqlite3.Connection, config: dict, plan: dict | None = None, tod
             if not any(word.lower() == str(item["keyword"]).lower() for word in words) and keyword_lint.check(str(item["keyword"])) is None:
                 suggest("add", str(item["keyword"]), f"模型建议（{item.get('direction') or '新方向'}）：{item.get('reason') or '现有关键词没有覆盖这个说法'}")
 
-    return {"level3": bool(reasons), "reasons": reasons, "suggestions": suggestions, "enabled": True, "dry": dry, "expand_wanted": bool(dry) and not fresh, "mined": {"baseline": mined["baseline"], "lift": mined["lift"][:8], "frequent": mined["frequent"][:8]}}
+    return {"level3": bool(reasons), "reasons": reasons, "suggestions": suggestions, "dry": dry, "expand_wanted": bool(dry) and not fresh, "mined": {"baseline": mined["baseline"], "lift": mined["lift"][:8], "frequent": mined["frequent"][:8]}}
 
 
 # ---------------------------------------------------------------- state, apply and undo

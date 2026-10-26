@@ -74,18 +74,3 @@ describe('KeywordAdviceCard', () => {
     expect(screen.getByText(/模型建议（AIGC 应用）/)).toBeTruthy()
   })
 })
-
-describe('keyword advice switch', () => {
-  it('shows only the way back while the advice is paused, and pauses on request', async () => {
-    const calls = mockApi({ ...ADVICE, enabled: false, level3: false, suggestions: [], popup: false })
-    render(<KeywordAdviceCard />)
-    expect(await screen.findByText(/已暂停/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '恢复推荐' }))
-    await waitFor(() => expect(calls.some(call => call.url === '/api/keywords/advice/enabled' && JSON.parse(call.body ?? '{}').enabled === true)).toBe(true))
-    cleanup()
-    const running = mockApi(ADVICE)
-    render(<KeywordAdviceCard />)
-    fireEvent.click(await screen.findByRole('button', { name: '暂停推荐' }))
-    await waitFor(() => expect(running.some(call => call.url === '/api/keywords/advice/enabled' && JSON.parse(call.body ?? '{}').enabled === false)).toBe(true))
-  })
-})

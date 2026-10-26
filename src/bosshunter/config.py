@@ -204,8 +204,6 @@ DEFAULTS: dict[str, Any] = {
         "daily_loop_collect_minutes": 90,
         # Role names found in the postings that no keyword searches for are tried out in this many slots at a time (0 = no trials).
         "keyword_trial_slots": 3,
-        # False = no keyword advice, no pop-up and no model expansion (the role-name trials above are a separate switch).
-        "keyword_advice_enabled": True,
         # The collection is cut into slices of this many minutes and what a slice found is delivered before the next slice; 0 = one piece.
         "daily_loop_slice_minutes": 15,
         # Every this many minutes the daily loop checks BOSS for HR replies (one read-only pass); 0 = never.

@@ -70,18 +70,6 @@ export function KeywordAdviceCard() {
   const { advice } = advisor
   const [selected, setSelected] = useSelection(advice)
   if (!advice || !Array.isArray(advice.suggestions)) return null          // an answer without the lists (an old server) shows nothing
-  if (advice.enabled === false) {                                         // switched off for now: only the way back
-    return (
-      <div className="space-y-3 rounded-2xl border border-card-border bg-surface p-4" aria-label="关键词优化建议">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="text-sm font-black text-foreground">关键词优化建议</div>
-          <p className="text-xs text-muted">已暂停：不再给建议、不弹窗、不调用模型。</p>
-          <Button size="sm" className="ml-auto" disabled={advisor.busy} onClick={() => void advisor.setEnabled(true)}>恢复推荐</Button>
-        </div>
-        <KeywordTrialsBlock />
-      </div>
-    )
-  }
   const quiet = !advice.level3 && !advice.last_applied && advice.suggestions.length === 0
   return (
     <div className={`space-y-3 rounded-2xl border p-4 ${quiet ? 'border-card-border bg-surface' : 'border-warning-border bg-warning-soft'}`} aria-label="关键词优化建议">
@@ -94,8 +82,7 @@ export function KeywordAdviceCard() {
           <Button size="sm" disabled={advisor.busy || !selected.length} onClick={() => void advisor.apply(selected)}>一键应用所选（{selected.length}）</Button>
         )}
         {advice.last_applied && <Button size="sm" variant="secondary" disabled={advisor.busy} onClick={() => void advisor.undo()}>撤销上次调整（{advice.last_applied.changes.length} 项）</Button>}
-        <Button size="sm" variant="secondary" className="ml-auto" disabled={advisor.busy} onClick={() => void advisor.setEnabled(false)}>暂停推荐</Button>
-        <label className="flex items-center gap-1.5 text-xs text-muted">
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-muted">
           <input type="checkbox" checked={advice.popup_enabled} onChange={event => void advisor.setPopup(event.target.checked)} />
           需要调整时在工作台弹窗提醒
         </label>
