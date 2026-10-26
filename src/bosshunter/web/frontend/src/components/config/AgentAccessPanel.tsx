@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { AgentDutyBlock } from './AgentDutyBlock'
 
 interface AgentRequest {
   id: string
@@ -93,6 +94,8 @@ export function AgentAccessPanel() {
         你远程操作 Claude 或 Codex 时，它们在这台电脑上调用本程序，不需要把程序开放到外网。
       </p>
 
+      <AgentDutyBlock />
+
       <div className="space-y-2 rounded-xl border border-card-border bg-card p-3">
         <div className="font-black text-foreground">1. 访问令牌</div>
         <div className="flex flex-wrap items-center gap-2">
@@ -162,8 +165,8 @@ export function AgentAccessPanel() {
       </div>
 
       <div className="space-y-2 rounded-xl border border-card-border bg-card p-3">
-        <div className="font-black text-foreground">5. 定时监控任务</div>
-        <p className="text-muted">在 Claude 的定时任务，或 Codex 的自动化里，把下面这段作为任务内容，选你要的间隔（比如每小时）。它们通过上面的 MCP 工具读消息、盯异常。</p>
+        <div className="font-black text-foreground">5. 备用：自己建定时任务</div>
+        <p className="text-muted">用上面的「智能体值班」就不需要这一步。如果你更想在 Claude 的定时任务，或 Codex 的自动化里自己建，把下面这段作为任务内容，选你要的间隔（比如每小时）。它们通过上面的 MCP 工具读消息、盯异常。</p>
         <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-surface p-2">{SCHEDULED_PROMPT}</pre>
         <button type="button" className="font-bold text-primary" onClick={() => copy(SCHEDULED_PROMPT, setNotice)}>复制任务内容</button>
       </div>

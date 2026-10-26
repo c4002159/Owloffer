@@ -4515,6 +4515,57 @@ def api_agent_access_state():
 	}})
 
 
+def _agent_duty_run(*, check_only: bool = False, prompt: str | None = None) -> dict:
+	from bosshunter import agent_duty
+
+	access = _get_agent_access()
+	return agent_duty.run_once(
+		BASE_DIR, python=agent_duty.python_executable(), base_url=f"http://127.0.0.1:{_SERVER_PORT}", issue_token=access.issue_ephemeral,
+		emit=lambda *args, **kwargs: access.emit(*args, **kwargs), prompt=prompt, check_only=check_only)
+
+
+def _agent_duty_loop():
+	"""Every minute: when the built-in duty is switched on and a run is due, call the user's Claude once (agent_duty.py)."""
+	from bosshunter import agent_duty
+
+	time.sleep(90)
+	while True:
+		try:
+			if agent_duty.due(BASE_DIR):
+				_agent_duty_run()
+		except Exception as exc:
+			print(f"智能体值班失败：{type(exc).__name__}: {exc}", flush=True)
+		time.sleep(60)
+
+
+@app.route("/api/agent-duty")
+def api_agent_duty_state():
+	from bosshunter import agent_duty
+
+	return _json_response(agent_duty.state(BASE_DIR))
+
+
+@app.route("/api/agent-duty", method="POST")
+def api_agent_duty_update():
+	from bosshunter import agent_duty
+
+	body = request.json if isinstance(request.json, dict) else {}
+	try:
+		return _json_response(agent_duty.update(BASE_DIR, {key: body[key] for key in ("enabled", "interval_minutes", "prompt", "cli_path") if key in body}))
+	except (TypeError, ValueError) as exc:
+		return _json_response({"error": f"设置不正确：{exc}"}, 400)
+
+
+@app.route("/api/agent-duty/run", method="POST")
+def api_agent_duty_run():
+	"""Run one duty now, or ({"check": true}) only test that the Claude command line is installed and logged in."""
+	body = request.json if isinstance(request.json, dict) else {}
+	if bool(body.get("check")):
+		return _json_response(_agent_duty_run(check_only=True))
+	threading.Thread(target=_agent_duty_run, daemon=True, name="agent-duty-now").start()
+	return _json_response({"success": True, "started": True})
+
+
 @app.route("/api/agent-access/token", method="POST")
 def api_agent_access_token():
 	return _json_response({"token": _get_agent_access().generate_token()})
@@ -5037,6 +5088,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	_get_daily_schedule().start()
 	threading.Timer(10.0, _deliver_reminders).start()                  # what the user asked to be told at a later start
 	threading.Thread(target=_keyword_trial_loop, daemon=True, name="keyword-trials").start()
+	threading.Thread(target=_agent_duty_loop, daemon=True, name="agent-duty").start()
 
 	if open_browser:
 		import webbrowser

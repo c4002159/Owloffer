@@ -20,6 +20,7 @@ import hmac
 import json
 import secrets
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,7 @@ class AgentAccess:
         self.path = Path(path)
         self.now = now
         self._lock = threading.RLock()
+        self._ephemeral: dict[str, float] = {}                # tokens of the program's own duty runs: in memory only, they expire
         self.state = self._load()
 
     # ------------------------------------------------------------------ storage
@@ -99,11 +101,29 @@ class AgentAccess:
             self._save()
         self.emit("access", "智能体访问令牌已撤销", level="warning")
 
+    def issue_ephemeral(self, minutes: int = 20) -> str:
+        """A token for one run of the built-in duty: valid for ``minutes``, never written to disk, independent of the user's own token."""
+        token = "bhd_" + secrets.token_urlsafe(32)
+        with self._lock:
+            now = time.time()
+            self._ephemeral = {digest: until for digest, until in self._ephemeral.items() if until > now}
+            self._ephemeral[hashlib.sha256(token.encode()).hexdigest()] = now + minutes * 60
+        return token
+
     def verify(self, token: str) -> bool:
-        stored = str(self.state.get("token_hash") or "")
-        if not stored or not token:
+        if not token:
             return False
-        return hmac.compare_digest(stored, hashlib.sha256(str(token).encode()).hexdigest())
+        digest = hashlib.sha256(str(token).encode()).hexdigest()
+        with self._lock:
+            until = self._ephemeral.get(digest)
+            if until is not None:
+                if until > time.time():
+                    return True
+                del self._ephemeral[digest]
+        stored = str(self.state.get("token_hash") or "")
+        if not stored:
+            return False
+        return hmac.compare_digest(stored, digest)
 
     # ------------------------------------------------------------------ mode
     @property
