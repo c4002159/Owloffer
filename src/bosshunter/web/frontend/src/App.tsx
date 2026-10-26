@@ -6,6 +6,7 @@ import ConfigPage from './pages/ConfigPage'
 import { OnboardingTour } from './components/onboarding/OnboardingTour'
 import { StarPrompt } from './components/layout/StarPrompt'
 import { KeywordAdvicePopup } from './components/keywords/KeywordAdvice'
+import { PlatformHoldPopup } from './components/dashboard/PlatformHoldPopup'
 
 /** The settings page; which group it shows lives in the address (?section=), so the sidebar can switch it. */
 function ConfigRoute() {
@@ -41,6 +42,7 @@ export default function App() {
         <OnboardingTour />
         <StarPrompt />
         <KeywordAdvicePopup />
+        <PlatformHoldPopup />
       </div>
     </BrowserRouter>
   )

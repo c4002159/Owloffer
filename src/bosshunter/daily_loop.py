@@ -27,6 +27,10 @@ MANUAL_ONLY = {"zhilian_campus"}                 # collected, scored and greeted
 POLL_SECONDS = 60
 IDLE_SECONDS = 600                              # nothing to collect (window closed, all paused): look again later
 SLICE_MINUTES = 15                              # collecting is cut into slices this long, what was found is delivered between them (automation.daily_loop_slice_minutes)
+PERF_DECAY = 0.7                                # how much of the earlier collections still counts when a platform's yield is judged
+MIN_SHARE, MAX_SHARE = 0.15, 0.6                # no platform gets less than 15 % or more than 60 % of a round's collecting time
+MIN_PLAN_MINUTES = 10                           # the least a platform is given in a round (it must be possible to notice that it recovered)
+DEFAULT_CONVERSION = 0.3                        # deliveries per new posting until a platform has shown its own rate
 MAX_COLLECT_MINUTES = 90                        # one collection that runs longer is stopped (the setting automation.daily_loop_collect_minutes)
 MAX_DELIVER_MINUTES = 240                       # the same for one delivery (automation.daily_loop_deliver_minutes)
 MODES = ("auto", "manual", "off")      # collect + approve + deliver / collect, then you confirm by hand / not in the loop
@@ -300,7 +304,11 @@ class DailyLoop:
             self.state["delivered_base"] = {p: int(v.get("delivered", 0)) for p, v in (self.state.get("totals") or {}).items()}
             self.state["out_today"] = {}
             self._collect_closed = set()
+            held = dict(self.state.get("held") or {})
             self._save()
+        for platform in held:                                            # a platform held back by yesterday's trouble waits for the user's answer
+            self._news("loop", f"新的一天：{PLATFORM_NAMES.get(platform, platform)}昨天遇到验证码，还没有加入循环。问题解决了吗？请在弹窗里确认", level="warning",
+                       platform=platform, data={"held": True})
 
     def _mode(self, platform: str) -> str:
         """auto: the loop collects, approves and delivers; manual: it only collects (and scores) and the postings wait for you."""
@@ -324,7 +332,107 @@ class DailyLoop:
     def _all_out(self) -> bool:
         """Every platform that delivers is capped or has run into a day-long limit: waiting longer would change nothing."""
         platforms = [p for p in self.state.get("order", []) if self._mode(p) == "auto"]
-        return bool(platforms) and all(self._capped(p) or self._out(p) for p in platforms) and not self._all_capped()
+        return bool(platforms) and all(self._capped(p) or self._out(p) or self._held(p) for p in platforms) and not self._all_capped()
+
+    # ------------------------------------------------------------------ platforms held back until the user says the trouble is over
+    def _held(self, platform: str) -> bool:
+        return platform in (self.state.get("held") or {})
+
+    def _hold(self, platform: str, code: str, message: str) -> None:
+        """A verification (captcha) only the user can pass: the platform sits out until the user confirms that it is solved."""
+        if self._held(platform):
+            return
+        with self._lock:
+            self.state.setdefault("held", {})[platform] = {"code": code, "message": message[:200], "since": self.now().isoformat(timespec="seconds"),
+                                                           "day": self.now().date().isoformat(), "skipped_day": ""}
+            self._save()
+        self._news("loop", f"{PLATFORM_NAMES.get(platform, platform)}遇到验证码，已退出循环。请在浏览器里完成验证，再在弹窗里确认加入循环", level="warning",
+                   platform=platform, data={"held": True})
+
+    def release(self, platform: str) -> bool:
+        """The user says the trouble is solved: the platform is part of the loop again (its open captcha / pause entries are closed)."""
+        with self._lock:
+            if platform not in (self.state.get("held") or {}):
+                return False
+            del self.state["held"][platform]
+            for item in self.state.get("incidents", []):
+                if item.get("platform") == platform and item.get("code") in ("captcha", "platform_paused") and not item.get("resolved"):
+                    item["resolved"] = True
+            self._save()
+        self._news("loop", f"{PLATFORM_NAMES.get(platform, platform)}已加入循环", level="info", platform=platform)
+        return True
+
+    def skip_today(self, platform: str) -> bool:
+        """The user does not want the platform today: it stays out and the question is not asked again until tomorrow."""
+        with self._lock:
+            item = (self.state.get("held") or {}).get(platform)
+            if not item:
+                return False
+            item["skipped_day"] = self.now().date().isoformat()
+            self._save()
+        return True
+
+    # ------------------------------------------------------------------ how the collecting time is shared
+    def _dynamic(self) -> bool:
+        try:
+            return bool((self.settings() or {}).get("daily_loop_dynamic", True))
+        except Exception:
+            return True
+
+    def _note_perf(self, platform: str, minutes: float, new: int) -> None:
+        """What a stretch of collecting brought in; earlier stretches count less and less."""
+        with self._lock:
+            item = self.state.setdefault("perf", {}).setdefault(platform, {"minutes": 0.0, "new": 0.0})
+            item["minutes"] = round(float(item.get("minutes", 0.0)) * PERF_DECAY + max(minutes, 0.0), 3)
+            item["new"] = round(float(item.get("new", 0.0)) * PERF_DECAY + max(int(new), 0), 3)
+            self._save()
+
+    def _expected(self, platform: str) -> float | None:
+        """Deliveries a minute of collecting is expected to lead to: new postings a minute times the share that gets delivered. None = no data."""
+        item = (self.state.get("perf") or {}).get(platform) or {}
+        minutes = float(item.get("minutes", 0.0))
+        if minutes < 5:
+            return None
+        totals = (self.state.get("totals") or {}).get(platform) or {}
+        collected, delivered = int(totals.get("collected", 0)), int(totals.get("delivered", 0))
+        conversion = min(max(delivered / collected, 0.05), 1.0) if collected >= 20 else DEFAULT_CONVERSION
+        return float(item.get("new", 0.0)) / minutes * conversion
+
+    def _round_plan(self, order: list[str]) -> list[tuple[str, float | None]]:
+        """The platforms of the next round in the order of what they are worth, with the collecting minutes each gets.
+
+        A round has as much collecting time as the platforms in it would get at the fixed limit; it is shared by the expected
+        deliveries a minute (with a floor, so that a dry platform is still looked at, and a ceiling, so that one platform does not
+        take the round). Platforms without data count as the average of the others."""
+        active = [p for p in order if self._mode(p) == "auto" and not self._capped(p) and not self._out(p) and not self._held(p)]
+        if not self._dynamic() or len(active) < 2:
+            return [(p, None) for p in order]
+        known = {p: self._expected(p) for p in active}
+        seen = [value for value in known.values() if value is not None]
+        average = sum(seen) / len(seen) if seen else 1.0
+        raw = {p: (known[p] if known[p] is not None else average) for p in active}
+        share = {p: MIN_SHARE for p in active}                          # everyone gets the floor, the rest is shared by worth up to the ceiling
+        open_ = set(active)
+        while open_:
+            left = 1.0 - sum(share.values())
+            worth = {p: raw[p] for p in open_}
+            if sum(worth.values()) <= 0:                                # nothing is expected anywhere: share equally
+                worth = {p: 1.0 for p in open_}
+            added = {p: left * worth[p] / sum(worth.values()) for p in open_}
+            capped = {p for p in open_ if share[p] + added[p] > MAX_SHARE}
+            if not capped:
+                share.update({p: share[p] + added[p] for p in open_})
+                break
+            for p in capped:
+                share[p] = MAX_SHARE
+            open_ -= capped
+        budget = self._limit_minutes("collect") * len(active)
+        minutes = {p: max(round(budget * share[p]), MIN_PLAN_MINUTES) for p in active}
+        with self._lock:
+            self.state["plan"] = {p: {"minutes": minutes[p], "share": round(share[p], 2), "expected": None if known[p] is None else round(known[p], 3)} for p in active}
+            self._save()
+        best = iter(sorted(active, key=lambda p: -share[p]))
+        return [((lambda p: (p, float(minutes[p])))(next(best)) if platform in active else (platform, None)) for platform in order]      # the others keep their places
 
     def _mark_out(self, platform: str, code: str) -> None:
         """The platform has nothing more to do today: say so once, with a link to the setting that decided it."""
@@ -381,10 +489,11 @@ class DailyLoop:
                     order = order[order.index(self._resume_from):]
                 self._resume_from = ""
                 try:
-                    for platform in order:
+                    plan = self._round_plan(order) if len(order) == len(self.state["order"]) else [(p, None) for p in order]
+                    for platform, minutes in plan:
                         if self._over():
                             break
-                        new_in_round += self._platform(platform)
+                        new_in_round += self._platform(platform, minutes)
                     if self._over():
                         break
                     self._check_replies()
@@ -502,8 +611,11 @@ class DailyLoop:
             self._save()
         self._wait_idle("BOSS 直聘：检查 HR 回复", limit_minutes=20)
 
-    def _platform(self, platform: str) -> int:
+    def _platform(self, platform: str, minutes: float | None = None) -> int:
         self._set(platform=platform, step="check", message=f"{PLATFORM_NAMES.get(platform, platform)}：检查状态")
+        if self._held(platform):
+            self._set(message=f"{PLATFORM_NAMES.get(platform, platform)}：遇到验证码，等你确认后再加入循环，跳过")
+            return 0
         if self._capped(platform):
             self._set(message=f"{PLATFORM_NAMES.get(platform, platform)}：已达到投递上限 {self.state.get('delivery_cap')}，跳过")
             return 0
@@ -514,17 +626,22 @@ class DailyLoop:
         if platform in (status.get("platform_limit_details") or {}):
             detail = status["platform_limit_details"][platform]
             self.incident(platform, "check", "platform_paused", f"{PLATFORM_NAMES[platform]}当前被暂停：{detail.get('reason', '')}")
+            if "captcha" in str(detail.get("reason", "")).lower() or "验证码" in str(detail.get("reason", "")):
+                self._hold(platform, "captcha", str(detail.get("reason", "")))
             return 0
         # Collecting is done in slices and what a slice found is delivered before the next one starts: a posting does not wait
         # for the rest of the collection (one account does one thing at a time, as before). Without a slice setting (0) or when the
         # whole limit fits in one slice this is a single collection followed by the delivery.
-        total, piece, spent, added = self._limit_minutes("collect"), self._slice_minutes(), 0.0, 0
+        total, piece, spent, added = (minutes or self._limit_minutes("collect")), self._slice_minutes(), 0.0, 0
         delivers = platform not in MANUAL_ONLY and self._mode(platform) == "auto" and self.state.get("options", {}).get("auto_approve", True)
         while True:
             limit = min(piece, total - spent) if 0 < piece < total else total
             self._cut = False
-            added += self._collect(platform, limit)
-            if self._over():
+            began = self.now()
+            found = self._collect(platform, limit)
+            added += found
+            self._note_perf(platform, (self.now() - began).total_seconds() / 60, found)
+            if self._held(platform) or self._over():
                 return added
             if delivers:
                 self._deliver(platform)
@@ -635,6 +752,8 @@ class DailyLoop:
         elif state in {"blocked", "failed", "completed_with_errors"}:
             self.incident(platform, "collect", str(item.get("reason_code") or state), f"{name}采集异常（{state}）：{item.get('message') or ''}",
                           "\n".join((last.get("logs") or [])[-8:]))
+            if str(item.get("reason_code") or "") == "captcha":
+                self._hold(platform, "captcha", str(item.get("message") or ""))
 
     def _ids(self, platform: str, view: str, *, missing_greeting: bool = False, statuses: set[str] | None = None) -> list[str]:
         ids: list[str] = []

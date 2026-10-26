@@ -59,6 +59,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { path: 'automation.saturation_stop', label: '饱和检测（没有新岗位的词不再往下读）', category: 'delivery', aliases: ['饱和', '翻页', '没有新岗位', '采集慢'] },
   { path: 'automation.saturation_chunk_pages', label: '饱和检测：每段读几页', category: 'delivery', aliases: ['饱和', '翻页'] },
   { path: 'automation.saturation_min_seen', label: '饱和检测：一段至少看到多少个岗位才判断', category: 'delivery', aliases: ['饱和'] },
+  { path: 'automation.daily_loop_dynamic', label: '每日循环：按各平台新增岗位的多少动态分配采集时间', category: 'delivery', aliases: ['动态分配', '优先级', '轮次', '比重', '每日循环'] },
   { path: 'automation.keyword_trial_slots', label: '关键词：同时试用几个新的岗位名称', category: 'search', aliases: ['试探', '岗位名称', '关键词优化', '试用'] },
   { path: 'automation.daily_loop_slice_minutes', label: '每日循环：采集每隔多久先投递一次（分钟）', category: 'delivery', aliases: ['分段', '先投递', '投递延迟', '每日循环'] },
   { path: 'automation.daily_loop_collect_minutes', label: '每日循环：单次采集最长（分钟）', category: 'delivery', aliases: ['90分钟', '采集时间', '超时', '每日循环'] },

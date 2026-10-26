@@ -197,6 +197,11 @@ export function DailyLoopProgress({ loop }: { loop: DailyLoopController }) {
         <span className="mr-2 font-black">每日循环</span>
         第 {state.round || 0} 轮 · {STEP_LABELS[state.step || ''] || state.step} · {state.message}
       </div>
+      {state.plan && Object.keys(state.plan).length > 0 && (
+        <div className="rounded-lg bg-card px-3 py-2 text-xs text-muted">
+          本轮采集时间（新增多的平台多分）：{Object.entries(state.plan).map(([platform, item]) => `${PLATFORM_LABELS[platform as keyof typeof PLATFORM_LABELS] || platform} ${item.minutes} 分钟（${Math.round(item.share * 100)}%）`).join(' · ')}
+        </div>
+      )}
       {Object.entries(state.out_today || {}).map(([platform, info]) => (
         <div key={platform} className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning-strong">
           {PLATFORM_LABELS[platform] || platform} 今天已达到「{info.label}」，每日循环不再处理这个平台。

@@ -4322,6 +4322,31 @@ def api_daily_loop_resolve(incident_id):
 	return _json_response(_get_daily_loop().snapshot())
 
 
+@app.route("/api/daily-loop/platform/<platform>/release", method="POST")
+def api_daily_loop_release(platform):
+	"""The user says the captcha / trouble of a held platform is solved: it joins the loop again (and today's pause of it is lifted)."""
+	from bosshunter.platform_limits import clear_limit
+
+	loop = _get_daily_loop()
+	if platform not in (loop.snapshot().get("held") or {}):
+		return _json_response({"error": "这个平台现在没有被暂停在循环之外"}, 404)
+	db = _get_web_db()
+	try:
+		clear_limit(db, platform)
+	finally:
+		db.close()
+	loop.release(platform)
+	return _json_response({"success": True, **loop.snapshot()})
+
+
+@app.route("/api/daily-loop/platform/<platform>/skip", method="POST")
+def api_daily_loop_skip(platform):
+	"""Not today: the platform stays out of the loop and the question comes back tomorrow."""
+	if not _get_daily_loop().skip_today(platform):
+		return _json_response({"error": "这个平台现在没有被暂停在循环之外"}, 404)
+	return _json_response({"success": True, **_get_daily_loop().snapshot()})
+
+
 # ─── Agent access (Claude / Codex through MCP) ───────────
 
 _agent_access = None

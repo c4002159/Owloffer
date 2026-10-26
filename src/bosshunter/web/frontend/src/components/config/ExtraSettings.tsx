@@ -72,6 +72,8 @@ export function AutomationSettings({ config, updateConfig }: { config: Config; u
           hint="看到的岗位太少时（页面没加载好）不下结论" />
         <NumberSetting label="每日循环：单次采集最长（分钟）" value={config.automation?.daily_loop_collect_minutes ?? 90} onChange={v => updateConfig('automation.daily_loop_collect_minutes', v)} min={10} max={720}
           hint="超过就强制停止这一次采集，循环继续投递并开始下一轮" />
+        <ToggleSetting label="每日循环：按各平台新增岗位的多少动态分配采集时间" checked={config.automation?.daily_loop_dynamic ?? true} onChange={v => updateConfig('automation.daily_loop_dynamic', v)}
+          hint="新增多的平台多采、先采；新增少的平台少采但仍会定期看一眼。关掉后每个平台时间相同" />
         <NumberSetting label="关键词：同时试用几个新的岗位名称（0 = 不试用）" value={config.automation?.keyword_trial_slots ?? 3} onChange={v => updateConfig('automation.keyword_trial_slots', v)} min={0} max={10}
           hint="采到的岗位里常见、关键词没搜过的名称会自动试搜，效果好的保留，不好的自动移除" />
         <NumberSetting label="每日循环：采集每隔多久先投递一次（分钟，0 = 采完再投）" value={config.automation?.daily_loop_slice_minutes ?? 15} onChange={v => updateConfig('automation.daily_loop_slice_minutes', v)} min={0} max={240}

@@ -202,6 +202,8 @@ DEFAULTS: dict[str, Any] = {
         "saturation_min_seen": 30,
         # The daily loop stops one collection / one delivery that runs longer than this (daily_loop.py).
         "daily_loop_collect_minutes": 90,
+        # The daily loop shares the collecting time of a round by what the platforms bring in (daily_loop.py); False = every platform gets the same.
+        "daily_loop_dynamic": True,
         # Role names found in the postings that no keyword searches for are tried out in this many slots at a time (0 = no trials).
         "keyword_trial_slots": 3,
         # The collection is cut into slices of this many minutes and what a slice found is delivered before the next slice; 0 = one piece.

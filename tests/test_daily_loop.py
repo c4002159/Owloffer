@@ -649,3 +649,68 @@ def test_a_collection_that_ends_by_itself_is_not_repeated(tmp_path):
     loop._deliver = lambda platform: calls.append(("deliver",))
     loop._platform("liepin")
     assert calls == [("collect", 15), ("deliver",)]
+
+
+def _planner(tmp_path, settings=None):
+    server = FakeServer()
+    loop = DailyLoop(tmp_path / "loop.json", server.api, now=server.now, sleep=server.sleep, poll_seconds=60, idle_seconds=600, settings=lambda: settings or {})
+    loop._launch = lambda: None
+    loop.start({"platform_order": ["zhilian", "boss", "51job"], "time_window": False})
+    return server, loop
+
+
+def test_the_collecting_time_goes_to_the_platforms_that_bring_in_new_postings(tmp_path):
+    _server, loop = _planner(tmp_path)
+    loop.state["perf"] = {"zhilian": {"minutes": 100, "new": 120}, "boss": {"minutes": 100, "new": 25}, "51job": {"minutes": 100, "new": 1}}
+    plan = loop._round_plan(["51job", "boss", "zhilian"])
+    assert [p for p, _ in plan] == ["zhilian", "boss", "51job"]                     # the best platform first
+    minutes = dict(plan)
+    assert minutes["zhilian"] > minutes["boss"] > minutes["51job"]
+    assert minutes["51job"] >= 10 and minutes["zhilian"] <= 0.61 * sum(minutes.values())          # a dry platform is still looked at, nobody takes the round
+    assert sum(minutes.values()) >= 270 - 3                                         # as much time as three fixed collections
+
+
+def test_platforms_without_data_are_treated_like_the_average_and_the_switch_turns_the_plan_off(tmp_path):
+    _server, loop = _planner(tmp_path)
+    plan = dict(loop._round_plan(["zhilian", "boss", "51job"]))
+    assert len({round(value) for value in plan.values()}) == 1                      # no data: equal shares
+    _server, off = _planner(tmp_path / "off", {"daily_loop_dynamic": False}) if (tmp_path / "off").mkdir() is None else (None, None)
+    assert [m for _, m in off._round_plan(["zhilian", "boss", "51job"])] == [None, None, None]
+
+
+def test_a_platform_that_is_held_or_has_no_automatic_delivery_keeps_its_place_and_gets_no_minutes(tmp_path):
+    _server, loop = _planner(tmp_path)
+    loop.state["modes"]["boss"] = "manual"
+    plan = loop._round_plan(["zhilian", "boss", "51job"])
+    assert [p for p, _ in plan][1] == "boss" and dict(plan)["boss"] is None
+
+
+def test_a_captcha_holds_the_platform_until_the_user_says_it_is_solved(tmp_path):
+    server, loop = _planner(tmp_path)
+    events = _events(loop)
+    last = {"status": "completed", "progress": {"platforms": {"boss": {"status": "blocked", "reason_code": "captcha", "message": "BOSS 采集检测到验证码"}}}, "logs": []}
+    loop._report_collect_problems("boss", last)
+    assert "boss" in loop.snapshot()["held"] and any("验证码" in message for _kind, message, _kw in events)
+    calls = len(server.calls)
+    assert loop._platform("boss") == 0 and len(server.calls) == calls              # not collected, not delivered, no request at all
+    assert loop.release("boss") is True and "boss" not in loop.snapshot()["held"]
+    assert all(item["resolved"] for item in loop.snapshot()["incidents"] if item["code"] == "captcha")
+    assert loop.release("boss") is False
+
+
+def test_a_held_platform_stays_held_over_midnight_and_the_user_is_asked_again(tmp_path):
+    server, loop = _planner(tmp_path)
+    events = _events(loop)
+    loop._hold("boss", "captcha", "验证码")
+    assert loop.skip_today("boss") and loop.snapshot()["held"]["boss"]["skipped_day"] == loop.now().date().isoformat()
+    server.t += timedelta(days=1)
+    loop._roll_day()
+    assert "boss" in loop.snapshot()["held"]                                       # nobody said it was solved
+    assert any("新的一天" in message for _kind, message, _kw in events)
+
+
+def test_the_loop_waits_for_tomorrow_when_every_platform_is_held_or_out(tmp_path):
+    _server, loop = _planner(tmp_path)
+    for platform in ("zhilian", "boss", "51job"):
+        loop._hold(platform, "captcha", "x")
+    assert loop._all_out()

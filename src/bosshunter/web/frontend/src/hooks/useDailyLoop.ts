@@ -47,6 +47,10 @@ export interface DailyLoopState {
   order?: string[]
   modes?: Record<string, string>
   targets?: Record<string, number>
+  /** Platforms taken out of the loop by a captcha, until the user confirms the trouble is over. */
+  held?: Record<string, { code: string; message: string; since: string; day: string; skipped_day: string }>
+  /** This round's collecting minutes per platform (shared by what they bring in). */
+  plan?: Record<string, { minutes: number; share: number; expected: number | null }>
 }
 
 export type LoopMode = 'auto' | 'manual' | 'off'
