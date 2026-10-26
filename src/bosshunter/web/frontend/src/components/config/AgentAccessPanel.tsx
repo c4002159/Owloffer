@@ -49,6 +49,8 @@ export function AgentAccessPanel() {
   const [state, setState] = useState<AgentAccessState | null>(null)
   const [token, setToken] = useState('')
   const [notice, setNotice] = useState('')
+  const [claude, setClaude] = useState<{ cli_found: boolean; cli: string; connected: boolean | null } | null>(null)
+  const [connecting, setConnecting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +60,20 @@ export function AgentAccessPanel() {
       // try again on the next poll
     }
   }, [])
+
+  const loadClaude = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent-access/claude')
+      if (res.ok) {
+        const data = await res.json()
+        if (data && typeof data.cli_found === 'boolean') setClaude(data)
+      }
+    } catch {
+      // the button simply stays without a status
+    }
+  }, [])
+
+  useEffect(() => { void loadClaude() }, [loadClaude])
 
   useEffect(() => {
     void load()
@@ -86,6 +102,22 @@ export function AgentAccessPanel() {
   const claudeCommand = `claude mcp add bosshunter -e BOSSHUNTER_TOKEN=${tokenText} -e BOSSHUNTER_URL=${state.connection.base_url} -- "${python}" -m bosshunter.main mcp`
   const codexConfig = `[mcp_servers.bosshunter]\ncommand = "${python.replace(/\\/g, '\\\\')}"\nargs = ["-m", "bosshunter.main", "mcp"]\nenv = { BOSSHUNTER_TOKEN = "${tokenText}", BOSSHUNTER_URL = "${state.connection.base_url}" }`
   const pending = state.requests.filter(item => item.status === 'pending')
+  // What is shown never has the path of this machine or a token in it; what the copy buttons copy does.
+  const shownClaudeCommand = `claude mcp add bosshunter -e BOSSHUNTER_TOKEN=<令牌（复制时自动带上）> -e BOSSHUNTER_URL=${state.connection.base_url} -- "<本机 Python 路径（复制时自动带上）>" -m bosshunter.main mcp`
+  const shownCodexConfig = `[mcp_servers.bosshunter]\ncommand = "<本机 Python 路径（复制时自动带上）>"\nargs = ["-m", "bosshunter.main", "mcp"]\nenv = { BOSSHUNTER_TOKEN = "<令牌（复制时自动带上）>", BOSSHUNTER_URL = "${state.connection.base_url}" }`
+  const connect = async (replace: boolean) => {
+    setConnecting(true)
+    try {
+      const data = await post('/api/agent-access/connect', { replace })
+      setNotice(data.message || '已连接')
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : '连接失败')
+    } finally {
+      setConnecting(false)
+      await load()
+      await loadClaude()
+    }
+  }
 
   return (
     <div className="space-y-4 text-xs">
@@ -152,15 +184,31 @@ export function AgentAccessPanel() {
 
       <div className="space-y-2 rounded-xl border border-card-border bg-card p-3">
         <div className="font-black text-foreground">3. 连接 Claude</div>
-        <p className="text-muted">在终端执行下面这条命令（令牌换成上面生成的；重新生成后要重新执行）：</p>
-        <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-2">{claudeCommand}</pre>
-        <button type="button" className="font-bold text-primary" onClick={() => copy(claudeCommand, setNotice)}>复制命令</button>
+        <p className="text-muted">
+          点一下就行：程序会找到你电脑上的 Claude 命令行，生成令牌并把自己登记进去，令牌直接写进 Claude 的配置，不会显示出来，也不用你输入路径。
+          {state.has_token && !claude?.connected ? ' 这会换掉现有令牌，其他已用旧令牌连接的客户端（比如 Codex）要重新连。' : ''}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="rounded-lg bg-primary px-3 py-1.5 font-bold text-primary-foreground" disabled={connecting || claude?.cli_found === false} onClick={() => void connect(false)}>
+            {connecting ? '连接中…' : claude?.connected ? '已连接' : '一键连接 Claude'}
+          </button>
+          {claude?.connected && <button type="button" className="rounded-lg border border-card-border px-3 py-1.5 font-bold" disabled={connecting} onClick={() => void connect(true)}>重新连接（换新令牌）</button>}
+          <span className="text-muted">
+            {claude === null ? '' : !claude.cli_found ? '没有找到 Claude 命令行，先安装 Claude Code' : claude.connected ? `已连接（命令行：${claude.cli}）。重启 Claude 后生效` : `找到命令行：${claude.cli}，还没连接`}
+          </span>
+        </div>
+        <details>
+          <summary className="cursor-pointer font-bold text-primary">手动连接（高级）</summary>
+          <p className="mt-2 text-muted">在终端执行下面这条命令。路径和令牌这里不显示，点「复制命令」会自动填好（令牌只有刚生成的那一次能带上，否则请用上面的一键连接）：</p>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-2">{shownClaudeCommand}</pre>
+          <button type="button" className="font-bold text-primary" onClick={() => copy(claudeCommand, setNotice)}>复制命令</button>
+        </details>
       </div>
 
       <div className="space-y-2 rounded-xl border border-card-border bg-card p-3">
         <div className="font-black text-foreground">4. 连接 Codex</div>
-        <p className="text-muted">把下面这段加到 Codex 的配置文件 <code>~/.codex/config.toml</code>：</p>
-        <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-2">{codexConfig}</pre>
+        <p className="text-muted">把下面这段加到 Codex 的配置文件 <code>~/.codex/config.toml</code>（路径和令牌这里不显示，点复制会自动填好）：</p>
+        <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-2">{shownCodexConfig}</pre>
         <button type="button" className="font-bold text-primary" onClick={() => copy(codexConfig, setNotice)}>复制配置</button>
       </div>
 

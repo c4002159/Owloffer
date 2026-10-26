@@ -95,7 +95,7 @@ export function AgentDutyBlock() {
         每次值班都会用掉你自己的 Claude 额度或 API 用量，所以默认关闭、一小时一次。
       </p>
       <p className={state.cli_found ? 'text-muted' : 'font-bold text-danger'}>
-        {state.cli_found ? `已找到 Claude 命令行：${state.cli}` : '没有找到 Claude 命令行。先安装 Claude Code，或在下面填它的路径。'}
+        {state.cli_found ? `已找到 Claude 命令行（${state.cli.replace(/\\/g, '/').split('/').slice(-3).join('/')}）` : '没有找到 Claude 命令行。先安装 Claude Code，或在下面填它的路径。'}
         {' '}它需要登录过一次：在终端运行 <code>claude</code> 再输入 <code>/login</code>（或设置 ANTHROPIC_API_KEY）。
       </p>
       <div className="flex flex-wrap items-center gap-2">

@@ -4566,6 +4566,36 @@ def api_agent_duty_run():
 	return _json_response({"success": True, "started": True})
 
 
+@app.route("/api/agent-access/claude")
+def api_agent_access_claude():
+	"""Whether a Claude command line was found and whether it already knows this program (paths are shortened: nothing of the machine is shown)."""
+	from bosshunter import agent_connect, agent_duty
+
+	cli = agent_duty.find_cli(agent_duty.settings(BASE_DIR)["cli_path"])
+	return _json_response({"cli_found": bool(cli), "cli": agent_connect.display_path(cli or ""), "connected": agent_connect.registered(cli) if cli else None})
+
+
+@app.route("/api/agent-access/connect", method="POST")
+def api_agent_access_connect():
+	"""One click: register this program's MCP server in the user's Claude with a fresh token that is never shown."""
+	import sys
+
+	from bosshunter import agent_connect, agent_duty
+
+	body = request.json if isinstance(request.json, dict) else {}
+	cli = agent_duty.find_cli(agent_duty.settings(BASE_DIR)["cli_path"])
+	if not cli:
+		return _json_response({"error": "没有找到 Claude 命令行。先安装 Claude Code，或在「智能体值班 → 高级」里填它的路径"}, 400)
+	if agent_connect.registered(cli) and not body.get("replace"):
+		return _json_response({"success": True, "already": True, "message": "已经连接过了"})
+	access = _get_agent_access()
+	token = access.generate_token()
+	ok, message = agent_connect.connect(cli, sys.executable, f"http://127.0.0.1:{_SERVER_PORT}", token)
+	if not ok:
+		return _json_response({"error": message}, 500)
+	return _json_response({"success": True, "already": False, "message": message})
+
+
 @app.route("/api/agent-access/token", method="POST")
 def api_agent_access_token():
 	return _json_response({"token": _get_agent_access().generate_token()})
