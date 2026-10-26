@@ -4167,6 +4167,52 @@ def _get_daily_loop():
 _daily_schedule = None
 
 
+def _run_keyword_trials():
+	"""Judge the running role-name trials and fill the free slots (keyword_trials.py); the changed keywords are saved at once."""
+	from bosshunter import keyword_trials
+
+	config = load_config(CONFIG_PATH)
+	db = _get_web_db()
+	try:
+		result = keyword_trials.run(db, config, BASE_DIR)
+	finally:
+		db.close()
+	if result["config"] is not None:
+		save_config(result["config"], CONFIG_PATH)
+	text = keyword_trials.summary(result)
+	if text:
+		_get_agent_access().emit("keyword", text)
+	return result
+
+
+def _keyword_trial_loop():
+	"""Every few hours: the trials that have enough jobs are judged, the free slots get new role names."""
+	time.sleep(300)
+	while True:
+		try:
+			_run_keyword_trials()
+		except Exception as exc:
+			print(f"岗位名称试用失败：{type(exc).__name__}: {exc}", flush=True)
+		time.sleep(3 * 3600)
+
+
+@app.route("/api/keywords/trials")
+def api_keywords_trials():
+	from bosshunter import keyword_trials
+
+	config = load_config(CONFIG_PATH)
+	return _json_response({**keyword_trials.state(BASE_DIR), "slots": int((config.get("automation") or {}).get("keyword_trial_slots", keyword_trials.SLOTS) or 0)})
+
+
+@app.route("/api/keywords/trials/run", method="POST")
+def api_keywords_trials_run():
+	try:
+		result = _run_keyword_trials()
+	except Exception as exc:
+		return _json_response({"error": f"试用失败：{type(exc).__name__}: {exc}"}, 500)
+	return _json_response({"success": True, "started": result["started"], "kept": result["kept"], "dropped": result["dropped"]})
+
+
 def _keyword_expander_loop():
 	"""Once the stored suggestions have expired (a week) or never existed, ask the model again, at night when nobody is looking."""
 	from bosshunter.ai import keyword_expansion
@@ -4962,6 +5008,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8686, open_browser: bool = T
 	_start_backup_scheduler()
 	_get_daily_schedule().start()
 	threading.Timer(10.0, _deliver_reminders).start()                  # what the user asked to be told at a later start
+	threading.Thread(target=_keyword_trial_loop, daemon=True, name="keyword-trials").start()
 
 	if open_browser:
 		import webbrowser

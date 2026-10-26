@@ -35,6 +35,7 @@ STOP_WORDS = {
 }
 STOP_ASCII = {"and", "the", "for", "with", "pm", "hr", "it", "jd", "hc", "ok", "or", "of", "to", "in", "on", "at", "co", "ltd", "inc",
               "api", "http", "https", "json", "xml", "web", "app", "sdk"}
+ROLE = "role:"                                        # prefix of a whole role name ("ai研发工程师"): what postings are called, counted as a unit
 JD = "jd:"                                            # prefix of a word counted from a job description (a different thing from a title word)
 _STOP_LONGEST_FIRST = sorted(STOP_WORDS, key=len, reverse=True)
 _ASCII = re.compile(r"[A-Za-z][A-Za-z0-9+#.]{1,}")
@@ -49,6 +50,27 @@ def _ensure(conn: sqlite3.Connection) -> None:
         "passed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (term, day))"
     )
     conn.execute("CREATE TABLE IF NOT EXISTS term_scored_jobs (job_id TEXT PRIMARY KEY)")
+
+
+_LEVEL_WORDS = re.compile(r"^(?:初级|中级|高级|资深|实习|校招|应届|急聘|诚聘|热招|急招|储备)+|(?:实习生?|校招|应届生?)$")
+_ROLE_SPLIT = re.compile(r"[-—–·_/|,，、+＋]")
+
+
+def role_name(title: str) -> str:
+    """The name of the role a posting offers: brackets, pay, level words and everything after a separator dropped ("高级Java开发工程师（上海）" -> "java开发工程师").
+
+    Empty when nothing sensible is left (a bare city, a single word, a very long slogan)."""
+    cleaned = _NOISE.sub("", title or "")
+    parts = [part for part in _ROLE_SPLIT.split(cleaned) if part.strip()]
+    name = re.sub(r"\s+", "", parts[0] if parts else "").lower()
+    name = re.sub(r"\d+[kK万元薪]?.*$", "", name)
+    name = _LEVEL_WORDS.sub("", name)
+    return name if 3 <= len(name) <= 20 and name not in STOP_WORDS else ""
+
+
+def role_terms(title: str) -> set[str]:
+    role = role_name(title)
+    return {ROLE + role} if role else set()
 
 
 def title_terms(title: str) -> set[str]:
@@ -95,7 +117,7 @@ def _bump(conn: sqlite3.Connection, terms, day: str, seen: int = 0, scored: int 
 def note_seen(conn: sqlite3.Connection, title: str, today: date | None = None) -> None:
     """A posting was listed for the first time."""
     _ensure(conn)
-    _bump(conn, title_terms(title), (today or date.today()).isoformat(), seen=1)
+    _bump(conn, title_terms(title) | role_terms(title), (today or date.today()).isoformat(), seen=1)
     conn.commit()
 
 
@@ -105,7 +127,7 @@ def note_outcome(conn: sqlite3.Connection, job_id: str, title: str, jd: str, pas
     if conn.execute("INSERT OR IGNORE INTO term_scored_jobs (job_id) VALUES (?)", (str(job_id),)).rowcount == 0:
         return
     day = (today or date.today()).isoformat()
-    terms = title_terms(title) | {JD + word for word in jd_terms(jd)}
+    terms = title_terms(title) | role_terms(title) | {JD + word for word in jd_terms(jd)}
     _bump(conn, terms, day, scored=1, passed=int(passed))
     _bump(conn, [TOTAL], day, scored=1, passed=int(passed))
     conn.commit()
@@ -121,18 +143,21 @@ def backfill(conn: sqlite3.Connection) -> int:
     """Count the postings that are already in the database (once, when there are no counters yet)."""
     _ensure(conn)
     if conn.execute("SELECT 1 FROM term_daily LIMIT 1").fetchone():
-        return 0
+        if conn.execute("SELECT 1 FROM term_daily WHERE term LIKE 'role:%' LIMIT 1").fetchone():
+            return 0
+        conn.execute("DELETE FROM term_daily")                      # counted before role names existed: count again from the postings
+        conn.execute("DELETE FROM term_scored_jobs")
     passed = ("ready", "approved", "sent", "replied", "resume_sent", "needs_resume", "follow_up_sent", "error")
     scored_status = passed + ("filtered",)
     count = 0
     for row in conn.execute("SELECT id, title, jd, status, date(created_at, 'localtime') AS day, score_reason FROM jobs WHERE deleted_at IS NULL").fetchall():
         day = row["day"] or date.today().isoformat()
-        _bump(conn, title_terms(row["title"]), day, seen=1)
+        _bump(conn, title_terms(row["title"]) | role_terms(row["title"]), day, seen=1)
         prefiltered = str(row["score_reason"] or "").startswith(("预筛不通过", "AI评分失败", "AI 评分失败", "评分失败"))
         if row["status"] in scored_status and not prefiltered:
             ok = row["status"] in passed
             conn.execute("INSERT OR IGNORE INTO term_scored_jobs (job_id) VALUES (?)", (str(row["id"]),))
-            _bump(conn, title_terms(row["title"]) | {JD + word for word in jd_terms(row["jd"])}, day, scored=1, passed=int(ok))
+            _bump(conn, title_terms(row["title"]) | role_terms(row["title"]) | {JD + word for word in jd_terms(row["jd"])}, day, scored=1, passed=int(ok))
             _bump(conn, [TOTAL], day, scored=1, passed=int(ok))
         count += 1
     conn.commit()
@@ -174,7 +199,7 @@ def mine(conn: sqlite3.Connection, keywords: list[str], days: int = WINDOW_DAYS,
     baseline = total_passed / total_scored if total_scored else 0.0
     candidates = [
         (term, seen, scored, passed) for term, (seen, scored, passed) in stats.items()
-        if term != TOTAL and not _covered(term.removeprefix(JD), keywords) and keyword_lint.check(term.removeprefix(JD)) is None
+        if term != TOTAL and not term.startswith(ROLE) and not _covered(term.removeprefix(JD), keywords) and keyword_lint.check(term.removeprefix(JD)) is None
     ]
     # A longer word that explains a shorter one's count makes the shorter one redundant ("工智能" inside "人工智能").
     by_text = {term: (seen, scored, passed) for term, seen, scored, passed in candidates}
@@ -200,3 +225,41 @@ def mine(conn: sqlite3.Connection, keywords: list[str], days: int = WINDOW_DAYS,
     ]
     frequent.sort(key=lambda item: (-item["seen"], item["term"]))
     return {"baseline": round(baseline, 3), "lift": lift[:15], "frequent": frequent[:15]}
+
+
+MIN_ROLE_SEEN = 4
+
+
+def baseline(conn: sqlite3.Connection, days: int = WINDOW_DAYS, today: date | None = None) -> float:
+    """Share of scored postings that passed over the last ``days`` days (0 when nothing was scored)."""
+    _ensure(conn)
+    since = ((today or date.today()) - timedelta(days=days)).isoformat()
+    row = conn.execute("SELECT SUM(scored) AS scored, SUM(passed) AS passed FROM term_daily WHERE term = ? AND day >= ?", (TOTAL, since)).fetchone()
+    scored = int(row["scored"] or 0)
+    return int(row["passed"] or 0) / scored if scored else 0.0
+
+
+def mine_roles(conn: sqlite3.Connection, keywords: list[str], exclude: list[str] | None = None, days: int = WINDOW_DAYS,
+               today: date | None = None, min_seen: int = MIN_ROLE_SEEN) -> list[dict]:
+    """Role names that postings carry, that no keyword searches for and that are worth a trial: ``[{"role", "seen", "scored", "passed"}]``.
+
+    ``seen`` counts every posting listed with that name (also the ones turned away before scoring), ``scored`` / ``passed`` only what the
+    AI decided about. ``exclude`` are deal-breaker words: a role containing one is never proposed."""
+    from bosshunter.ai import keyword_lint
+
+    _ensure(conn)
+    backfill(conn)
+    since = ((today or date.today()) - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT term, SUM(seen) AS seen, SUM(scored) AS scored, SUM(passed) AS passed FROM term_daily WHERE term LIKE 'role:%' AND day >= ? GROUP BY term", (since,)
+    ).fetchall()
+    banned = [word.lower() for word in exclude or [] if word]
+    found = []
+    for row in rows:
+        role = row["term"].removeprefix(ROLE)
+        seen, scored, passed = int(row["seen"] or 0), int(row["scored"] or 0), int(row["passed"] or 0)
+        if seen < min_seen or _covered(role, keywords) or any(word in role for word in banned) or keyword_lint.check(role) is not None:
+            continue
+        found.append({"role": role, "seen": seen, "scored": scored, "passed": passed})
+    found.sort(key=lambda item: (-item["seen"], item["role"]))
+    return found

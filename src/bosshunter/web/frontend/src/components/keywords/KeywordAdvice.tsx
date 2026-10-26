@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useKeywordAdvice, type KeywordAdvice } from '@/hooks/useKeywordAdvice'
+import { useKeywordTrials } from '@/hooks/useKeywordTrials'
 
 const KIND_LABEL = { pause: '暂停 7 天', add: '新增关键词' } as const
 
@@ -40,6 +41,29 @@ function useSelection(advice: KeywordAdvice | null) {
   return [selected, setSelected] as const
 }
 
+const RESULT_LABEL = { kept: '保留', dropped: '已移除', removed: '你移除了' } as const
+
+/** The role names the program is trying as keywords by itself, and how the earlier trials ended. */
+function KeywordTrialsBlock() {
+  const { trials, busy, runNow } = useKeywordTrials()
+  if (!trials || !Array.isArray(trials.active) || !Array.isArray(trials.history)) return null          // an answer of another shape (an old server) shows nothing
+  return (
+    <div className="space-y-1.5 border-t border-card-border pt-3 text-xs" aria-label="岗位名称试用">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-black text-foreground">岗位名称试用</span>
+        <span className="text-muted">{trials.slots > 0 ? `同时试 ${trials.slots} 个：采到的岗位里常见、但关键词没搜过的名称，效果好的留下，不好的自动移除` : '已关闭（设置里把试用名额改成大于 0 即可开启）'}</span>
+        {trials.slots > 0 && <Button size="sm" variant="secondary" className="ml-auto" disabled={busy} onClick={() => void runNow()}>{busy ? '处理中…' : '现在评估一次'}</Button>}
+      </div>
+      {trials.active.length > 0 && <p className="text-muted">试用中：{trials.active.map(item => item.keyword).join('、')}</p>}
+      {trials.history.length > 0 && (
+        <ul className="space-y-0.5 text-muted">
+          {trials.history.slice(-5).reverse().map(item => <li key={`${item.keyword}-${item.at}`}>· {item.keyword}：{RESULT_LABEL[item.result] ?? item.result}（{item.reason}）</li>)}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 /** In the settings page: the same advice without a pop-up, plus undo and the pop-up switch. */
 export function KeywordAdviceCard() {
   const advisor = useKeywordAdvice()
@@ -63,6 +87,7 @@ export function KeywordAdviceCard() {
           需要调整时在工作台弹窗提醒
         </label>
       </div>
+      <KeywordTrialsBlock />
     </div>
   )
 }
