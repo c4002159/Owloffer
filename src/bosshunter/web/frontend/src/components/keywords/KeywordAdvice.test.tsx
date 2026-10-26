@@ -74,3 +74,19 @@ describe('KeywordAdviceCard', () => {
     expect(screen.getByText(/模型建议（AIGC 应用）/)).toBeTruthy()
   })
 })
+
+describe('closing the pop-up for now', () => {
+  it('hides the pop-up in this browser for a while without telling the server anything', async () => {
+    window.sessionStorage.clear()
+    const calls = mockApi(ADVICE)
+    render(<KeywordAdvicePopup />)
+    fireEvent.click(await screen.findByRole('button', { name: '暂时关闭（2 小时）' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(calls.every(call => call.url === '/api/keywords/advice')).toBe(true)          // only the reading of the advice, no setting changed
+    cleanup()
+    render(<KeywordAdvicePopup />)                                                       // still closed after the page is opened again
+    await waitFor(() => expect(calls.length).toBeGreaterThan(1))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    window.sessionStorage.clear()
+  })
+})

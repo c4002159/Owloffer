@@ -3,6 +3,18 @@ import { Button } from '@/components/ui/button'
 import { useKeywordAdvice, type KeywordAdvice } from '@/hooks/useKeywordAdvice'
 import { useKeywordTrials } from '@/hooks/useKeywordTrials'
 
+const CLOSED_KEY = 'keywordAdvicePopupClosedAt'
+const CLOSED_FOR_MS = 2 * 60 * 60 * 1000          // "temporarily closed" lasts two hours in this browser tab; nothing changes on the server
+
+function closedRecently(): boolean {
+  try {
+    const at = Number(window.sessionStorage.getItem(CLOSED_KEY) || 0)
+    return at > 0 && Date.now() - at < CLOSED_FOR_MS
+  } catch {
+    return false
+  }
+}
+
 const KIND_LABEL = { pause: '暂停 7 天', add: '新增关键词' } as const
 
 type Advisor = ReturnType<typeof useKeywordAdvice>
@@ -97,17 +109,26 @@ export function KeywordAdvicePopup() {
   const advisor = useKeywordAdvice()
   const { advice } = advisor
   const [selected, setSelected] = useSelection(advice)
-  if (!advice?.popup) return null
+  const [closed, setClosed] = useState(closedRecently)
+  if (!advice?.popup || closed) return null
+  const close = () => {
+    try { window.sessionStorage.setItem(CLOSED_KEY, String(Date.now())) } catch { /* the pop-up simply closes for now */ }
+    setClosed(true)
+  }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="关键词需要调整">
       <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-card-border bg-card p-6 shadow-xl">
-        <h2 className="text-lg font-black text-foreground">关键词需要调整</h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-lg font-black text-foreground">关键词需要调整</h2>
+          <button type="button" className="text-lg leading-none text-muted hover:text-foreground" aria-label="暂时关闭" onClick={close}>×</button>
+        </div>
         <p className="mb-3 mt-1 text-sm text-muted">最近的采集结果显示，现在的关键词需要调整（原因见下）。有建议时勾选后可一键应用，之后也能撤销。</p>
         <AdviceBody advice={advice} advisor={advisor} selected={selected} setSelected={setSelected} />
         <div className="mt-4 flex flex-wrap gap-2">
           {advice.expand_wanted && <Button size="sm" disabled={advisor.busy} onClick={() => void advisor.expand()}>{advisor.busy ? '模型思考中…' : '让模型扩展方向'}</Button>}
           {advice.suggestions.length > 0 && <Button size="sm" disabled={advisor.busy || !selected.length} onClick={() => void advisor.apply(selected)}>一键应用所选（{selected.length}）</Button>}
           <Button size="sm" variant="secondary" onClick={() => { window.location.href = `/config?section=search&focus=${encodeURIComponent('关键词设置')}` }}>去设置里改</Button>
+          <Button size="sm" variant="secondary" onClick={close}>暂时关闭（2 小时）</Button>
           <Button size="sm" variant="secondary" disabled={advisor.busy} onClick={() => void advisor.snooze(24)}>24 小时后再提醒</Button>
         </div>
         <button type="button" className="mt-3 text-xs text-muted hover:text-foreground" onClick={() => void advisor.setPopup(false)}>以后不弹窗，只在设置页和消息中心提示</button>
