@@ -890,6 +890,16 @@ class CollectionOrchestrator:
             except Exception as exc:
                 outcome = "completed_with_errors"
                 self._persist(states, unique_new_ids, "", error=f"自动评分失败：{str(exc)[:500]}")
+        note = ""
+        try:
+            getter = self.config.get("_workbench_stop_note")
+            note = str(getter() or "") if callable(getter) and stopped else ""
+        except Exception:
+            note = ""
+        if note:                                                        # the daily loop ended this collection on its own schedule: it was not the user
+            for state in states.values():
+                if state.get("reason_code") == "user_stopped":
+                    state["message"] = note
         self._persist(states, unique_new_ids, "", status=outcome, stop_reason="user_stopped" if stopped else "")
         return {
             "run_id": self.run_id,

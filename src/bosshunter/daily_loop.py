@@ -701,7 +701,8 @@ class DailyLoop:
                         self._news("loop", f"{label}已到单次上限 {limit_minutes:g} 分钟，先去投递，之后继续采集", level="info", platform=self.state.get("platform", ""))
                 else:
                     self.incident(self.state.get("platform", ""), self.state.get("step", ""), "task_too_long", f"{label}超过 {limit_minutes:g} 分钟，已请求停止")
-                self.api("POST", f"/api/workbench/task/{active['id']}/stop", {})
+                reason = "每日循环分段：这一段采集时间到，先去投递，之后继续采集" if routine else f"每日循环：{label}超过 {limit_minutes:g} 分钟，已请求停止"
+                self.api("POST", f"/api/workbench/task/{active['id']}/stop", {"reason": reason})
                 limit_minutes = 1e9
             self.sleep(self.poll_seconds)
             waited += self.poll_seconds

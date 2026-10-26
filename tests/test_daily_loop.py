@@ -714,3 +714,26 @@ def test_the_loop_waits_for_tomorrow_when_every_platform_is_held_or_out(tmp_path
     for platform in ("zhilian", "boss", "51job"):
         loop._hold(platform, "captcha", "x")
     assert loop._all_out()
+
+
+def test_the_loop_says_why_it_stops_a_collection_so_that_it_is_not_taken_for_the_user(tmp_path):
+    server = FakeServer()
+    server.running = 10 ** 6
+    loop = DailyLoop(tmp_path / "loop.json", server.api, now=server.now, sleep=lambda s: setattr(server, "t", server.t + timedelta(seconds=s)),
+                     poll_seconds=60, idle_seconds=600, settings=lambda: {"daily_loop_collect_minutes": 30})
+    loop._launch = lambda: None
+    loop.start({"platform_order": ["liepin"], "time_window": False})
+    bodies = []
+    original = server.api
+
+    def api(method, path, body=None):
+        if path.endswith("/stop"):
+            bodies.append(body)
+            server.running = 0
+            return {}
+        return original(method, path, body)
+
+    loop.api = api
+    loop._set(platform="liepin", step="collect")
+    loop._wait_idle("猎聘：采集中", routine=True)
+    assert bodies and bodies[0]["reason"].startswith("每日循环分段")

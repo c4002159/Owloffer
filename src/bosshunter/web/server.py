@@ -445,6 +445,7 @@ def _execute_collect(task: WorkbenchTask, config: dict) -> None:
 	collect_config["_workbench_collect_progress"] = lambda state: _record_collect_progress(task, state)
 	collect_config["_workbench_log"] = lambda message: _log(task, message)
 	collect_config["_workbench_score_progress"] = lambda state: _record_score_progress(task, state)
+	collect_config["_workbench_stop_note"] = lambda: task.stop_reason if str(task.stop_reason or "").startswith("每日循环") else ""
 	if "_collection_options" not in config:
 		# Preserve the old private executor seam used by legacy callers. New Web
 		# collection tasks always inject normalized options before starting.
@@ -2112,8 +2113,10 @@ def api_collection_run_detail(run_id):
 
 @app.route("/api/workbench/task/<task_id>/stop", method="POST")
 def api_workbench_task_stop(task_id):
+	body = request.json if isinstance(request.json, dict) else {}
+	reason = str(body.get("reason") or "").strip()[:200]              # the daily loop says why it stops a collection (it is not the user)
 	try:
-		return _json_response(task_runner.stop(task_id))
+		return _json_response(task_runner.stop(task_id, reason) if reason else task_runner.stop(task_id))
 	except KeyError:
 		return _json_response({"error": "任务不存在"}, 404)
 	except Exception as e:
