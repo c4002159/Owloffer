@@ -352,15 +352,21 @@ class DailyLoop:
     def release(self, platform: str) -> bool:
         """The user says the trouble is solved: the platform is part of the loop again (its open captcha / pause entries are closed)."""
         with self._lock:
-            if platform not in (self.state.get("held") or {}):
+            was_out = platform in (self.state.get("out_today") or {})         # "reached today's limit" is lifted too (the limit was raised)
+            if platform not in (self.state.get("held") or {}) and not was_out:
                 return False
-            del self.state["held"][platform]
+            (self.state.get("held") or {}).pop(platform, None)
+            (self.state.get("out_today") or {}).pop(platform, None)
+            self._collect_closed.discard(platform)
             for item in self.state.get("incidents", []):
                 if item.get("platform") == platform and item.get("code") in ("captcha", "platform_paused") and not item.get("resolved"):
                     item["resolved"] = True
             self._save()
         self._news("loop", f"{PLATFORM_NAMES.get(platform, platform)}已加入循环", level="info", platform=platform)
         return True
+
+    def is_out_or_held(self, platform: str) -> bool:
+        return self._held(platform) or self._out(platform)
 
     def skip_today(self, platform: str) -> bool:
         """The user does not want the platform today: it stays out and the question is not asked again until tomorrow."""

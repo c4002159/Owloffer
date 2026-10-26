@@ -4331,7 +4331,7 @@ def api_daily_loop_release(platform):
 	from bosshunter.platform_limits import clear_limit
 
 	loop = _get_daily_loop()
-	if platform not in (loop.snapshot().get("held") or {}):
+	if not loop.is_out_or_held(platform):
 		return _json_response({"error": "这个平台现在没有被暂停在循环之外"}, 404)
 	db = _get_web_db()
 	try:

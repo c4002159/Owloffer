@@ -737,3 +737,11 @@ def test_the_loop_says_why_it_stops_a_collection_so_that_it_is_not_taken_for_the
     loop._set(platform="liepin", step="collect")
     loop._wait_idle("猎聘：采集中", routine=True)
     assert bodies and bodies[0]["reason"].startswith("每日循环分段")
+
+
+def test_a_platform_that_reached_its_limit_today_can_be_brought_back_after_the_limit_was_raised(tmp_path):
+    _server, loop = _planner(tmp_path)
+    loop._mark_out("boss", "daily_search_page_limit")
+    assert loop.is_out_or_held("boss") and loop._all_out() is False
+    assert loop.release("boss") is True and not loop.is_out_or_held("boss")
+    assert loop.release("boss") is False
